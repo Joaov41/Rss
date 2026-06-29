@@ -1,0 +1,73 @@
+# xcodegen spec for the LiteRTDemo sample app.
+#
+#   brew install xcodegen          # if needed
+#   cd Samples/LiteRTDemo
+#   xcodegen generate              # produces LiteRTDemo.xcodeproj
+#   open LiteRTDemo.xcodeproj      # set your DEVELOPMENT_TEAM, run on device
+#
+# Metal GPU inference only engages on a physical device in an Xcode-signed app.
+
+name: LiteRTDemo
+
+options:
+  bundleIdPrefix: com.example.litertdemo
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  swift-litert-lm:
+    # The package at the repository root (two levels up).
+    path: ../..
+
+targets:
+  LiteRTDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+    dependencies:
+      - package: swift-litert-lm
+        product: LiteRTFoundation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.litertdemo
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.9"
+        # Copy bundled PNGs verbatim — Xcode's pngcrush rejects some PNGs
+        # (libpng error) and then drops them from the bundle.
+        COMPRESS_PNG_FILES: NO
+        STRIP_PNG_TEXT: NO
+        CODE_SIGN_STYLE: Automatic
+        # Set your team to sign for device, or do it in Xcode's Signing pane:
+        DEVELOPMENT_TEAM: HNG8WV554B
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations~ipad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Attach a photo or video to ask Gemma about it."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Record audio to ask Gemma about it."
+        INFOPLIST_KEY_CFBundleDisplayName: LiteRT Demo
+
+  LiteRTDemoMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: MacSources
+    dependencies:
+      - package: swift-litert-lm
+        product: LiteRTFoundation
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.litertdemo.mac
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+        INFOPLIST_KEY_CFBundleDisplayName: LiteRT Demo

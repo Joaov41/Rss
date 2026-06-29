@@ -1,27 +1,27 @@
 {
   "images" : [
-	{
+    {
       "size" : "20x20",
       "idiom": "iphone",
-	  "filename" : "logo-20@2x.png",
+      "filename" : "logo-20@2x.png",
       "scale": "2x"
     },
-	{
+    {
       "size" : "20x20",
       "idiom": "iphone",
-	  "filename" : "logo-20@3x.png",
+      "filename" : "logo-20@3x.png",
       "scale": "3x"
     },
-	{
+    {
       "size" : "20x20",
       "idiom": "ipad",
-	  "filename" : "logo-20.png",
+      "filename" : "logo-20.png",
       "scale": "1x"
     },
     {
       "size" : "20x20",
       "idiom": "ipad",
-	  "filename" : "logo-20@2x.png",
+      "filename" : "logo-20@2x.png",
       "scale": "2x"
     },
     {
@@ -107,6 +107,12 @@
       "idiom" : "ios-marketing",
       "filename" : "logo-1024.png",
       "scale" : "1x"
+    },
+    {
+      "size" : "512x512",
+      "idiom" : "mac",
+      "filename" : "logo-1024.png",
+      "scale" : "2x"
     }
   ],
   "info" : {

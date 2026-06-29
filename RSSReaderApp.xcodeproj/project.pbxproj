@@ -1,0 +1,671 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1B2C3D4E5F6A7B8C9D0E1F4 /* RSSReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F9 /* Assets.xcassets */; };
+		A1B2C3D4E5F6A7B8C9D0E1FD /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1FE /* Preview Assets.xcassets */; };
+		A1B2C3D4E5F6A7B8C9D0E201 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E200 /* Models.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E204 /* RedditCommentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E203 /* RedditCommentModels.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E207 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E206 /* AppState.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E20A /* FeedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E209 /* FeedService.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E20D /* RedditService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E20C /* RedditService.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E210 /* SummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E20F /* SummaryService.swift */; };
+		C7SUM0022F00000600000001 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7SUM0002F00000600000001 /* SummarizeBridge.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E213 /* CommentSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E212 /* CommentSummaryService.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E216 /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E215 /* PersistenceManager.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E219 /* PlatformViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E218 /* PlatformViews.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E21C /* RedditDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E21B /* RedditDetailView.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E21F /* CommentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */; };
+		C11778142E8DCEDD00EDB44E /* RedditOAuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11778132E8DCEDD00EDB44E /* RedditOAuthManager.swift */; };
+		C7WEBAI212F10000100000001 /* WebAIHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7WEBAI202F10000100000001 /* WebAIHandoffView.swift */; };
+		C148C40F2D8AD72A00E006A0 /* FeedKit in Frameworks */ = {isa = PBXBuildFile; productRef = C148C40E2D8AD72A00E006A0 /* FeedKit */; };
+		C187DB862E83023300F58FC6 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = C187DB852E83023300F58FC6 /* SwiftSoup */; };
+		C187DB882E83023600F58FC6 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C187DB872E83023600F58FC6 /* Kingfisher */; };
+		C1DA2C622D8B1AA400A9D660 /* SummaryColumnView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */; };
+		C1DA2C642D8B1C7A00A9D660 /* MainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */; };
+		C1DA2C682D8B1E7C00A9D660 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */; };
+		C1DBF9482EF32E9700A9D95E /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = C1DBF9472EF32E9700A9D95E /* MLXLLM */; };
+		C1DBF94A2EF32E9700A9D95E /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = C1DBF9492EF32E9700A9D95E /* MLXLMCommon */; };
+		C1DBF94B2EF32E9700A9D95E /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = C1DBF94C2EF32E9700A9D95E /* MLXVLM */; };
+		D1A100012F40000100AAA001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = D1A100032F40000100AAA001 /* MLXAudioCore */; };
+		D1A100022F40000100AAA001 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = D1A100042F40000100AAA001 /* MLXAudioTTS */; };
+		C2AAB0032E83024100F58FC6 /* AudioUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AAA0012E83024000F58FC6 /* AudioUtils.swift */; };
+		C2AAB0042E83024100F58FC6 /* SoundDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AAA0022E83024000F58FC6 /* SoundDelegate.swift */; };
+		C2AAB0062E83024100F58FC6 /* iOS26GlassEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AAA0032E83024000F58FC6 /* iOS26GlassEffects.swift */; };
+		C3CLOUD022F00000100000001 /* CloudSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CLOUD002F00000100000001 /* CloudSyncManager.swift */; };
+		C4MLX0022F00000200000001 /* MLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4MLX0002F00000200000001 /* MLXLocalService.swift */; };
+		C4MLX0042F00000200000002 /* MLXJSONRepairUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4MLX0002F00000200000002 /* MLXJSONRepairUtils.swift */; };
+		C5ASK0022F00000500000001 /* AskAIComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5ASK0002F00000500000001 /* AskAIComponents.swift */; };
+		C5INFO022F00000300000001 /* InfographicView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5INFO002F00000300000001 /* InfographicView.swift */; };
+		C6KOK0022F00000400000001 /* KokoroTTSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6KOK0002F00000400000001 /* KokoroTTSService.swift */; };
+		MACLLM0100010001000101 /* LiteRTLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = MACLLM0100010001000104 /* LiteRTLocalService.swift */; };
+		MACLLM0100010001000102 /* CoreAIMLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = MACLLM0100010001000105 /* CoreAIMLXLocalService.swift */; };
+		MACLLM0100010001000103 /* LocalLLMCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = MACLLM0100010001000106 /* LocalLLMCompatibility.swift */; };
+		MACLLM0100010001000111 /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = MACLLM0100010001000112 /* LiteRTFoundation */; };
+		READABILITY0001000102 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSReaderApp.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1FC /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1FE /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E200 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E203 /* RedditCommentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditCommentModels.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E206 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E209 /* FeedService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedService.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E20C /* RedditService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditService.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E20F /* SummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryService.swift; sourceTree = "<group>"; };
+		C7SUM0002F00000600000001 /* SummarizeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummarizeBridge.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E212 /* CommentSummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentSummaryService.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E215 /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E218 /* PlatformViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformViews.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E21B /* RedditDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditDetailView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentViews.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E221 /* RSSReaderApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RSSReaderApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F6A7B8C9D0E222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E223 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E224 /* RSSReaderApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RSSReaderApp.entitlements; sourceTree = "<group>"; };
+		C11778132E8DCEDD00EDB44E /* RedditOAuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditOAuthManager.swift; sourceTree = "<group>"; };
+		C7WEBAI202F10000100000001 /* WebAIHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAIHandoffView.swift; sourceTree = "<group>"; };
+		C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryColumnView.swift; sourceTree = "<group>"; };
+		C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitView.swift; sourceTree = "<group>"; };
+		C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		C2AAA0012E83024000F58FC6 /* AudioUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioUtils.swift; sourceTree = "<group>"; };
+		C2AAA0022E83024000F58FC6 /* SoundDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundDelegate.swift; sourceTree = "<group>"; };
+		C2AAA0032E83024000F58FC6 /* iOS26GlassEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOS26GlassEffects.swift; sourceTree = "<group>"; };
+		C3CLOUD002F00000100000001 /* CloudSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncManager.swift; sourceTree = "<group>"; };
+		C4MLX0002F00000200000001 /* MLXLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXLocalService.swift; sourceTree = "<group>"; };
+		C4MLX0002F00000200000002 /* MLXJSONRepairUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXJSONRepairUtils.swift; sourceTree = "<group>"; };
+		C5ASK0002F00000500000001 /* AskAIComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAIComponents.swift; sourceTree = "<group>"; };
+		C5INFO002F00000300000001 /* InfographicView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfographicView.swift; sourceTree = "<group>"; };
+		C6KOK0002F00000400000001 /* KokoroTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroTTSService.swift; sourceTree = "<group>"; };
+		MACLLM0100010001000104 /* LiteRTLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteRTLocalService.swift; sourceTree = "<group>"; };
+		MACLLM0100010001000105 /* CoreAIMLXLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAIMLXLocalService.swift; sourceTree = "<group>"; };
+		MACLLM0100010001000106 /* LocalLLMCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMCompatibility.swift; sourceTree = "<group>"; };
+		READABILITY0001000100 /* Readability.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Readability.js; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A1B2C3D4E5F6A7B8C9D0E226 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+				files = (
+					C1DBF9482EF32E9700A9D95E /* MLXLLM in Frameworks */,
+					D1A100012F40000100AAA001 /* MLXAudioCore in Frameworks */,
+					D1A100022F40000100AAA001 /* MLXAudioTTS in Frameworks */,
+					C187DB882E83023600F58FC6 /* Kingfisher in Frameworks */,
+					C148C40F2D8AD72A00E006A0 /* FeedKit in Frameworks */,
+					C1DBF94A2EF32E9700A9D95E /* MLXLMCommon in Frameworks */,
+					MACLLM0100010001000111 /* LiteRTFoundation in Frameworks */,
+					C1DBF94B2EF32E9700A9D95E /* MLXVLM in Frameworks */,
+					C187DB862E83023300F58FC6 /* SwiftSoup in Frameworks */,
+				);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A1B2C3D4E5F6A7B8C9D0E227 = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8C9D0E228 /* RSSReaderApp */,
+				C187DB842E83023300F58FC6 /* Frameworks */,
+				A1B2C3D4E5F6A7B8C9D0E229 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E228 /* RSSReaderApp */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8C9D0E22A /* Models */,
+				A1B2C3D4E5F6A7B8C9D0E22B /* Views */,
+				A1B2C3D4E5F6A7B8C9D0E22C /* Controllers */,
+				A1B2C3D4E5F6A7B8C9D0E22D /* Services */,
+				C2AAC0012E83024200F58FC6 /* Utilities */,
+				A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */,
+				READABILITY0001000100 /* Readability.js */,
+				A1B2C3D4E5F6A7B8C9D0E1F9 /* Assets.xcassets */,
+				A1B2C3D4E5F6A7B8C9D0E222 /* Info.plist */,
+				A1B2C3D4E5F6A7B8C9D0E223 /* Info-macOS.plist */,
+				A1B2C3D4E5F6A7B8C9D0E224 /* RSSReaderApp.entitlements */,
+				A1B2C3D4E5F6A7B8C9D0E22E /* Preview Content */,
+			);
+			path = RSSReaderApp;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E229 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8C9D0E221 /* RSSReaderApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E22A /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8C9D0E200 /* Models.swift */,
+				A1B2C3D4E5F6A7B8C9D0E203 /* RedditCommentModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E22B /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */,
+				C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */,
+				C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */,
+				C7WEBAI202F10000100000001 /* WebAIHandoffView.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */,
+				A1B2C3D4E5F6A7B8C9D0E218 /* PlatformViews.swift */,
+				A1B2C3D4E5F6A7B8C9D0E21B /* RedditDetailView.swift */,
+				A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */,
+				C5INFO002F00000300000001 /* InfographicView.swift */,
+				C5ASK0002F00000500000001 /* AskAIComponents.swift */,
+				C2AAA0032E83024000F58FC6 /* iOS26GlassEffects.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E22C /* Controllers */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8C9D0E206 /* AppState.swift */,
+			);
+			path = Controllers;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E22D /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				C11778132E8DCEDD00EDB44E /* RedditOAuthManager.swift */,
+				A1B2C3D4E5F6A7B8C9D0E209 /* FeedService.swift */,
+				A1B2C3D4E5F6A7B8C9D0E20C /* RedditService.swift */,
+				A1B2C3D4E5F6A7B8C9D0E20F /* SummaryService.swift */,
+				C7SUM0002F00000600000001 /* SummarizeBridge.swift */,
+				A1B2C3D4E5F6A7B8C9D0E212 /* CommentSummaryService.swift */,
+				C3CLOUD002F00000100000001 /* CloudSyncManager.swift */,
+				C4MLX0002F00000200000001 /* MLXLocalService.swift */,
+				MACLLM0100010001000104 /* LiteRTLocalService.swift */,
+				MACLLM0100010001000105 /* CoreAIMLXLocalService.swift */,
+				MACLLM0100010001000106 /* LocalLLMCompatibility.swift */,
+				C4MLX0002F00000200000002 /* MLXJSONRepairUtils.swift */,
+				C6KOK0002F00000400000001 /* KokoroTTSService.swift */,
+				A1B2C3D4E5F6A7B8C9D0E215 /* PersistenceManager.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6A7B8C9D0E22E /* Preview Content */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8C9D0E1FC /* Preview Assets.xcassets */,
+				A1B2C3D4E5F6A7B8C9D0E1FE /* Preview Assets.xcassets */,
+			);
+			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		C187DB842E83023300F58FC6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C2AAC0012E83024200F58FC6 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				C2AAA0012E83024000F58FC6 /* AudioUtils.swift */,
+				C2AAA0022E83024000F58FC6 /* SoundDelegate.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A1B2C3D4E5F6A7B8C9D0E233 /* RSSReaderApp (macOS) */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D4E5F6A7B8C9D0E234 /* Build configuration list for PBXNativeTarget "RSSReaderApp (macOS)" */;
+			buildPhases = (
+				A1B2C3D4E5F6A7B8C9D0E226 /* Frameworks */,
+				A1B2C3D4E5F6A7B8C9D0E235 /* Sources */,
+				A1B2C3D4E5F6A7B8C9D0E236 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "RSSReaderApp (macOS)";
+			packageProductDependencies = (
+				C148C40E2D8AD72A00E006A0 /* FeedKit */,
+				C187DB852E83023300F58FC6 /* SwiftSoup */,
+				C187DB872E83023600F58FC6 /* Kingfisher */,
+				C1DBF9472EF32E9700A9D95E /* MLXLLM */,
+				C1DBF9492EF32E9700A9D95E /* MLXLMCommon */,
+					C1DBF94C2EF32E9700A9D95E /* MLXVLM */,
+					D1A100032F40000100AAA001 /* MLXAudioCore */,
+					D1A100042F40000100AAA001 /* MLXAudioTTS */,
+					MACLLM0100010001000112 /* LiteRTFoundation */,
+				);
+			productName = RSSReaderApp;
+			productReference = A1B2C3D4E5F6A7B8C9D0E221 /* RSSReaderApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A1B2C3D4E5F6A7B8C9D0E237 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1620;
+				TargetAttributes = {
+					A1B2C3D4E5F6A7B8C9D0E233 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = A1B2C3D4E5F6A7B8C9D0E238 /* Build configuration list for PBXProject "RSSReaderApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A1B2C3D4E5F6A7B8C9D0E227;
+			packageReferences = (
+				C148C40B2D8AD71D00E006A0 /* XCRemoteSwiftPackageReference "FeedKit" */,
+					C1CA44892D8CC92F00B81B54 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
+					C10CDDAD2D8E00EC0099A59A /* XCRemoteSwiftPackageReference "Kingfisher" */,
+					C1DBF9442EF32E9700A9D95E /* XCLocalSwiftPackageReference "mlx-swift-lm" */,
+					D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */,
+					D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */,
+					MACLLM0100010001000114 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */,
+				);
+			productRefGroup = A1B2C3D4E5F6A7B8C9D0E229 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A1B2C3D4E5F6A7B8C9D0E233 /* RSSReaderApp (macOS) */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1B2C3D4E5F6A7B8C9D0E236 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				READABILITY0001000102 /* Readability.js in Resources */,
+				A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets in Resources */,
+				A1B2C3D4E5F6A7B8C9D0E1FD /* Preview Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1B2C3D4E5F6A7B8C9D0E235 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4E5F6A7B8C9D0E1F7 /* ContentView.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E201 /* Models.swift in Sources */,
+				C1DA2C682D8B1E7C00A9D660 /* SettingsView.swift in Sources */,
+				C1DA2C622D8B1AA400A9D660 /* SummaryColumnView.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E204 /* RedditCommentModels.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E207 /* AppState.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E20A /* FeedService.swift in Sources */,
+				C3CLOUD022F00000100000001 /* CloudSyncManager.swift in Sources */,
+				C4MLX0022F00000200000001 /* MLXLocalService.swift in Sources */,
+				MACLLM0100010001000101 /* LiteRTLocalService.swift in Sources */,
+				MACLLM0100010001000102 /* CoreAIMLXLocalService.swift in Sources */,
+				MACLLM0100010001000103 /* LocalLLMCompatibility.swift in Sources */,
+				C4MLX0042F00000200000002 /* MLXJSONRepairUtils.swift in Sources */,
+				C6KOK0022F00000400000001 /* KokoroTTSService.swift in Sources */,
+				C1DA2C642D8B1C7A00A9D660 /* MainSplitView.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E20D /* RedditService.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E210 /* SummaryService.swift in Sources */,
+				C7SUM0022F00000600000001 /* SummarizeBridge.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E213 /* CommentSummaryService.swift in Sources */,
+				C11778142E8DCEDD00EDB44E /* RedditOAuthManager.swift in Sources */,
+				C7WEBAI212F10000100000001 /* WebAIHandoffView.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E216 /* PersistenceManager.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E219 /* PlatformViews.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E21C /* RedditDetailView.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E21F /* CommentViews.swift in Sources */,
+				C5INFO022F00000300000001 /* InfographicView.swift in Sources */,
+				C5ASK0022F00000500000001 /* AskAIComponents.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F4 /* RSSReaderApp.swift in Sources */,
+				C2AAB0032E83024100F58FC6 /* AudioUtils.swift in Sources */,
+				C2AAB0042E83024100F58FC6 /* SoundDelegate.swift in Sources */,
+				C2AAB0062E83024100F58FC6 /* iOS26GlassEffects.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A1B2C3D4E5F6A7B8C9D0E239 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_EXPLICIT_MODULES = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+					CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+					CLANG_WARN_UNREACHABLE_CODE = YES;
+					CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+					COMPILER_INDEX_STORE_ENABLE = NO;
+					COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+					LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+					MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+					MTL_FAST_MATH = YES;
+					ONLY_ACTIVE_ARCH = YES;
+					SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+					SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+					SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A1B2C3D4E5F6A7B8C9D0E23A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_EXPLICIT_MODULES = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+					CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+					CLANG_WARN_UNREACHABLE_CODE = YES;
+					CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+					COMPILER_INDEX_STORE_ENABLE = NO;
+					COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+					LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+					MTL_ENABLE_DEBUG_INFO = NO;
+					MTL_FAST_MATH = YES;
+					SWIFT_COMPILATION_MODE = wholemodule;
+					SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				};
+			name = Release;
+		};
+		A1B2C3D4E5F6A7B8C9D0E23D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_EXPLICIT_MODULES = NO;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+				CODE_SIGN_ENTITLEMENTS = RSSReaderApp/RSSReaderApp.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+					CODE_SIGN_STYLE = Automatic;
+					COMBINE_HIDPI_IMAGES = YES;
+					COMPILER_INDEX_STORE_ENABLE = NO;
+					CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
+				DEVELOPMENT_TEAM = HNG8WV554B;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "RSSReaderApp/Info-macOS.plist";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp;
+				PRODUCT_NAME = RSSReaderApp;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+					SDKROOT = macosx;
+					SWIFT_EMIT_LOC_STRINGS = YES;
+					SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+					SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A1B2C3D4E5F6A7B8C9D0E23E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_EXPLICIT_MODULES = NO;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+				CODE_SIGN_ENTITLEMENTS = RSSReaderApp/RSSReaderApp.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+					CODE_SIGN_STYLE = Automatic;
+					COMBINE_HIDPI_IMAGES = YES;
+					COMPILER_INDEX_STORE_ENABLE = NO;
+					CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
+				DEVELOPMENT_TEAM = HNG8WV554B;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "RSSReaderApp/Info-macOS.plist";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp;
+				PRODUCT_NAME = RSSReaderApp;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+					SDKROOT = macosx;
+					SWIFT_EMIT_LOC_STRINGS = YES;
+					SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+					SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A1B2C3D4E5F6A7B8C9D0E234 /* Build configuration list for PBXNativeTarget "RSSReaderApp (macOS)" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4E5F6A7B8C9D0E23D /* Debug */,
+				A1B2C3D4E5F6A7B8C9D0E23E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D4E5F6A7B8C9D0E238 /* Build configuration list for PBXProject "RSSReaderApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4E5F6A7B8C9D0E239 /* Debug */,
+				A1B2C3D4E5F6A7B8C9D0E23A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C10CDDAD2D8E00EC0099A59A /* XCRemoteSwiftPackageReference "Kingfisher" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/onevcat/Kingfisher";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.3.1;
+			};
+		};
+		C148C40B2D8AD71D00E006A0 /* XCRemoteSwiftPackageReference "FeedKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/nmdias/FeedKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.2;
+			};
+		};
+		C1CA44892D8CC92F00B81B54 /* XCRemoteSwiftPackageReference "SwiftSoup" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/scinfu/SwiftSoup";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.8.7;
+			};
+		};
+		C1DBF9442EF32E9700A9D95E /* XCLocalSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Packages/mlx-swift-lm";
+		};
+		D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Packages/mlx-audio-swift";
+		};
+		D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Packages/EventSource";
+		};
+		MACLLM0100010001000114 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Packages/swift-litert-lm local gemma fast us ethi sone";
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C148C40E2D8AD72A00E006A0 /* FeedKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C148C40B2D8AD71D00E006A0 /* XCRemoteSwiftPackageReference "FeedKit" */;
+			productName = FeedKit;
+		};
+		C187DB852E83023300F58FC6 /* SwiftSoup */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1CA44892D8CC92F00B81B54 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
+			productName = SwiftSoup;
+		};
+		C187DB872E83023600F58FC6 /* Kingfisher */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10CDDAD2D8E00EC0099A59A /* XCRemoteSwiftPackageReference "Kingfisher" */;
+			productName = Kingfisher;
+		};
+		C1DBF9472EF32E9700A9D95E /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1DBF9442EF32E9700A9D95E /* XCLocalSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		C1DBF9492EF32E9700A9D95E /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1DBF9442EF32E9700A9D95E /* XCLocalSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		C1DBF94C2EF32E9700A9D95E /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1DBF9442EF32E9700A9D95E /* XCLocalSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXVLM;
+		};
+		D1A100032F40000100AAA001 /* MLXAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioCore;
+		};
+		D1A100042F40000100AAA001 /* MLXAudioTTS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioTTS;
+		};
+		MACLLM0100010001000112 /* LiteRTFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = MACLLM0100010001000114 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */;
+			productName = LiteRTFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A1B2C3D4E5F6A7B8C9D0E237 /* Project object */;
+}

@@ -181,6 +181,9 @@ class FeedService {
             // --- Fallback: Extract first <img> from content if no standard URL found ---
             if articleImageURL == nil, !htmlContent.isEmpty {
                 articleImageURL = self.extractFirstImageURL(fromHTML: htmlContent)
+                if let feedTitle = feed.title, feedTitle.lowercased().contains("macrumors") {
+                    print("MacRumors image extraction: \(articleImageURL?.absoluteString ?? "nil") for article: \(rawTitle)")
+                }
             }
             // --- End Fallback ---
             
@@ -199,8 +202,15 @@ class FeedService {
                 }
             }
             
+            let articleId = generateStableArticleID(
+                guid: item.guid?.value,
+                link: item.link,
+                title: rawTitle,
+                feedURL: url
+            )
+            
             var article = Article(
-                id: item.guid?.value ?? UUID().uuidString,
+                id: articleId,
                 title: rawTitle.removingHTML(),
                 content: htmlContent.processHTMLContent(),
                 url: URL(string: item.link ?? ""),
@@ -244,8 +254,15 @@ class FeedService {
             let articleImageURL = self.extractFirstImageURL(fromHTML: htmlContent)
             // --- End Fallback ---
             
+            let articleId = generateStableArticleID(
+                guid: entry.id,
+                link: articleURLString,
+                title: rawTitle,
+                feedURL: url
+            )
+            
             var article = Article(
-                id: entry.id ?? UUID().uuidString,
+                id: articleId,
                 title: rawTitle.removingHTML(),
                 content: htmlContent.processHTMLContent(),
                 url: URL(string: articleURLString ?? ""),
@@ -289,11 +306,21 @@ class FeedService {
             // --- Fallback: Extract first <img> from content if no standard URL found ---
             if articleImageURL == nil, !htmlContent.isEmpty {
                 articleImageURL = self.extractFirstImageURL(fromHTML: htmlContent)
+                if let feedTitle = feed.title, feedTitle.lowercased().contains("macrumors") {
+                    print("MacRumors image extraction: \(articleImageURL?.absoluteString ?? "nil") for article: \(rawTitle)")
+                }
             }
             // --- End Fallback ---
 
+            let articleId = generateStableArticleID(
+                guid: item.id,
+                link: item.url,
+                title: rawTitle,
+                feedURL: url
+            )
+
             var article = Article(
-                id: item.id ?? UUID().uuidString,
+                id: articleId,
                 title: rawTitle.removingHTML(),
                 content: htmlContent.processHTMLContent(),
                 url: URL(string: item.url ?? ""),
@@ -629,5 +656,35 @@ class FeedService {
         }
         return nil
     }
-}
+    
+    /// Generate a stable article ID so read state persists across refreshes and devices.
+    /// Uses guid > link > hash(title + feedURL) priority. Does NOT use publishDate in fallback
+    /// because some feeds don't provide dates consistently, causing Date() fallback which
+    /// changes on every fetch and breaks read state tracking.
+    private func generateStableArticleID(guid: String?, link: String?, title: String, feedURL: String) -> String {
+        let trimmedGUID = guid?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedGUID, !trimmedGUID.isEmpty {
+            return ArticleIDNormalizer.normalize(trimmedGUID)
+        }
 
+        let trimmedLink = link?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedLink, !trimmedLink.isEmpty {
+            return ArticleIDNormalizer.normalize(trimmedLink)
+        }
+
+        // Deterministic hash from title + feedURL (both are stable across fetches)
+        // Using feedURL ensures uniqueness across different feeds with same title
+        let seed = "\(title)|\(feedURL)"
+        let hash = djb2Hex(seed)
+        return "hash-\(hash)"
+    }
+    
+    /// Simple deterministic hash (djb2) encoded as hex.
+    private func djb2Hex(_ string: String) -> String {
+        var hash: UInt64 = 5381
+        for byte in string.utf8 {
+            hash = ((hash << 5) &+ hash) &+ UInt64(byte) // hash * 33 + byte
+        }
+        return String(hash, radix: 16)
+    }
+}
