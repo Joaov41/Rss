@@ -1771,9 +1771,19 @@ private struct ArticleOuterScrollViewResolver: UIViewRepresentable {
 
 struct DetailTopBar: View {
     @EnvironmentObject var appState: AppState
-    @Environment(\.colorScheme) private var colorScheme
     @Binding var showShareSheet: Bool
     @Binding var shareItems: [Any]
+    private let articleViewMode: Binding<ArticleContentRenderer.ViewMode>?
+
+    init(
+        showShareSheet: Binding<Bool>,
+        shareItems: Binding<[Any]>,
+        articleViewMode: Binding<ArticleContentRenderer.ViewMode>? = nil
+    ) {
+        self._showShareSheet = showShareSheet
+        self._shareItems = shareItems
+        self.articleViewMode = articleViewMode
+    }
 
     private var shouldShowExplicitWebAIControls: Bool {
         appState.settings.selectedSummaryProvider != .webAI
@@ -1781,21 +1791,21 @@ struct DetailTopBar: View {
 
     var body: some View {
         ZStack {
-            // Glass background for navigation bar
-            if colorScheme == .dark {
-                Color.black
-            } else {
-                Color.clear
-                    .background(.ultraThinMaterial)
-                    .glassEffectCompat(in: Rectangle())
-            }
-
             HStack {
                 Spacer()
 
                 // Action buttons
                 HStack(spacing: 12) {
                     if let article = appState.selectedArticle {
+                        if let articleViewMode, selectedArticleHasReaderURL {
+                            Button(action: toggleArticleViewMode) {
+                                articleModeToggleLabel(for: articleViewMode.wrappedValue)
+                            }
+                            .buttonStyle(LiquidGlassButtonStyle())
+                            .accessibilityLabel("Article mode")
+                            .accessibilityValue(articleViewMode.wrappedValue.rawValue)
+                        }
+
                         Button(action: {
                             appState.requestSummary(for: article)
                         }) {
@@ -1881,6 +1891,32 @@ struct DetailTopBar: View {
         }
         .frame(height: 60)
         .zIndex(2000)
+    }
+
+    private var selectedArticleHasReaderURL: Bool {
+        guard let url = appState.selectedArticle?.url else { return false }
+        let scheme = url.scheme?.lowercased() ?? ""
+        return scheme == "http" || scheme == "https"
+    }
+
+    private func toggleArticleViewMode() {
+        guard let articleViewMode else { return }
+
+        withAnimation(.easeInOut(duration: 0.18)) {
+            articleViewMode.wrappedValue = articleViewMode.wrappedValue == .reader ? .rss : .reader
+        }
+    }
+
+    private func articleModeToggleLabel(for mode: ArticleContentRenderer.ViewMode) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: mode == .reader ? "doc.plaintext" : "dot.radiowaves.left.and.right")
+                .font(.system(size: 15, weight: .semibold))
+
+            Text(mode.rawValue)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+        }
+        .frame(minWidth: 72, minHeight: 24)
     }
 
     private func topBarIcon(_ systemName: String, color: Color = .primary) -> some View {
@@ -2245,14 +2281,18 @@ struct ContentView: View {
                         .phoneStyleBackGestures(enabled: shouldUsePhoneLayout) {
                             appState.navigateBack()
                         }
-                } else if let article = appState.selectedArticle {
-                    ArticleDetailView(isReadingChromeHidden: $isArticleReadingChromeHidden)
+                } else if appState.selectedArticle != nil {
+                    ArticleDetailView(
+                        isReadingChromeHidden: $isArticleReadingChromeHidden,
+                        showShareSheet: $showShareSheet,
+                        shareItems: $shareItems
+                    )
                         .transition(.move(edge: .trailing))
                         .zIndex(1)
                         .navigationBarHidden(true)
                         .overlay(alignment: .top) {
                             if UIDevice.current.userInterfaceIdiom == .pad && !shouldUsePhoneLayout {
-                                DetailTopBar(showShareSheet: $showShareSheet, shareItems: $shareItems)
+                                EmptyView()
                                     .transition(.articleChromeContinuity(edge: .top))
                             }
                         }
@@ -2291,8 +2331,12 @@ struct ContentView: View {
                             .enhancedSwipeBack {
                                 appState.navigateBack()
                             }
-                    } else if let article = appState.selectedArticle {
-                        ArticleDetailView(isReadingChromeHidden: $isArticleReadingChromeHidden)
+                    } else if appState.selectedArticle != nil {
+                        ArticleDetailView(
+                            isReadingChromeHidden: $isArticleReadingChromeHidden,
+                            showShareSheet: $showShareSheet,
+                            shareItems: $shareItems
+                        )
                             .transition(.move(edge: .trailing))
                             .zIndex(1)
                             .enhancedSwipeBack {
@@ -2354,7 +2398,7 @@ struct ContentView: View {
             Group {
                 #if os(iOS)
                 if !shouldUsePhoneLayout &&
-                    (appState.selectedRedditPost != nil || (appState.selectedArticle != nil && !isArticleReadingChromeHidden)) {
+                    appState.selectedRedditPost != nil {
                     DetailTopBar(showShareSheet: $showShareSheet, shareItems: $shareItems)
                         .transition(.articleChromeContinuity(edge: .top))
                 } // iPhone action bar moved into detail views (bottom HUD)
@@ -4212,7 +4256,11 @@ struct ContentView: View {
         Group {
             if appState.selectedArticle != nil {
                 #if os(iOS)
-                ArticleDetailView(isReadingChromeHidden: $isArticleReadingChromeHidden)
+                ArticleDetailView(
+                    isReadingChromeHidden: $isArticleReadingChromeHidden,
+                    showShareSheet: $showShareSheet,
+                    shareItems: $shareItems
+                )
                 #else
                 ArticleDetailView()
                 #endif
@@ -9047,6 +9095,8 @@ struct ArticleDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var qaState = ArticleQAState.shared
     @Binding var isReadingChromeHidden: Bool
+    @Binding var showShareSheet: Bool
+    @Binding var shareItems: [Any]
     @State private var cancellables = Set<AnyCancellable>()
     @State private var articleViewMode: ArticleContentRenderer.ViewMode = .reader
     @Environment(\.colorScheme) var colorScheme
@@ -9063,6 +9113,7 @@ struct ArticleDetailView: View {
     @State private var selectionAskAIResponse = ""
     @State private var showSelectionAskAISheet = false
     @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
+    @State private var isArticleMetadataChromeHidden: Bool = false
 #if os(iOS)
     @State private var audioPlayerQA: AVAudioPlayer?
     @State private var localSpeechSynthQA: AVSpeechSynthesizer?
@@ -9094,8 +9145,14 @@ struct ArticleDetailView: View {
     private let actionBarRestoreDelay: TimeInterval = 0.75
     #endif
 
-    init(isReadingChromeHidden: Binding<Bool> = .constant(false)) {
+    init(
+        isReadingChromeHidden: Binding<Bool> = .constant(false),
+        showShareSheet: Binding<Bool> = .constant(false),
+        shareItems: Binding<[Any]> = .constant([])
+    ) {
         self._isReadingChromeHidden = isReadingChromeHidden
+        self._showShareSheet = showShareSheet
+        self._shareItems = shareItems
     }
 
     private var detailBackground: Color {
@@ -9160,7 +9217,7 @@ struct ArticleDetailView: View {
 
     private var articleTopSpacerHeight: CGFloat {
         #if os(iOS)
-        return usesPhoneArticleLayout ? 56 : 76
+        return usesPhoneArticleLayout ? 56 : 190
         #else
         return 72
         #endif
@@ -9229,6 +9286,14 @@ struct ArticleDetailView: View {
         }
         #endif
         .overlay { phoneFloatingStatusOverlay() }
+        #if os(iOS)
+        .overlay(alignment: .top) {
+            if !usesPhoneArticleLayout && !isReadingChromeHidden {
+                articleTopChromeOverlay(article: article)
+                .transition(.articleChromeContinuity(edge: .top))
+            }
+        }
+        #endif
         .overlay(alignment: .bottomTrailing) {
             if !isReadingChromeHidden {
                 scrollToTopOverlay(proxy: proxy)
@@ -9285,10 +9350,17 @@ struct ArticleDetailView: View {
     private func scrollArticleToTop(proxy: ScrollViewProxy) {
         print("⬆️ Article bottom toolbar scroll-to-top tapped")
         #if os(iOS)
-        if usesPhoneArticleLayout {
+        if articleViewMode == .reader {
             articleReaderScrollToTopTrigger += 1
-            NotificationCenter.default.post(name: .articleReaderScrollToTopRequested, object: nil)
-            ArticleScrollToTopController.shared.scrollToTop()
+
+            if usesPhoneArticleLayout {
+                resetPhoneActionBarVisibility()
+            }
+
+            return
+        }
+
+        if usesPhoneArticleLayout {
             resetPhoneActionBarVisibility()
         }
         #endif
@@ -9299,6 +9371,37 @@ struct ArticleDetailView: View {
     }
 
     private func noteArticleTextScrollActivity() {
+        #if os(iOS)
+        if !usesPhoneArticleLayout {
+            setArticleMetadataChromeHidden(true)
+            return
+        }
+        #endif
+
+        hideArticleReadingChromeTemporarily()
+    }
+
+    private func noteArticleReaderScrollActivity(isAtTop: Bool) {
+        #if os(iOS)
+        if usesPhoneArticleLayout {
+            notePhoneActionBarScrollActivity()
+        } else {
+            setArticleMetadataChromeHidden(!isAtTop)
+        }
+        #else
+        hideArticleReadingChromeTemporarily()
+        #endif
+    }
+
+    private func setArticleMetadataChromeHidden(_ hidden: Bool) {
+        guard isArticleMetadataChromeHidden != hidden else { return }
+
+        withAnimation(.easeInOut(duration: 0.18)) {
+            isArticleMetadataChromeHidden = hidden
+        }
+    }
+
+    private func hideArticleReadingChromeTemporarily() {
         articleChromeRestoreWorkItem?.cancel()
 
         if !isReadingChromeHidden {
@@ -9329,6 +9432,7 @@ struct ArticleDetailView: View {
         articleChromeRestoreWorkItem?.cancel()
         articleChromeRestoreWorkItem = nil
         isReadingChromeHidden = false
+        isArticleMetadataChromeHidden = false
         #if os(iOS)
         resetPhoneActionBarVisibility()
         #endif
@@ -9336,7 +9440,10 @@ struct ArticleDetailView: View {
 
     #if os(iOS)
     private func handlePhoneArticleScrollOffsetChange(_ offset: CGFloat) {
-        guard usesPhoneArticleLayout else { return }
+        guard usesPhoneArticleLayout else {
+            setArticleMetadataChromeHidden(offset < -8)
+            return
+        }
 
         guard let previousOffset = lastActionBarScrollOffset else {
             lastActionBarScrollOffset = offset
@@ -9395,14 +9502,51 @@ struct ArticleDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var articleTopChromeBackdrop: some View {
+        let isScrolled = isArticleMetadataChromeHidden
+
+        return ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(isScrolled ? 0 : 0.28)
+
+            Rectangle()
+                .fill(Color.black.opacity(colorScheme == .dark ? (isScrolled ? 0 : 0.035) : (isScrolled ? 0 : 0.015)))
+
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(colorScheme == .dark ? (isScrolled ? 0 : 0.055) : (isScrolled ? 0 : 0.02)),
+                            Color.black.opacity(colorScheme == .dark ? (isScrolled ? 0 : 0.025) : (isScrolled ? 0 : 0.008)),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .frame(height: isScrolled ? 0 : 220)
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0.0),
+                    .init(color: .black, location: 0.78),
+                    .init(color: .clear, location: 1.0)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .allowsHitTesting(false)
+    }
+
     @ViewBuilder
     private func scrollToTopOverlay(proxy: ScrollViewProxy) -> some View {
         #if os(iOS)
         if !usesPhoneArticleLayout {
             Button(action: {
-                withAnimation(.easeInOut) {
-                    proxy.scrollTo(articleTopAnchor, anchor: .top)
-                }
+                scrollArticleToTop(proxy: proxy)
             }) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2.weight(.semibold))
@@ -9455,7 +9599,7 @@ struct ArticleDetailView: View {
                     #endif
 
                 Spacer()
-                    .frame(height: isReadingChromeHidden ? 0 : articleTopSpacerHeight)
+                    .frame(height: shouldReserveOuterArticleTopSpace ? (isReadingChromeHidden ? 0 : articleTopSpacerHeight) : 0)
 
                 if !isReadingChromeHidden {
                     VStack(alignment: .leading, spacing: 0) {
@@ -9472,7 +9616,10 @@ struct ArticleDetailView: View {
                     viewMode: $articleViewMode,
                     isReadingChromeHidden: isReadingChromeHidden,
                     scrollToTopTrigger: articleReaderScrollToTopTrigger,
-                    onPhoneScrollActivity: notePhoneActionBarScrollActivity,
+                    readerTopContentInset: readerTopContentInset,
+                    onPhoneScrollActivity: { isAtTop in
+                        noteArticleReaderScrollActivity(isAtTop: isAtTop)
+                    },
                     onArticleTextScroll: noteArticleTextScrollActivity,
                     onArticleTextTap: revealArticleReadingChrome
                 )
@@ -9504,24 +9651,75 @@ struct ArticleDetailView: View {
         #endif
     }
 
-    private func articleHeader(article: Article) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            articleMetadataCard(article: article)
-            if articleViewMode == .rss {
-                Text(article.title)
-                    .font(.system(size: articleDetailTitleSize, weight: .bold))
-                    .lineSpacing(0)
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 36)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(articlePanelBackground(cornerRadius: 24))
+    private var shouldReserveOuterArticleTopSpace: Bool {
+        #if os(iOS)
+        return usesPhoneArticleLayout || articleViewMode != .reader
+        #else
+        return true
+        #endif
+    }
+
+    private var readerTopContentInset: CGFloat {
+        #if os(iOS)
+        return usesPhoneArticleLayout || isReadingChromeHidden ? 0 : articleTopSpacerHeight
+        #else
+        return 0
+        #endif
+    }
+
+    private func articleTopChromeOverlay(article: Article) -> some View {
+        ZStack(alignment: .top) {
+            articleTopChromeBackdrop
+
+            DetailTopBar(
+                showShareSheet: $showShareSheet,
+                shareItems: $shareItems,
+                articleViewMode: $articleViewMode
+            )
+
+            if !isArticleMetadataChromeHidden {
+                articleMetadataCard(article: article)
+                    .padding(.horizontal, articleCardOuterHorizontalPadding + articleHeaderHorizontalPadding)
+                    .padding(.top, 94)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.horizontal, articleHeaderHorizontalPadding)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .animation(.easeInOut(duration: 0.18), value: isArticleMetadataChromeHidden)
+    }
+
+    private func articleHeader(article: Article) -> some View {
+        Group {
+            if usesPhoneArticleLayout {
+                VStack(alignment: .leading, spacing: 18) {
+                    articleMetadataCard(article: article)
+                    if articleViewMode == .rss {
+                        articleTitlePanel(article: article)
+                    }
+                }
+                .padding(.horizontal, articleHeaderHorizontalPadding)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
+            } else if articleViewMode == .rss {
+                articleTitlePanel(article: article)
+                    .padding(.horizontal, articleHeaderHorizontalPadding)
+                    .padding(.top, 8)
+                    .padding(.bottom, 10)
+            } else {
+                EmptyView()
+            }
+        }
+    }
+
+    private func articleTitlePanel(article: Article) -> some View {
+        Text(article.title)
+            .font(.system(size: articleDetailTitleSize, weight: .bold))
+            .lineSpacing(0)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 36)
+            .padding(.top, 8)
+            .padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(articlePanelBackground(cornerRadius: 24))
     }
 
     private func articleMetadataCard(article: Article) -> some View {
@@ -9587,7 +9785,7 @@ struct ArticleDetailView: View {
         .padding(.horizontal, usesPhoneArticleLayout ? 16 : 18)
         .padding(.vertical, usesPhoneArticleLayout ? 16 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(articlePanelBackground(cornerRadius: 22))
+        .background(articleMetadataPanelBackground(cornerRadius: 22))
     }
 
     private var articleLanguageChip: some View {
@@ -9672,6 +9870,21 @@ struct ArticleDetailView: View {
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.35), lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 10, x: 0, y: 6)
+    }
+
+    private func articleMetadataPanelBackground(cornerRadius: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .opacity(0.34)
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.018) : Color.white.opacity(0.08))
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.16 : 0.30), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.09 : 0.035), radius: 8, x: 0, y: 5)
     }
 
     private var articlePanelFill: Color {
@@ -10894,7 +11107,8 @@ struct ArticleContentRenderer: View {
     @Binding var viewMode: ViewMode
     let isReadingChromeHidden: Bool
     let scrollToTopTrigger: Int
-    let onPhoneScrollActivity: () -> Void
+    let readerTopContentInset: CGFloat
+    let onPhoneScrollActivity: (Bool) -> Void
     let onArticleTextScroll: () -> Void
     let onArticleTextTap: () -> Void
 
@@ -10907,17 +11121,6 @@ struct ArticleContentRenderer: View {
     @State private var isLoadingReader: Bool = false
     @State private var readerModeAvailable: Bool = true
     @Environment(\.colorScheme) private var colorScheme
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    #endif
-
-    private var usesPhoneArticleLayout: Bool {
-        #if os(iOS)
-        return horizontalSizeClass == .compact
-        #else
-        return false
-        #endif
-    }
 
     /// Check if we have a valid article URL to load in reader mode
     private var hasArticleURL: Bool {
@@ -10928,12 +11131,6 @@ struct ArticleContentRenderer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !isReadingChromeHidden {
-                articleModeControl
-                    .padding(.bottom, 12)
-                .transition(.articleChromeContinuity(edge: .top))
-            }
-
             articleContentPanel
         }
         .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
@@ -10951,69 +11148,6 @@ struct ArticleContentRenderer: View {
         }
     }
 
-    private var articleModeControl: some View {
-        HStack {
-            Spacer(minLength: 0)
-
-            HStack(spacing: 0) {
-                articleModeButton(.reader, icon: "doc.plaintext")
-                    .disabled(!hasArticleURL)
-                    .opacity(hasArticleURL ? 1.0 : 0.45)
-
-                articleModeButton(.rss, icon: "dot.radiowaves.left.and.right")
-            }
-            .padding(4)
-            .frame(maxWidth: 420)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.28), lineWidth: 1)
-                    )
-            )
-
-            if !usesPhoneArticleLayout {
-                Color.clear
-                    .frame(width: 28, height: 1)
-            }
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func articleModeButton(_ mode: ViewMode, icon: String) -> some View {
-        let isActive = viewMode == mode
-
-        return Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                viewMode = mode
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(mode.rawValue)
-                    .font(.system(size: 14, weight: isActive ? .semibold : .medium))
-            }
-            .foregroundStyle(isActive ? Color.white : Color.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background {
-                if isActive {
-                    Capsule(style: .continuous)
-                        .fill(Color.blue.opacity(0.72))
-                        .overlay(
-                            Capsule(style: .continuous)
-                                .stroke(Color.blue.opacity(0.95), lineWidth: 1)
-                        )
-                        .shadow(color: Color.blue.opacity(0.50), radius: 12, x: 0, y: 0)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
     @ViewBuilder
     private var articleContentPanel: some View {
         if viewMode == .reader && hasArticleURL {
@@ -11023,6 +11157,7 @@ struct ArticleContentRenderer: View {
                 readerModeAvailable: $readerModeAvailable,
                 useCompactTitleSizing: prefersCompactTitleSizing,
                 scrollToTopTrigger: scrollToTopTrigger,
+                topContentInset: readerTopContentInset,
                 onScrollActivity: onPhoneScrollActivity
             )
             .frame(maxWidth: .infinity)
@@ -11821,7 +11956,8 @@ struct ArticleReaderWebView: NSViewRepresentable {
     @Binding var readerModeAvailable: Bool
     let useCompactTitleSizing: Bool
     let scrollToTopTrigger: Int
-    let onScrollActivity: () -> Void
+    let topContentInset: CGFloat
+    let onScrollActivity: (Bool) -> Void
 
     private static func conceal(_ webView: WKWebView) {
         webView.alphaValue = 1
@@ -12049,7 +12185,8 @@ struct ArticleReaderWebView: UIViewRepresentable {
     @Binding var readerModeAvailable: Bool
     let useCompactTitleSizing: Bool
     let scrollToTopTrigger: Int
-    let onScrollActivity: () -> Void
+    let topContentInset: CGFloat
+    let onScrollActivity: (Bool) -> Void
 
     private static func conceal(_ webView: WKWebView) {
         webView.alpha = 1
@@ -12065,10 +12202,29 @@ struct ArticleReaderWebView: UIViewRepresentable {
     private static func scrollToTop(_ webView: WKWebView) {
         let topOffset = CGPoint(x: 0, y: -webView.scrollView.adjustedContentInset.top)
         webView.scrollView.setContentOffset(topOffset, animated: true)
-        webView.evaluateJavaScript(
-            "document.scrollingElement.scrollTo({ top: 0, left: 0, behavior: 'smooth' }); window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });",
-            completionHandler: nil
-        )
+    }
+
+    private static func applyTopContentInset(_ inset: CGFloat, to webView: WKWebView, preserveTopPosition: Bool = false) {
+        let scrollView = webView.scrollView
+        let wasAtTop = abs(scrollView.contentOffset.y + scrollView.adjustedContentInset.top) < 2
+        guard abs(scrollView.contentInset.top - inset) > 0.5 else {
+            if preserveTopPosition || wasAtTop {
+                scrollView.setContentOffset(CGPoint(x: 0, y: -scrollView.adjustedContentInset.top), animated: false)
+            }
+            return
+        }
+
+        var contentInset = scrollView.contentInset
+        contentInset.top = inset
+        scrollView.contentInset = contentInset
+
+        var indicatorInsets = scrollView.scrollIndicatorInsets
+        indicatorInsets.top = inset
+        scrollView.scrollIndicatorInsets = indicatorInsets
+
+        if preserveTopPosition || wasAtTop {
+            scrollView.setContentOffset(CGPoint(x: 0, y: -scrollView.adjustedContentInset.top), animated: false)
+        }
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -12078,6 +12234,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.scrollView.delegate = context.coordinator
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         context.coordinator.attachScrollToTopObserver(to: webView)
         ArticleScrollToTopController.shared.registerReaderWebView(webView)
         webView.allowsBackForwardNavigationGestures = false
@@ -12102,6 +12259,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.attachScrollToTopObserver(to: uiView)
         ArticleScrollToTopController.shared.registerReaderWebView(uiView)
+        Self.applyTopContentInset(topContentInset, to: uiView)
 
         if context.coordinator.currentURL != articleURL || context.coordinator.currentUseCompactTitleSizing != useCompactTitleSizing {
             context.coordinator.currentURL = articleURL
@@ -12113,6 +12271,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
             }
 
             Self.conceal(uiView)
+            Self.applyTopContentInset(topContentInset, to: uiView, preserveTopPosition: true)
             var request = URLRequest(url: articleURL)
             request.cachePolicy = .returnCacheDataElseLoad
             print("📖 ArticleReaderWebView: Loading URL \(articleURL)")
@@ -12272,6 +12431,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
                     hasAppliedReaderMode = true
                     parent.isLoading = false
                     parent.readerModeAvailable = true
+                    ArticleReaderWebView.applyTopContentInset(parent.topContentInset, to: webView, preserveTopPosition: true)
                     ArticleReaderWebView.reveal(webView)
                     return
                 }
@@ -12313,8 +12473,9 @@ struct ArticleReaderWebView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard scrollView.isDragging || scrollView.isDecelerating || scrollView.isTracking else { return }
-            parent.onScrollActivity()
+            let normalizedOffset = max(0, scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+            let isAtTop = normalizedOffset < 8
+            parent.onScrollActivity(isAtTop)
         }
     }
 }

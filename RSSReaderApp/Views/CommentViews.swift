@@ -67,9 +67,6 @@ struct ClickableCommentImage: View {
                     .frame(width: 120, height: 120)
                     .cornerRadius(8)
                     .clipped()
-                    .onAppear {
-                        print("🎬 Loading animated GIF: \(url.absoluteString)")
-                    }
             } else {
                 // Use regular image for non-GIFs
                 KFImage(url)
@@ -99,21 +96,12 @@ struct ClickableCommentImage: View {
     }
 }
 
-// Represents a link with text and URL
-struct LinkInfo: Identifiable {
-    let id = UUID()
-    let text: String
-    let url: URL
-}
-
 struct CommentView: View {
-    @EnvironmentObject private var appState: AppState
     let comment: RedditCommentModel
     let post: RedditPost
+    let redditService: RedditService
     let onReplyPosted: (String, RedditCommentModel) -> Void
     @State private var isCollapsed = false
-    @State private var avatarURL: URL?
-    @State private var avatarLookupCompleted = false
     @State private var voteDirection: RedditVoteDirection = .none
     @State private var isSubmittingVote = false
     @State private var showReplySheet = false
@@ -131,187 +119,6 @@ struct CommentView: View {
             return Array(comment.replies.prefix(5))
         }
         return comment.replies
-    }
-    
-    /// Extracts non-image links from comment text, excluding already detected image URLs
-    private func extractNonImageLinks(from text: String, excludingImageURLs imageURLs: [URL] = []) -> [LinkInfo] {
-        var links = [LinkInfo]()
-        
-        print("🔗 extractNonImageLinks analyzing text: \(String(text.prefix(200)))")
-        print("🔗 Excluding \(imageURLs.count) detected image URLs: \(imageURLs.map { $0.absoluteString })")
-        
-        // Match markdown links [text](url)
-        let markdownPattern = "\\[([^\\]]+)\\]\\(([^\\)]+)\\)"
-        if let regex = try? NSRegularExpression(pattern: markdownPattern) {
-            let range = NSRange(text.startIndex..., in: text)
-            let matches = regex.matches(in: text, options: [], range: range)
-            
-            print("🔗 Found \(matches.count) markdown links")
-            
-            for match in matches {
-                if match.numberOfRanges >= 3,
-                   let textRange = Range(match.range(at: 1), in: text),
-                   let urlRange = Range(match.range(at: 2), in: text),
-                   let url = URL(string: String(text[urlRange])) {
-                    
-                    let linkText = String(text[textRange])
-                    let urlString = url.absoluteString.lowercased()
-                    
-                    print("🔗 Checking markdown link: [\(linkText)](\(url.absoluteString))")
-                    
-                    // Skip URLs that are already detected as images
-                    if imageURLs.contains(url) {
-                        print("🚫 Skipping already detected image URL: \(url.absoluteString)")
-                        continue
-                    }
-                    
-                    // Skip image URLs (both direct extensions and Reddit image URLs)
-                    if urlString.hasSuffix(".jpg") || urlString.hasSuffix(".jpeg") ||
-                       urlString.hasSuffix(".png") || urlString.hasSuffix(".gif") ||
-                       urlString.hasSuffix(".webp") ||
-                       urlString.contains("preview.redd.it") ||
-                       urlString.contains("i.redd.it") ||
-                       urlString.contains("v.redd.it") ||
-                       urlString.contains("giphy.com") ||
-                       urlString.contains("gfycat.com") ||
-                       urlString.contains("imgur.com") {
-                        print("🚫 Skipping image URL by pattern: \(url.absoluteString)")
-                        continue
-                    }
-                    
-                    print("✅ Adding non-image link: [\(linkText)](\(url.absoluteString))")
-                    links.append(LinkInfo(text: linkText, url: url))
-                }
-            }
-        }
-        
-        // Match plain URLs
-        let urlPattern = "(?i)(https?://[^\\s]+)(?![^\\(\\)]*\\))(?![!\\[])"
-        if let regex = try? NSRegularExpression(pattern: urlPattern) {
-            let range = NSRange(text.startIndex..., in: text)
-            let matches = regex.matches(in: text, options: [], range: range)
-            
-            print("🔗 Found \(matches.count) plain URLs")
-            
-            for match in matches {
-                if let urlRange = Range(match.range, in: text),
-                   let url = URL(string: String(text[urlRange])) {
-                    
-                    let urlString = url.absoluteString.lowercased()
-                    print("🔗 Checking plain URL: \(url.absoluteString)")
-                    
-                    // Skip URLs that are already detected as images
-                    if imageURLs.contains(url) {
-                        print("🚫 Skipping already detected plain image URL: \(url.absoluteString)")
-                        continue
-                    }
-                    
-                    // Skip image URLs (both direct extensions and Reddit image URLs)
-                    if urlString.hasSuffix(".jpg") || urlString.hasSuffix(".jpeg") ||
-                       urlString.hasSuffix(".png") || urlString.hasSuffix(".gif") ||
-                       urlString.hasSuffix(".webp") ||
-                       urlString.contains("preview.redd.it") ||
-                       urlString.contains("i.redd.it") ||
-                       urlString.contains("v.redd.it") ||
-                       urlString.contains("giphy.com") ||
-                       urlString.contains("gfycat.com") ||
-                       urlString.contains("imgur.com") {
-                        print("🚫 Skipping plain image URL by pattern: \(url.absoluteString)")
-                        continue
-                    }
-                    
-                    // Check if this URL is already included in a markdown link
-                    if !links.contains(where: { $0.url == url }) {
-                        print("✅ Adding plain URL: \(url.absoluteString)")
-                        links.append(LinkInfo(text: "", url: url))
-                    } else {
-                        print("⚠️ URL already exists as markdown link: \(url.absoluteString)")
-                    }
-                }
-            }
-        }
-        
-        print("🎯 extractNonImageLinks returning \(links.count) links")
-        return links
-    }
-    
-    /// Formats a comment body text into paragraph blocks for markdown rendering.
-    private func formatCommentBodyBlocks(_ body: String) -> [AttributedString] {
-        print("🧹 formatCommentBody input: \(String(body.prefix(200)))")
-        
-        // Convert comment to markdown for proper rendering
-        let markdownContent = body
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            // Remove markdown links containing image URLs [text](image_url)
-            .replacingOccurrences(of: "(?i)\\[[^\\]]+\\]\\((https?://[^\\)]*\\.(?:jpg|jpeg|png|gif|webp)(?:\\?[^\\)]*)?)\\)", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Remove markdown links containing Reddit image URLs [text](reddit_image_url)
-            .replacingOccurrences(of: "(?i)\\[[^\\]]+\\]\\((https?://(?:i\\.redd\\.it|v\\.redd\\.it|preview\\.redd\\.it)/[^\\)]+)\\)", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Remove markdown links containing GIF hosting URLs [text](gif_hosting_url)
-            .replacingOccurrences(of: "(?i)\\[[^\\]]+\\]\\((https?://(?:giphy\\.com|gfycat\\.com|imgur\\.com)/[^\\)]+)\\)", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Remove plain image URLs that are not in markdown links
-            .replacingOccurrences(of: "(?i)(https?://[^\\s]+\\.(?:jpg|jpeg|png|gif|webp))(?![^\\(\\)]*\\))", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Remove plain Reddit image URLs that are not in markdown links
-            .replacingOccurrences(of: "(?i)(https?://(?:i\\.redd\\.it|v\\.redd\\.it|preview\\.redd\\.it)/[^\\s]+)(?![^\\(\\)]*\\))", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Remove plain GIF hosting URLs that are not in markdown links
-            .replacingOccurrences(of: "(?i)(https?://(?:giphy\\.com|gfycat\\.com|imgur\\.com)/[^\\s]+)(?![^\\(\\)]*\\))", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Remove orphaned Reddit image URL parameters (like ?width=2048&format=png&auto=webp&s=...)
-            .replacingOccurrences(of: "(?i)\\?[^\\s]*(?:width|format|auto|s)=[^\\s]*", 
-                                  with: "", 
-                                  options: .regularExpression)
-            // Preserve paragraph breaks while cleaning up excess inline whitespace.
-            .replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "[ \\t]*\\n[ \\t]*\\n[ \\t]*", with: "\n\n", options: .regularExpression)
-            .replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
-            // Make remaining links more readable by wrapping them in markdown link syntax
-            .replacingOccurrences(of: "(?i)(https?://[^\\s]+)(?![^\\(\\)]*\\))(?![!\\[])", 
-                                  with: "[$1]($1)", 
-                                  options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        print("🧹 formatCommentBody output: \(String(markdownContent.prefix(200)))")
-
-        let blocks = markdownContent
-            .components(separatedBy: CharacterSet.newlines)
-            .reduce(into: [String]()) { partialResult, line in
-                let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if trimmedLine.isEmpty {
-                    if partialResult.last != "" {
-                        partialResult.append("")
-                    }
-                } else if partialResult.last == nil || partialResult.last == "" {
-                    partialResult.append(trimmedLine)
-                } else {
-                    partialResult[partialResult.count - 1] += "\n" + trimmedLine
-                }
-            }
-            .filter { !$0.isEmpty }
-
-        if blocks.isEmpty {
-            return []
-        }
-
-        return blocks.map { block in
-            do {
-                return try AttributedString(markdown: block)
-            } catch {
-                print("⚠️ formatCommentBody markdown parsing failed for block: \(error)")
-                return AttributedString(block)
-            }
-        }
     }
     
     @Environment(\.colorScheme) private var colorScheme
@@ -425,29 +232,15 @@ struct CommentView: View {
 
     private var avatarView: some View {
         ZStack {
-            if let avatarURL {
-                KFImage(avatarURL)
-                    .placeholder {
-                        fallbackAvatar
-                    }
-                    .cancelOnDisappear(true)
-                    .fade(duration: 0.2)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 44, height: 44)
-                    .clipShape(Circle())
-            } else {
-                fallbackAvatar
-            }
+            fallbackAvatar
 
             Circle()
                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.7), lineWidth: 1)
         }
         .frame(width: 44, height: 44)
+        #if os(macOS)
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 6, x: 0, y: 3)
-        .task(id: comment.author) {
-            await loadAvatarIfNeeded()
-        }
+        #endif
         .accessibilityHidden(true)
     }
 
@@ -465,16 +258,9 @@ struct CommentView: View {
         .frame(width: 44, height: 44)
     }
 
-    @MainActor
-    private func loadAvatarIfNeeded() async {
-        guard !avatarLookupCompleted else { return }
-        avatarLookupCompleted = true
-        avatarURL = await appState.redditService.fetchUserAvatarURL(author: comment.author)
-    }
-
     @ViewBuilder
     private var commentBodyContent: some View {
-        let bodyBlocks = formatCommentBodyBlocks(comment.body)
+        let bodyBlocks = comment.bodyBlocks
         if !bodyBlocks.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(bodyBlocks.enumerated()), id: \.offset) { _, block in
@@ -487,14 +273,6 @@ struct CommentView: View {
                 }
             }
             .textSelection(.enabled)
-            .onAppear {
-                if comment.body.lowercased().contains(".jpg") ||
-                   comment.body.lowercased().contains(".png") ||
-                   comment.body.lowercased().contains(".gif") {
-                    print("🔵 Comment contains image extensions. Body preview: \(String(comment.body.prefix(200)))")
-                    print("🔵 Image URLs found: \(comment.imageURLs)")
-                }
-            }
         }
     }
 
@@ -509,7 +287,7 @@ struct CommentView: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 12) {
-                        ForEach(comment.imageURLs.prefix(5), id: \.absoluteString) { url in
+                        ForEach(imageURLs.prefix(5), id: \.absoluteString) { url in
                             ClickableCommentImage(url: url)
                         }
                     }
@@ -522,7 +300,7 @@ struct CommentView: View {
 
     @ViewBuilder
     private var commentLinks: some View {
-        let nonImageLinks = extractNonImageLinks(from: comment.body, excludingImageURLs: comment.imageURLs).prefix(3)
+        let nonImageLinks = comment.displayLinks.prefix(3)
         if !nonImageLinks.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(nonImageLinks), id: \.id) { link in
@@ -617,9 +395,9 @@ struct CommentView: View {
         .lineLimit(1)
         .minimumScaleFactor(0.75)
         .padding(.top, 2)
-        .sheet(isPresented: $showReplySheet) {
+            .sheet(isPresented: $showReplySheet) {
             RedditCommentReplySheet(comment: comment) { body in
-                let postedReply = try await appState.redditService.replyToComment(commentID: comment.id, body: body)
+                let postedReply = try await redditService.replyToComment(commentID: comment.id, body: body)
                 let visibleReply = RedditCommentModel(
                     id: postedReply.id,
                     author: postedReply.author,
@@ -653,7 +431,7 @@ struct CommentView: View {
 
         Task {
             do {
-                try await appState.redditService.voteComment(commentID: comment.id, direction: newDirection)
+                try await redditService.voteComment(commentID: comment.id, direction: newDirection)
             } catch {
                 voteDirection = previousDirection
                 actionErrorMessage = error.localizedDescription
@@ -698,7 +476,11 @@ struct CommentView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(cardBorder, lineWidth: 1)
         )
+        #if os(macOS)
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.2 : 0.06), radius: 10, x: 0, y: 5)
+        #else
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 3, x: 0, y: 1)
+        #endif
     }
 
     var body: some View {
@@ -719,7 +501,12 @@ struct CommentView: View {
             if !isCollapsed {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(visibleReplies) { reply in
-                        CommentView(comment: reply, post: post, onReplyPosted: onReplyPosted)
+                        CommentView(
+                            comment: reply,
+                            post: post,
+                            redditService: redditService,
+                            onReplyPosted: onReplyPosted
+                        )
                     }
 
                     if shouldLimitReplies && comment.replies.count > 5 {
@@ -1028,6 +815,7 @@ struct RedditCommentReplySheet: View {
 }
 
 struct CommentThreadView: View {
+    @EnvironmentObject private var appState: AppState
     let comments: [RedditCommentModel]
     let post: RedditPost
     let onReplyPosted: (String, RedditCommentModel) -> Void
@@ -1035,7 +823,12 @@ struct CommentThreadView: View {
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 10) {
             ForEach(comments) { comment in
-                CommentView(comment: comment, post: post, onReplyPosted: onReplyPosted)
+                CommentView(
+                    comment: comment,
+                    post: post,
+                    redditService: appState.redditService,
+                    onReplyPosted: onReplyPosted
+                )
             }
         }
         .padding(.vertical, 4)

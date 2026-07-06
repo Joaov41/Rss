@@ -81,7 +81,6 @@ struct RedditDetailView: View {
     @State private var commentsSentToLLMCount: Int? = nil
     @State private var isShowingAnalytics = false // State for analytics sheet
     @State private var selectedImageURL: URL? = nil
-    @State private var showingImagePopup = false
     @State private var analyticsProviderOverride: AppSettings.SummaryProvider? = nil
     
     // Default max number of comments to show
@@ -482,7 +481,6 @@ struct RedditDetailView: View {
                 if let mainImageURL = post.bestImageURL {
                     Button(action: {
                         selectedImageURL = mainImageURL
-                        showingImagePopup = true
                     }) {
                         KFImage(mainImageURL)
                             .placeholder {
@@ -524,7 +522,6 @@ struct RedditDetailView: View {
                                 ForEach(additionalImages, id: \.absoluteString) { url in
                                     Button(action: {
                                         selectedImageURL = url
-                                        showingImagePopup = true
                                     }) {
                                         KFImage(url)
                                             .placeholder {
@@ -739,6 +736,13 @@ struct RedditDetailView: View {
                 .padding(14)
                 .background {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        #if os(iOS)
+                        .fill(
+                            colorScheme == .dark
+                                ? Color(red: 0.045, green: 0.047, blue: 0.075).opacity(0.96)
+                                : Color.white.opacity(0.94)
+                        )
+                        #else
                         .fill(.ultraThinMaterial)
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -748,6 +752,7 @@ struct RedditDetailView: View {
                                         : Color.white.opacity(0.82)
                                 )
                         )
+                        #endif
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -761,7 +766,11 @@ struct RedditDetailView: View {
                         .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.45), lineWidth: 1)
                         .blendMode(.screen)
                 }
+                #if os(macOS)
                 .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.34 : 0.1), radius: 24, x: 0, y: 12)
+                #else
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.16 : 0.045), radius: 6, x: 0, y: 3)
+                #endif
                 }
                 #if os(iOS)
                 .frame(
@@ -837,13 +846,11 @@ struct RedditDetailView: View {
             }
         }
         // Add sheet for image popup (consistent with comment images)
-        .sheet(isPresented: $showingImagePopup) {
-            if let imageURL = selectedImageURL {
-                ImagePopupView(imageURL: imageURL)
-                    .onAppear {
-                        print("Showing Reddit post image popup with URL: \(imageURL)")
-                    }
-            }
+        .sheet(item: $selectedImageURL) { imageURL in
+            ImagePopupView(imageURL: imageURL)
+                .onAppear {
+                    print("Showing Reddit post image popup with URL: \(imageURL)")
+                }
         }
         // Add floating loading indicator overlay for iPhone
         .overlay {
