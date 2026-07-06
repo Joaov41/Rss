@@ -18,6 +18,15 @@ struct MainSplitView: View {
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 250)
         .toolbar {
+            #if os(macOS)
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gear")
+                }
+            }
+            #else
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     showSettings = true
@@ -25,8 +34,21 @@ struct MainSplitView: View {
                     Image(systemName: "gear")
                 }
             }
+            #endif
         }
         .sheet(isPresented: $showSettings) {
+            #if os(macOS)
+            NavigationStack {
+                SettingsView()
+                    .environmentObject(appState)
+                    .navigationTitle("Settings")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showSettings = false }
+                        }
+                    }
+            }
+            #else
             NavigationView {
                 SettingsView()
                     .environmentObject(appState)
@@ -37,6 +59,11 @@ struct MainSplitView: View {
                         }
                     }
             }
+            .presentationDetents([.large])
+            .presentationCornerRadius(40) // Balanced radius to prevent clipping
+            .presentationBackground(.ultraThinMaterial) // Use thin material for iOS 26
+            .presentationBackgroundInteraction(.enabled)
+            #endif
         }
     }
 }

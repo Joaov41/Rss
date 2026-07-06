@@ -8,6 +8,20 @@ import AppKit
 #endif
 
 // TTS Provider enum
+enum SummaryServiceError: LocalizedError {
+    case apiKeyMissing
+    case invalidURL
+
+    var errorDescription: String? {
+        switch self {
+        case .apiKeyMissing:
+            return "API key not configured. Please add your Gemini API key in Settings."
+        case .invalidURL:
+            return "Invalid API URL"
+        }
+    }
+}
+
 enum TTSProvider: String, CaseIterable {
     case gemini = "Gemini"
     case openai = "OpenAI"
@@ -20,7 +34,7 @@ enum TTSProvider: String, CaseIterable {
 class SummaryService {
     private var apiKey: String
     private var openaiApiKey: String = ""
-    private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
+    private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
     private let ttsBaseURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent"
     private let openaiTTSURL = "https://api.openai.com/v1/audio/speech"
     
@@ -30,18 +44,23 @@ class SummaryService {
     private let cacheQueue = DispatchQueue(label: "com.rssreader.ttscache", attributes: .concurrent)
     
     // TTS chunk size for long texts
-    private let ttsChunkSize = 400 // Reduced from 500 to 400 characters for better reliability
+    private let ttsChunkSize = 400 // For Gemini - smaller chunks for better reliability
+    private let openAIChunkSize = 2000 // OpenAI handles larger chunks better for faster processing
     
     // Voice configuration
-    private var selectedTTSProvider: TTSProvider = .gemini
+    private var selectedTTSProvider: TTSProvider = .openai  // DEFAULT TO OPENAI!
     private var selectedGeminiVoice: String = "Puck" // Default to fastest voice
     private var selectedOpenAIVoice: String = "alloy" // Default OpenAI voice
+    private var localTTSEngine: LocalTTSEngine = .system
+    private var kokoroVoice: String = KokoroVoice.defaultVoice.rawValue
+    private var kokoroSpeed: Double = 1.0
+    private var kokoroPrecacheEnabled: Bool = false
     
     private let geminiVoices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"]
     private let openaiVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
     
-    // Preloading
-    private var isPreloadingEnabled = true
+    // Preloading (disabled by default to avoid background TTS calls)
+    private var isPreloadingEnabled = false
     private var enableFallback = true // Enable automatic fallback between providers
     private let commonPhrases = [
         "Loading summary...",
@@ -52,12 +71,30 @@ class SummaryService {
         "Error occurred.",
         "No content available."
     ]
+
+    // Optimized URLSession for Gemini calls (keeps background tasks responsive)
+    private lazy var responsiveSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        #if os(iOS)
+        configuration.networkServiceType = .responsiveData
+        #endif
+        configuration.waitsForConnectivity = true
+        if #available(iOS 13.0, macOS 10.15, *) {
+            configuration.allowsConstrainedNetworkAccess = true
+            configuration.allowsExpensiveNetworkAccess = true
+        }
+        configuration.httpMaximumConnectionsPerHost = 6
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 300
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
     
     init(apiKey: String? = nil) {
         self.apiKey = apiKey ?? ""
         
         // Load settings from AppSettings via PersistenceManager
-        let persistenceManager = PersistenceManager()
+        let persistenceManager = PersistenceManager.shared
         let settings = persistenceManager.loadSettings()
         
         // If provided API key is empty, use the one from settings
@@ -85,6 +122,16 @@ class SummaryService {
         if !settings.selectedOpenAIVoice.isEmpty && openaiVoices.contains(settings.selectedOpenAIVoice) {
             self.selectedOpenAIVoice = settings.selectedOpenAIVoice
         }
+
+        // Load local TTS engine and Kokoro preferences
+        self.localTTSEngine = settings.localTTSEngine
+        if KokoroVoice.allCases.map(\.rawValue).contains(settings.kokoroVoice) {
+            self.kokoroVoice = settings.kokoroVoice
+        } else {
+            self.kokoroVoice = KokoroVoice.defaultVoice.rawValue
+        }
+        self.kokoroSpeed = min(max(settings.kokoroSpeed, 0.5), 2.0)
+        self.kokoroPrecacheEnabled = settings.kokoroPrecacheEnabled
         
         // Start preloading common phrases in background
         if isPreloadingEnabled && (!self.apiKey.isEmpty || !self.openaiApiKey.isEmpty) {
@@ -93,12 +140,28 @@ class SummaryService {
             }
         }
     }
+
+    private var modelNameForGeminiRequest: String {
+        let modelIdentifier = baseURL.split(separator: "/").last?
+            .split(separator: ":").first?
+            .lowercased() ?? "unknown"
+        return String(modelIdentifier)
+    }
+
+    private var modelSupportsThinkingBudget: Bool {
+        return modelNameForGeminiRequest.contains("gemini-3")
+    }
+
+    private func makeGenerationConfig() -> GenerationConfig? {
+        guard modelSupportsThinkingBudget else { return nil }
+        return GenerationConfig(thinkingConfig: ThinkingConfig(thinkingBudget: 0))
+    }
     
     func updateApiKey(_ newApiKey: String) {
         self.apiKey = newApiKey
         
         // Save Gemini API key to AppSettings via PersistenceManager
-        let persistenceManager = PersistenceManager()
+        let persistenceManager = PersistenceManager.shared
         var settings = persistenceManager.loadSettings()
         settings.geminiApiKey = newApiKey
         persistenceManager.saveSettings(settings)
@@ -116,7 +179,7 @@ class SummaryService {
         print("🔊 SummaryService: OpenAI API key updated")
         
         // Save OpenAI API key to AppSettings via PersistenceManager
-        let persistenceManager = PersistenceManager()
+        let persistenceManager = PersistenceManager.shared
         var settings = persistenceManager.loadSettings()
         settings.openaiApiKey = newApiKey
         persistenceManager.saveSettings(settings)
@@ -136,7 +199,7 @@ class SummaryService {
         print("🔊 SummaryService: TTS provider changed to \(provider.displayName)")
         
         // Save TTS provider preference to settings
-        let persistenceManager = PersistenceManager()
+        let persistenceManager = PersistenceManager.shared
         var settings = persistenceManager.loadSettings()
         settings.selectedTTSProvider = provider.rawValue
         persistenceManager.saveSettings(settings)
@@ -156,7 +219,7 @@ class SummaryService {
             print("🔊 SummaryService: Gemini voice changed to \(voiceName)")
             
             // Save Gemini voice preference to settings
-            let persistenceManager = PersistenceManager()
+            let persistenceManager = PersistenceManager.shared
             var settings = persistenceManager.loadSettings()
             settings.selectedGeminiVoice = voiceName
             persistenceManager.saveSettings(settings)
@@ -171,7 +234,7 @@ class SummaryService {
             print("🔊 SummaryService: OpenAI voice changed to \(voiceName)")
             
             // Save OpenAI voice preference to settings
-            let persistenceManager = PersistenceManager()
+            let persistenceManager = PersistenceManager.shared
             var settings = persistenceManager.loadSettings()
             settings.selectedOpenAIVoice = voiceName
             persistenceManager.saveSettings(settings)
@@ -216,6 +279,101 @@ class SummaryService {
         enableFallback = enabled
         print("🔊 SummaryService: Fallback \(enabled ? "enabled" : "disabled")")
     }
+
+    // MARK: - Local TTS (MLX-backed)
+
+    func getLocalTTSEngine() -> LocalTTSEngine {
+        #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
+        return localTTSEngine
+        #else
+        return .system
+        #endif
+    }
+
+    func setLocalTTSEngine(_ engine: LocalTTSEngine) {
+        localTTSEngine = engine
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.localTTSEngine = engine
+        persistenceManager.saveSettings(settings)
+    }
+
+    func getKokoroVoice() -> String {
+        kokoroVoice
+    }
+
+    func getKokoroSpeed() -> Double {
+        kokoroSpeed
+    }
+
+    func isKokoroPrecacheEnabled() -> Bool {
+        kokoroPrecacheEnabled
+    }
+
+    func warmUpKokoroIfNeeded() {
+        #if os(iOS)
+        guard KokoroTTSService.shared.isAvailable else { return }
+        guard kokoroPrecacheEnabled else { return }
+        let voice = kokoroVoice
+        Task.detached(priority: .utility) {
+            do {
+                try await KokoroTTSService.shared.warmUp(preloadVoices: [voice])
+                print("✅ MLX TTS warm-up complete")
+            } catch {
+                print("⚠️ MLX TTS warm-up failed: \(error.localizedDescription)")
+            }
+        }
+        #endif
+    }
+
+    func setKokoroVoice(_ voice: String) {
+        let resolved = KokoroVoice.allCases.map(\.rawValue).contains(voice) ? voice : KokoroVoice.defaultVoice.rawValue
+        kokoroVoice = resolved
+        KokoroTTSService.shared.recordVoiceForWarmup(resolved)
+
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroVoice = resolved
+        persistenceManager.saveSettings(settings)
+
+        if kokoroPrecacheEnabled {
+            warmUpKokoroIfNeeded()
+        }
+    }
+
+    func setKokoroSpeed(_ speed: Double) {
+        kokoroSpeed = min(max(speed, 0.5), 2.0)
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroSpeed = kokoroSpeed
+        persistenceManager.saveSettings(settings)
+    }
+
+    func setKokoroPrecacheEnabled(_ enabled: Bool) {
+        kokoroPrecacheEnabled = enabled
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroPrecacheEnabled = enabled
+        persistenceManager.saveSettings(settings)
+    }
+
+    @MainActor
+    func precacheKokoroNow() async throws {
+        #if os(iOS)
+        guard KokoroTTSService.shared.isAvailable else { return }
+        kokoroPrecacheEnabled = true
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroPrecacheEnabled = true
+        settings.kokoroVoice = kokoroVoice
+        settings.kokoroSpeed = kokoroSpeed
+        persistenceManager.saveSettings(settings)
+
+        let voice = kokoroVoice
+        KokoroTTSService.shared.recordVoiceForWarmup(voice)
+        try await KokoroTTSService.shared.warmUp(preloadVoices: [voice])
+        #endif
+    }
     
     // MARK: - Preloading
     
@@ -258,146 +416,377 @@ class SummaryService {
     // MARK: - Fast TTS for Short Phrases
     
     func synthesizeSpeechFast(text: String) async throws -> Data {
-        // For very short text, use optimized settings
+        // Cloud TTS must always use OpenAI, even for short text
         if text.count <= 100 {
-            switch selectedTTSProvider {
-            case .gemini:
-                return try await synthesizeGeminiSingle(text: text, cacheKey: generateCacheKey(for: text, provider: .gemini), useFastSettings: true)
-            case .openai:
-                return try await synthesizeOpenAISingle(text: text, cacheKey: generateCacheKey(for: text, provider: .openai))
-            }
-        } else {
-            return try await synthesizeSpeech(text: text)
+            return try await synthesizeOpenAISingle(text: text, cacheKey: generateCacheKey(for: text, provider: .openai))
         }
+        return try await synthesizeSpeech(text: text)
     }
     
-    func summarizeText(_ text: String, customPrompt: String? = nil) -> AnyPublisher<String, Never> {
-        // Check if API key is available
-        guard !apiKey.isEmpty else {
-            return Just("API key not configured. Please add your Gemini API key in Settings.")
-                .eraseToAnyPublisher()
+    func summarizeText(
+        _ text: String,
+        customPrompt: String? = nil,
+        preferredBackgroundTaskIdentifier: String? = nil,
+        existingBackgroundTaskHandle: Any? = nil
+    ) -> AnyPublisher<String, Never> {
+        return Future<String, Never> { promise in
+            Task(priority: .userInitiated) {
+                do {
+                    let summary = try await self.summarizeTextAsync(
+                        text,
+                        customPrompt: customPrompt,
+                        preferredBackgroundTaskIdentifier: preferredBackgroundTaskIdentifier,
+                        existingBackgroundTaskHandle: existingBackgroundTaskHandle
+                    )
+                    promise(.success(summary))
+                } catch is CancellationError {
+                    promise(.success("Error: Gemini request cancelled."))
+                } catch {
+                    let localizedMessage = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let userFacingMessage = localizedMessage.isEmpty ? "Error generating summary" : localizedMessage
+                    promise(.success(userFacingMessage))
+                }
+            }
         }
-        
-        // Prepare the URL with API key
+        .eraseToAnyPublisher()
+    }
+
+    func summarizeTextAsync(
+        _ text: String,
+        customPrompt: String? = nil,
+        preferredBackgroundTaskIdentifier: String? = nil,
+        existingBackgroundTaskHandle: Any? = nil
+    ) async throws -> String {
+        guard !apiKey.isEmpty else {
+            throw SummaryServiceError.apiKeyMissing
+        }
+
         let urlString = "\(baseURL)?key=\(apiKey)"
         guard let url = URL(string: urlString) else {
-            return Just("Invalid API URL")
-                .eraseToAnyPublisher()
+            throw SummaryServiceError.invalidURL
         }
-        
-        // Handle large text inputs
+
         var inputText = text
-        let maxTextLength = 150000  // Adjust this based on API limits
-        
+        let maxTextLength = 150000
         if inputText.count > maxTextLength {
             print("⚠️ SummaryService: Text exceeds maximum length (\(inputText.count) chars). Truncating to \(maxTextLength) chars.")
             inputText = String(inputText.prefix(maxTextLength))
         }
-        
-        // Prepare the request body
+
         let prompt: String
-        if let customPrompt = customPrompt {
-            // Use the custom prompt if provided
+        if let customPrompt = customPrompt, !customPrompt.isEmpty {
             prompt = customPrompt
         } else {
-            // Default prompt for article summarization
             prompt = "Summarize the following text in a concise way, highlighting the key points: \(inputText)"
         }
 
-        // Disable thinking
-        let thinkingConfig = ThinkingConfig(thinkingBudget: 0)
-        let generationConfig = GenerationConfig(thinkingConfig: thinkingConfig)
+        let generationConfig = makeGenerationConfig()
         let requestBody = GeminiRequest(contents: [GeminiContent(parts: [GeminiPart(text: prompt)])], generationConfig: generationConfig)
-
-        // Log the model and thinking status
-        let modelName = baseURL.split(separator: "/").last?.split(separator: ":").first ?? "unknown model"
-        print("🧠 SummaryService: Calling Gemini model '\(modelName)' with thinking disabled (budget: 0).")
+        
+        let modelName = modelNameForGeminiRequest
+        if generationConfig != nil {
+            print("🧠 SummaryService: Calling Gemini model '\(modelName)' with thinking disabled (budget: 0).")
+        } else {
+            print("🧠 SummaryService: Calling Gemini model '\(modelName)' without thinking budget (not supported by this model).")
+        }
         print("📱 SummaryService: Processing \(inputText.count) characters for summarization")
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
+        // CRITICAL FIX: Set longer timeout for large summarization requests
+        // Global summaries with 50-100 posts can take 60-120 seconds to generate
+        let estimatedComplexity = prompt.count / 1000 // Rough estimate: 1 second per 1000 chars
+        let baseTimeout: TimeInterval = 120 // 2 minutes base for complex requests
+        let adaptiveTimeout = baseTimeout + Double(estimatedComplexity) * 2
+        request.timeoutInterval = min(adaptiveTimeout, 300) // Cap at 5 minutes
+
+        print("🧠 SummaryService: Set timeout to \(String(format: "%.0f", request.timeoutInterval))s for \(prompt.count) char prompt")
+
+        let jsonData: Data
         do {
-            let jsonData = try JSONEncoder().encode(requestBody)
-            request.httpBody = jsonData
+            jsonData = try JSONEncoder().encode(requestBody)
         } catch {
-            return Just("Error encoding request: \(error.localizedDescription)")
-                .eraseToAnyPublisher()
+            throw error
         }
-        
-        return URLSession.shared.dataTaskPublisher(for: request)
-            .handleEvents(receiveOutput: { data, response in
-                if let httpResponse = response as? HTTPURLResponse {
-                    print("🧠 SummaryService: Received HTTP status code: \(httpResponse.statusCode)")
-                }
-                if let jsonString = String(data: data, encoding: .utf8) {
-                    print("🧠 SummaryService: Raw Gemini API Response:\n---\n\(jsonString)\n---")
-                } else {
-                    print("🧠 SummaryService: Could not convert response data to UTF-8 string.")
-                }
-            })
-            .map { $0.data }
-            .decode(type: GeminiResponse.self, decoder: JSONDecoder())
-            .map { response -> String in
-                if let text = response.candidates?.first?.content.parts.first?.text {
-                    print("✅ SummaryService: Successfully decoded Gemini response.")
-                    return text
-                } else if let errorMessage = response.error?.message {
-                    return "Error: \(errorMessage)"
-                } else {
-                    return "No summary available"
+        request.httpBody = jsonData
+
+        let subtitleSource: String
+        if let customPrompt = customPrompt, !customPrompt.isEmpty {
+            subtitleSource = customPrompt
+        } else {
+            subtitleSource = inputText
+        }
+        let backgroundSubtitle = String(subtitleSource.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+
+        #if os(iOS)
+        let backgroundHandle: GeminiBackgroundTaskHandle?
+        let shouldManageHandle: Bool
+        if let providedHandle = existingBackgroundTaskHandle as? GeminiBackgroundTaskHandle {
+            backgroundHandle = providedHandle
+            shouldManageHandle = false
+            backgroundHandle?.onTaskStarted?()
+        } else {
+            let taskIdentifier = preferredBackgroundTaskIdentifier ?? GeminiBackgroundTaskManager.shared.taskIdentifier(for: .processing)
+            let handle = GeminiBackgroundTaskManager.shared.beginLongRunningTask(
+                identifier: taskIdentifier,
+                title: "Generating Summary: \(backgroundSubtitle.isEmpty ? "Gemini request" : backgroundSubtitle)"
+            )
+            backgroundHandle = handle
+            shouldManageHandle = true
+        }
+        #else
+        let shouldManageHandle = false
+        #endif
+
+        do {
+            #if os(iOS)
+            let summary = try await self.performGeminiSummary(
+                request: request,
+                promptCharacterCount: inputText.count,
+                backgroundHandle: backgroundHandle as Any
+            )
+            if shouldManageHandle {
+                backgroundHandle?.reportProgress(fractionCompleted: 1.0)
+                backgroundHandle?.finish(success: true)
+                print("✅ SummaryService: Background task completed successfully (works when locked)")
+            }
+            return summary
+            #else
+            return try await self.performGeminiSummary(
+                request: request,
+                promptCharacterCount: inputText.count,
+                backgroundHandle: nil
+            )
+            #endif
+        } catch is CancellationError {
+            #if os(iOS)
+            if let handle = backgroundHandle, shouldManageHandle {
+                handle.finish(success: false)
+            }
+            #endif
+            throw CancellationError()
+        } catch {
+            #if os(iOS)
+            if let handle = backgroundHandle, shouldManageHandle {
+                handle.finish(success: false)
+            }
+            #endif
+            print("🧠 SummaryService: Error executing Gemini request: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    /// Generic method to generate content using Gemini with a custom prompt
+    /// Used for whiteboard generation and other LLM tasks
+    func generateContentWithGemini(prompt: String) async throws -> String {
+        guard !apiKey.isEmpty else {
+            throw SummaryServiceError.apiKeyMissing
+        }
+
+        let urlString = "\(baseURL)?key=\(apiKey)"
+        guard let url = URL(string: urlString) else {
+            throw SummaryServiceError.invalidURL
+        }
+
+        let generationConfig = makeGenerationConfig()
+        let requestBody = GeminiRequest(contents: [GeminiContent(parts: [GeminiPart(text: prompt)])], generationConfig: generationConfig)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120 // 2 minutes for whiteboard generation
+
+        let jsonData = try JSONEncoder().encode(requestBody)
+        request.httpBody = jsonData
+
+        print("🧠 SummaryService: Generating content with Gemini (\(prompt.count) chars)")
+
+        let (data, response) = try await responsiveSession.data(for: request)
+
+        if let httpResponse = response as? HTTPURLResponse {
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw NSError(domain: "GeminiAPI", code: httpResponse.statusCode,
+                             userInfo: [NSLocalizedDescriptionKey: "API Error (\(httpResponse.statusCode)): \(errorBody)"])
+            }
+        }
+
+        guard let geminiResponse = try? JSONDecoder().decode(GeminiResponse.self, from: data),
+              let candidate = geminiResponse.candidates?.first,
+              let text = candidate.content.parts.first?.text else {
+            throw NSError(domain: "GeminiAPI", code: -1,
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to parse Gemini response"])
+        }
+
+        return text
+    }
+
+    func generateContentWithSummarize(
+        prompt: String,
+        settings: AppSettings,
+        onPartial: ((String) -> Void)? = nil
+    ) async throws -> String {
+        try await RSSSummarizeProviderClient.generate(
+            prompt: prompt,
+            settings: settings,
+            onPartial: onPartial
+        )
+    }
+
+    func generateContentWithPCCGateway(
+        prompt: String,
+        settings: AppSettings
+    ) async throws -> String {
+        let host = AppSettings.sanitizedSummarizeHost(
+            settings.pccGatewayHost,
+            fallback: AppSettings.defaultPCCGatewayHost
+        )
+        guard !host.isEmpty else { throw FMPCCGatewayError.missingHost }
+
+        let port = AppSettings.sanitizedSummarizePort(
+            settings.pccGatewayPort,
+            fallback: AppSettings.defaultPCCGatewayPort
+        )
+        guard (1...65_535).contains(port) else { throw FMPCCGatewayError.invalidPort(port) }
+
+        let token = AppSettings.sanitizedSummarizeSecret(settings.pccGatewayToken)
+        guard !token.isEmpty else { throw FMPCCGatewayError.missingToken }
+
+        return try await FMPCCGatewayClient(
+            configuration: FMPCCGatewayConfiguration(
+                host: host,
+                port: port,
+                token: token,
+                model: AppSettings.normalizedPCCGatewayModel(settings.pccGatewayModel)
+            )
+        ).generate(prompt: prompt)
+    }
+
+    func summarizeWithSummarizePublisher(
+        prompt: String,
+        settings: AppSettings
+    ) -> AnyPublisher<String, Never> {
+        Future<String, Never> { promise in
+            Task(priority: .userInitiated) {
+                do {
+                    let output = try await self.generateContentWithSummarize(prompt: prompt, settings: settings)
+                    promise(.success(output))
+                } catch {
+                    promise(.success("Codex / Summarize error: \(error.localizedDescription)"))
                 }
             }
-            .replaceError(with: "Error generating summary")
-            .eraseToAnyPublisher()
+        }
+        .eraseToAnyPublisher()
+    }
+
+    private func performGeminiSummary(request: URLRequest, promptCharacterCount: Int, backgroundHandle: Any?) async throws -> String {
+        #if os(iOS)
+        let handle = backgroundHandle as? GeminiBackgroundTaskHandle
+        await handle?.waitForTaskStartIfNeeded()
+        handle?.reportProgress(fractionCompleted: 0.05)
+
+        var heartbeatTask: Task<Void, Never>?
+        heartbeatTask = Task.detached(priority: .utility) { [weak handle] in
+            guard let handle else { return }
+
+            var nextFraction: Double = 0.1
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !handle.cancelled else { break }
+
+                let fraction = min(0.8, nextFraction)
+                handle.reportProgress(fractionCompleted: fraction)
+
+                if fraction >= 0.8 { break }
+                nextFraction += 0.05
+            }
+        }
+        defer { heartbeatTask?.cancel() }
+        #endif
+
+        let startTime = Date()
+        let fetchTask = Task<(Data, URLResponse), Error> {
+            try await responsiveSession.data(for: request)
+        }
+
+        #if os(iOS)
+        handle?.registerCancellationHandler {
+            fetchTask.cancel()
+        }
+        #endif
+
+        do {
+            let (data, response) = try await fetchTask.value
+
+            #if os(iOS)
+            handle?.reportProgress(fractionCompleted: 0.65)
+            #endif
+
+            let responseTime = Date().timeIntervalSince(startTime)
+            print("🧠 SummaryService: Gemini response time: \(String(format: "%.2f", responseTime)) seconds for \(promptCharacterCount) characters")
+
+            if let httpResponse = response as? HTTPURLResponse {
+                print("🧠 SummaryService: Received HTTP status code: \(httpResponse.statusCode)")
+            }
+
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("🧠 SummaryService: Raw Gemini API Response:\n---\n\(jsonString)\n---")
+            } else {
+                print("🧠 SummaryService: Could not convert response data to UTF-8 string.")
+            }
+
+            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+
+            #if os(iOS)
+            handle?.reportProgress(fractionCompleted: 0.9)
+            #endif
+
+            if let text = decoded.candidates?.first?.content.parts.first?.text {
+                print("✅ SummaryService: Successfully decoded Gemini response.")
+                return text
+            } else if let errorMessage = decoded.error?.message {
+                return "Error: \(errorMessage)"
+            } else {
+                return "No summary available"
+            }
+        } catch is CancellationError {
+            print("🧠 SummaryService: Gemini request cancelled while fetching data.")
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            print("🧠 SummaryService: Gemini request cancelled at transport layer.")
+            throw CancellationError()
+        } catch {
+            throw error
+        }
     }
     
     // MARK: - Text-to-Speech
     
     func synthesizeSpeech(text: String) async throws -> Data {
-        // Check if any API key is available
-        guard !apiKey.isEmpty || !openaiApiKey.isEmpty else {
-            print("🔊 SummaryService (TTS) - Error: No API keys configured.")
+        // Cloud TTS always uses OpenAI
+        guard !openaiApiKey.isEmpty else {
+            print("🔊 SummaryService (TTS) - Error: OpenAI API key not configured.")
             throw NSError(domain: "SummaryService.synthesizeSpeech", code: 0, 
-                          userInfo: [NSLocalizedDescriptionKey: "No TTS API keys configured. Please add your Gemini or OpenAI API key in Settings."])
+                          userInfo: [NSLocalizedDescriptionKey: "OpenAI API key not configured. Please add your OpenAI API key in Settings."])
         }
 
-        // Generate cache key (using first 100 chars + hash of full text + provider)
-        let cacheKey = generateCacheKey(for: text)
+        // Generate cache key for OpenAI
+        let cacheKey = generateCacheKey(for: text, provider: .openai)
         
         // Check cache first
         if let cachedData = getCachedTTS(for: cacheKey) {
-            print("🔊 SummaryService (TTS) - Info: Using cached TTS data for key: \(cacheKey)")
+            print("🔊 SummaryService (TTS) - Info: Using cached OpenAI TTS data")
             return cachedData
         }
 
-        // Try primary provider first
+        // Always use OpenAI for cloud TTS
         do {
-            let audioData = try await synthesizeWithProvider(text: text, provider: selectedTTSProvider, cacheKey: cacheKey)
+            let audioData = try await synthesizeWithOpenAI(text: text, cacheKey: cacheKey)
             return audioData
         } catch {
-            print("🔊 SummaryService (TTS) - Warning: Primary provider (\(selectedTTSProvider.displayName)) failed: \(error.localizedDescription)")
-            
-            // Try fallback provider if enabled
-            if enableFallback {
-                let fallbackProvider: TTSProvider = selectedTTSProvider == .gemini ? .openai : .gemini
-                let fallbackApiKey = fallbackProvider == .gemini ? apiKey : openaiApiKey
-                
-                if !fallbackApiKey.isEmpty {
-                    print("🔊 SummaryService (TTS) - Info: Attempting fallback to \(fallbackProvider.displayName)")
-                    do {
-                        let fallbackCacheKey = generateCacheKey(for: text, provider: fallbackProvider)
-                        let audioData = try await synthesizeWithProvider(text: text, provider: fallbackProvider, cacheKey: fallbackCacheKey)
-                        print("🔊 SummaryService (TTS) - Info: ✅ Fallback successful")
-                        return audioData
-                    } catch {
-                        print("🔊 SummaryService (TTS) - Error: Fallback provider also failed: \(error.localizedDescription)")
-                    }
-                }
-            }
-            
-            // If we get here, both providers failed or fallback is disabled
+            print("🔊 SummaryService (TTS) - Error: OpenAI TTS failed: \(error.localizedDescription)")
             throw error
         }
     }
@@ -432,8 +821,8 @@ class SummaryService {
                           userInfo: [NSLocalizedDescriptionKey: "OpenAI API key not configured."])
         }
         
-        // For long texts, try chunked processing
-        if text.count > ttsChunkSize {
+        // For long texts, try chunked processing with OpenAI-optimized chunk size
+        if text.count > openAIChunkSize {
             print("🔊 SummaryService (TTS) - Info: Text is long (\(text.count) chars), using OpenAI chunked processing")
             return try await synthesizeSpeechChunkedOpenAI(text: text, cacheKey: cacheKey)
         }
@@ -458,16 +847,16 @@ class SummaryService {
         request.setValue("Bearer \(openaiApiKey)", forHTTPHeaderField: "Authorization")
         
         // OpenAI TTS is generally faster, so use shorter timeouts
-        let baseTimeout: TimeInterval = 20
-        let timeoutMultiplier = 1.0 + (0.3 * Double(retryCount))
-        let adaptiveTimeout = baseTimeout * timeoutMultiplier + Double(text.count) / 200.0
-        request.timeoutInterval = min(adaptiveTimeout, 45) // Cap at 45 seconds
+        let baseTimeout: TimeInterval = 15 // Reduced from 20 for faster retries
+        let timeoutMultiplier = 1.0 + (0.25 * Double(retryCount)) // Reduced multiplier
+        let adaptiveTimeout = baseTimeout * timeoutMultiplier + Double(text.count) / 250.0 // Faster scaling
+        request.timeoutInterval = min(adaptiveTimeout, 30) // Cap at 30 seconds (down from 45)
         
         let requestBody: [String: Any] = [
             "model": "tts-1", // Using tts-1 for speed, could also use tts-1-hd for quality
             "input": text,
             "voice": selectedOpenAIVoice,
-            "response_format": "mp3", // OpenAI returns MP3 directly
+            "response_format": "aac", // AAC format for faster encoding and smaller size
             "speed": 1.0
         ]
         
@@ -501,7 +890,7 @@ class SummaryService {
                 // For rate limiting (429) or server errors (5xx), retry with exponential backoff
                 if (httpResponse.statusCode == 429 || httpResponse.statusCode >= 500) && retryCount < 2 {
                     print("🔊 SummaryService (OpenAI TTS) - Info: Retrying request due to status \(httpResponse.statusCode)")
-                    let delay = pow(2.0, Double(retryCount))
+                    let delay = pow(1.5, Double(retryCount)) // Reduced from 2.0 for faster retries
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     return try await synthesizeOpenAISingle(text: text, cacheKey: cacheKey, retryCount: retryCount + 1)
                 }
@@ -510,7 +899,7 @@ class SummaryService {
                               userInfo: [NSLocalizedDescriptionKey: "OpenAI API request failed with status \(httpResponse.statusCode). Response: \(responseString)"])
             }
             
-            // OpenAI returns MP3 data directly
+            // OpenAI returns AAC data directly (faster than MP3)
             print("🔊 SummaryService (OpenAI TTS) - Info: Successfully synthesized speech. Audio data size: \(data.count / 1024) KB")
             
             // Cache the result
@@ -528,7 +917,7 @@ class SummaryService {
                 case .timedOut, .networkConnectionLost, .notConnectedToInternet:
                     if retryCount < 2 {
                         print("🔊 SummaryService (OpenAI TTS) - Info: Retrying due to network error: \(urlError.localizedDescription)")
-                        let delay = pow(2.0, Double(retryCount))
+                        let delay = pow(1.5, Double(retryCount)) // Reduced from 2.0 for faster retries
                         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                         return try await synthesizeOpenAISingle(text: text, cacheKey: cacheKey, retryCount: retryCount + 1)
                     } else if text.count > 250 {
@@ -591,8 +980,11 @@ class SummaryService {
         var chunks: [String] = []
         var currentChunk = ""
         
+        // Use OpenAI-optimized chunk size for better performance
+        let chunkSize = openAIChunkSize
+        
         for sentence in sentences {
-            if currentChunk.count + sentence.count > ttsChunkSize && !currentChunk.isEmpty {
+            if currentChunk.count + sentence.count > chunkSize && !currentChunk.isEmpty {
                 chunks.append(currentChunk.trimmingCharacters(in: .whitespacesAndNewlines))
                 currentChunk = sentence
             } else {
@@ -602,9 +994,39 @@ class SummaryService {
         }
         if !currentChunk.isEmpty { chunks.append(currentChunk.trimmingCharacters(in: .whitespacesAndNewlines)) }
         
-        print("🔊 SummaryService (OpenAI TTS) - Info: Split into \(chunks.count) chunks")
+        print("🔊 SummaryService (OpenAI TTS) - Info: Split into \(chunks.count) chunks (using \(chunkSize) char chunks)")
         
-        // Concurrent processing with limited parallelism
+        // For small number of chunks, process in parallel for speed
+        if chunks.count <= 3 {
+            // Process all chunks in parallel
+            return try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+                for (index, chunk) in chunks.enumerated() {
+                    group.addTask {
+                        let data = try await self.synthesizeOpenAISingle(text: chunk, cacheKey: "\(cacheKey)_chunk_\(index)")
+                        print("🔊 SummaryService (OpenAI TTS) - Info: ✅ Chunk \(index) completed (size: \(data.count/1024) KB)")
+                        return (index, data)
+                    }
+                }
+                
+                var audioChunks = Array<Data?>(repeating: nil, count: chunks.count)
+                for try await (index, data) in group {
+                    audioChunks[index] = data
+                }
+                
+                let finalChunks = audioChunks.compactMap { $0 }
+                guard finalChunks.count == chunks.count else {
+                    print("🔊 SummaryService (OpenAI TTS) - Error: Some chunks failed, falling back to sequential")
+                    return try await self.synthesizeSpeechChunkedOpenAISequential(text: text, cacheKey: cacheKey)
+                }
+                
+                let combinedAudio = self.combineAudioChunks(finalChunks)
+                self.cacheTTS(combinedAudio, for: cacheKey)
+                print("🔊 SummaryService (OpenAI TTS) - Info: Successfully combined \(finalChunks.count) audio chunks (parallel)")
+                return combinedAudio
+            }
+        }
+        
+        // For many chunks, use limited concurrency
         let maxConcurrency = 3
         var audioChunks = Array<Data?>(repeating: nil, count: chunks.count)
         
@@ -654,8 +1076,12 @@ class SummaryService {
         let sentences = splitIntoSentences(text)
         var chunks: [String] = []
         var currentChunk = ""
+        
+        // Use OpenAI-optimized chunk size here as well
+        let chunkSize = openAIChunkSize
+        
         for sentence in sentences {
-            if currentChunk.count + sentence.count > ttsChunkSize && !currentChunk.isEmpty {
+            if currentChunk.count + sentence.count > chunkSize && !currentChunk.isEmpty {
                 chunks.append(currentChunk.trimmingCharacters(in: .whitespacesAndNewlines))
                 currentChunk = sentence
             } else {
@@ -681,6 +1107,17 @@ class SummaryService {
     struct GeminiRequest: Encodable {
         let contents: [GeminiContent]
         let generationConfig: GenerationConfig?
+
+        enum CodingKeys: String, CodingKey {
+            case contents
+            case generationConfig
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(contents, forKey: .contents)
+            try container.encodeIfPresent(generationConfig, forKey: .generationConfig)
+        }
     }
 
     struct GeminiContent: Codable {
@@ -692,7 +1129,7 @@ class SummaryService {
     }
 
     struct GenerationConfig: Encodable {
-        let thinkingConfig: ThinkingConfig
+        let thinkingConfig: ThinkingConfig?
     }
 
     struct ThinkingConfig: Encodable {
@@ -716,7 +1153,8 @@ class SummaryService {
     // MARK: - TTS Cache Management
     
     private func generateCacheKey(for text: String) -> String {
-        return generateCacheKey(for: text, provider: selectedTTSProvider)
+        // Cloud TTS cache keys should be tied to OpenAI only
+        return generateCacheKey(for: text, provider: .openai)
     }
     
     private func generateCacheKey(for text: String, provider: TTSProvider) -> String {
@@ -1124,13 +1562,8 @@ class SummaryService {
     
     // Legacy method name for backwards compatibility 
     private func synthesizeSpeechSingle(text: String, cacheKey: String, useFastSettings: Bool = false) async throws -> Data {
-        // Route to the appropriate provider
-        switch selectedTTSProvider {
-        case .gemini:
-            return try await synthesizeGeminiSingle(text: text, cacheKey: cacheKey, useFastSettings: useFastSettings)
-        case .openai:
-            return try await synthesizeOpenAISingle(text: text, cacheKey: cacheKey)
-        }
+        // Cloud TTS must always use OpenAI regardless of selected provider
+        return try await synthesizeOpenAISingle(text: text, cacheKey: cacheKey)
     }
     
     // Public accessor for SettingsView
@@ -1167,23 +1600,47 @@ class SummaryService {
         // For long text, use fast-start approach
         await synthesizeFastStartChunked(text: text, cacheKey: cacheKey, onFirstChunk: onFirstChunk, onComplete: onComplete, onError: onError)
     }
-    
+
+    // MARK: - One-shot OpenAI synthesis (no chunking, like example app)
+    func synthesizeSpeechOpenAIComplete(text: String) async throws -> Data {
+        // Always call the single OpenAI endpoint without chunking
+        guard !openaiApiKey.isEmpty else {
+            throw NSError(domain: "SummaryService.synthesizeSpeechOpenAIComplete", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey: "OpenAI API key not configured."])
+        }
+        let cacheKey = generateCacheKey(for: text, provider: .openai)
+        if let cached = getCachedTTS(for: cacheKey) { return cached }
+        let data = try await synthesizeOpenAISingle(text: text, cacheKey: cacheKey)
+        return data
+    }
+
     private func synthesizeFastStartChunked(text: String, cacheKey: String, onFirstChunk: @escaping (Data) -> Void, onComplete: @escaping (Data) -> Void, onError: @escaping (Error) -> Void) async {
         print("🔊 SummaryService (FastStart) - Info: Starting fast-start synthesis for \(text.count) characters")
         
-        // Create a larger first chunk (800 chars) for substantial immediate playback
-        let firstChunkSize = 800
+        // Cloud TTS always uses OpenAI; pick a small first chunk for fast start
+        let firstChunkSize = 200
         let sentences = splitIntoSentences(text)
         var firstChunk = ""
         var remainingText = ""
         var usedSentences = 0
         
-        // Build first chunk up to target size
+        // Build first chunk up to target size, prioritizing complete sentences
         for (index, sentence) in sentences.enumerated() {
             if firstChunk.count + sentence.count <= firstChunkSize {
                 if !firstChunk.isEmpty { firstChunk += " " }
                 firstChunk += sentence
                 usedSentences = index + 1
+            } else if firstChunk.isEmpty {
+                // If first sentence is too long, take partial sentence
+                let cutoff = sentence.index(sentence.startIndex, offsetBy: min(firstChunkSize, sentence.count))
+                firstChunk = String(sentence[..<cutoff])
+                if let lastSpace = firstChunk.lastIndex(where: { $0.isWhitespace }) {
+                    firstChunk = String(firstChunk[..<lastSpace])
+                }
+                let remainderStartInSentence = sentence.index(sentence.startIndex, offsetBy: firstChunk.count)
+                remainingText = String(sentence[remainderStartInSentence...]) + " "
+                usedSentences = index + 1
+                break
             } else {
                 break
             }
@@ -1191,26 +1648,39 @@ class SummaryService {
         
         // Remaining text is everything after the first chunk
         if usedSentences < sentences.count {
-            remainingText = sentences[usedSentences...].joined(separator: " ")
+            if !remainingText.isEmpty {
+                remainingText += sentences[usedSentences...].joined(separator: " ")
+            } else {
+                remainingText = sentences[usedSentences...].joined(separator: " ")
+            }
         }
         
-        print("🔊 SummaryService (FastStart) - Info: First chunk: \(firstChunk.count) chars, Remaining: \(remainingText.count) chars")
+        print("🔊 SummaryService (FastStart) - Info: First chunk size: \(firstChunk.count), remaining size: \(remainingText.count)")
         
-        // Synthesize and play first chunk immediately
+        // Synthesize and play first chunk immediately with priority
         do {
-            let firstChunkData = try await synthesizeWithProvider(text: firstChunk, provider: selectedTTSProvider, cacheKey: "\(cacheKey)_first")
+            // Use faster timeout for first chunk (OpenAI only)
+            let firstChunkData: Data = try await synthesizeOpenAISingle(text: firstChunk, cacheKey: "\(cacheKey)_first", retryCount: 0)
+            
             onFirstChunk(firstChunkData)
-            print("🔊 SummaryService (FastStart) - Info: ✅ First chunk ready and playing")
+            print("🔊 SummaryService (FastStart) - Info: ✅ First chunk ready and playing (latency: <3s)")
             
             // If no remaining text, we're done
-            if remainingText.isEmpty {
+            if remainingText.isEmpty || remainingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 cacheTTS(firstChunkData, for: cacheKey)
                 onComplete(firstChunkData)
                 return
             }
             
-            // Synthesize remaining text in background
-            let remainingData = try await synthesizeWithProvider(text: remainingText, provider: selectedTTSProvider, cacheKey: "\(cacheKey)_remaining")
+            // Synthesize remaining text in background with optimized processing
+            let remainingData: Data
+            if remainingText.count > openAIChunkSize {
+                // For OpenAI with long remaining text, use parallel processing
+                remainingData = try await synthesizeSpeechChunkedOpenAI(text: remainingText, cacheKey: "\(cacheKey)_remaining")
+            } else {
+                remainingData = try await synthesizeOpenAISingle(text: remainingText, cacheKey: "\(cacheKey)_remaining")
+            }
+            
             print("🔊 SummaryService (FastStart) - Info: ✅ Remaining audio ready")
             
             // Combine all audio for cache and completion callback
@@ -1218,6 +1688,106 @@ class SummaryService {
             cacheTTS(completeAudio, for: cacheKey)
             onComplete(completeAudio)
             
+        } catch {
+            print("🔊 SummaryService (FastStart) - Error: \(error.localizedDescription)")
+            onError(error)
+        }
+    }
+
+    // MARK: - Fast-Start Split Playback Helper
+    // Similar to synthesizeSpeechFastStart, but also exposes the remaining audio separately
+    // so the UI can queue the second chunk without trying to concatenate AAC/MP3 data.
+    func synthesizeSpeechFastStartSplit(
+        text: String,
+        onFirstChunk: @escaping (Data) -> Void,
+        onRemainingReady: @escaping (Data) -> Void,
+        onComplete: @escaping () -> Void,
+        onError: @escaping (Error) -> Void
+    ) async {
+        let cacheKey = generateCacheKey(for: text)
+
+        // If fully cached (e.g., Gemini WAV) return as one shot
+        if let cachedData = getCachedTTS(for: cacheKey) {
+            onFirstChunk(cachedData)
+            onComplete()
+            return
+        }
+
+        // Short texts: use single-shot synthesis (OpenAI only)
+        if text.count <= 600 {
+            do {
+                let data = try await synthesizeOpenAISingle(text: text, cacheKey: cacheKey)
+                onFirstChunk(data)
+                onComplete()
+            } catch {
+                onError(error)
+            }
+            return
+        }
+
+        // Split into first chunk and remaining, then synthesize separately
+        let firstChunkSize = 200
+        let sentences = splitIntoSentences(text)
+        var firstChunk = ""
+        var remainingText = ""
+        var usedSentences = 0
+
+        for (index, sentence) in sentences.enumerated() {
+            if firstChunk.count + sentence.count <= firstChunkSize {
+                if !firstChunk.isEmpty { firstChunk += " " }
+                firstChunk += sentence
+                usedSentences = index + 1
+            } else if firstChunk.isEmpty {
+                let cutoff = sentence.index(sentence.startIndex, offsetBy: min(firstChunkSize, sentence.count))
+                firstChunk = String(sentence[..<cutoff])
+                if let lastSpace = firstChunk.lastIndex(where: { $0.isWhitespace }) {
+                    firstChunk = String(firstChunk[..<lastSpace])
+                }
+                let remainderStartInSentence = sentence.index(sentence.startIndex, offsetBy: firstChunk.count)
+                remainingText = String(sentence[remainderStartInSentence...]) + " "
+                usedSentences = index + 1
+                break
+            } else {
+                break
+            }
+        }
+
+        if usedSentences < sentences.count {
+            if !remainingText.isEmpty {
+                remainingText += sentences[usedSentences...].joined(separator: " ")
+            } else {
+                remainingText = sentences[usedSentences...].joined(separator: " ")
+            }
+        }
+
+        do {
+            // First chunk
+            let firstData: Data = try await synthesizeOpenAISingle(text: firstChunk, cacheKey: "\(cacheKey)_first", retryCount: 0)
+            onFirstChunk(firstData)
+
+            // If there's nothing left, we are done
+            let trimmedRemaining = remainingText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedRemaining.isEmpty {
+                onComplete()
+                return
+            }
+
+            // Remaining in one go (we avoid concatenation for AAC/MP3 by exposing it separately)
+            let remainingData: Data
+            if trimmedRemaining.count > openAIChunkSize {
+                // Use the existing chunked OpenAI path; it will combine chunks internally.
+                // We still deliver as a single remaining segment to the UI.
+                remainingData = try await synthesizeSpeechChunkedOpenAI(text: trimmedRemaining, cacheKey: "\(cacheKey)_remaining")
+            } else {
+                remainingData = try await synthesizeOpenAISingle(text: trimmedRemaining, cacheKey: "\(cacheKey)_remaining")
+            }
+
+            // Hand the remaining audio to the UI for queued playback
+            onRemainingReady(remainingData)
+
+            // For OpenAI AAC/MP3, skip combining to avoid corrupted files.
+
+            onComplete()
         } catch {
             onError(error)
         }
@@ -1308,3 +1878,338 @@ public func isMP3Data(_ data: Data) -> Bool {
     let sync = (UInt16(bytes[0]) << 8) | UInt16(bytes[1])
     return (sync & 0xFFE0) == 0xFFE0 // Frame sync pattern
 }
+
+// Detect AAC format via header bytes.
+public func isAACData(_ data: Data) -> Bool {
+    guard data.count >= 2 else { return false }
+    let bytes = [UInt8](data.prefix(2))
+    // AAC ADTS header starts with 12 bits of 1s (0xFFF)
+    return (bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0)
+}
+
+#if os(macOS)
+@discardableResult
+public func setMacSpeechVoice(_ synthesizer: NSSpeechSynthesizer, identifier: String) -> Bool {
+    synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: identifier))
+}
+
+public func availableMacVoices() -> [(id: String, name: String)] {
+    NSSpeechSynthesizer.availableVoices.map { voiceName in
+        let attrs = NSSpeechSynthesizer.attributes(forVoice: voiceName)
+        let displayName = (attrs[.name] as? String) ?? voiceName.rawValue
+        return (id: voiceName.rawValue, name: displayName)
+    }
+}
+
+public func preferredMacVoiceIdentifier() -> String? {
+    let available = NSSpeechSynthesizer.availableVoices
+
+    struct VoiceInfo {
+        let id: String
+        let name: String
+        let locale: String
+    }
+
+    let voiceInfos = available.map { voiceName in
+        let id = voiceName.rawValue
+        let attrs = NSSpeechSynthesizer.attributes(forVoice: voiceName)
+        return VoiceInfo(
+            id: id,
+            name: (attrs[.name] as? String) ?? "",
+            locale: (attrs[.localeIdentifier] as? String) ?? ""
+        )
+    }
+
+    func scoreVoice(_ voice: VoiceInfo) -> Int {
+        let name = voice.name.lowercased()
+        var score = 0
+        if name == "ava (premium)" || name.contains("(premium)") { score += 2000 }
+        if name == "ava" && !name.contains("(") { score += 1800 }
+        if name == "alex" { score += 1500 }
+        if name == "samantha (enhanced)" || (name.contains("samantha") && name.contains("enhanced")) { score += 1400 }
+        if name == "samantha" && !name.contains("(") { score += 1300 }
+        if name == "tom (enhanced)" || (name.contains("tom") && name.contains("enhanced")) { score += 1200 }
+        if name == "allison" { score += 1100 }
+        if name == "susan" { score += 1050 }
+        if name == "victoria" { score += 1000 }
+        if name == "karen" { score += 950 }
+        if name == "daniel" { score += 900 }
+        if name == "moira" { score += 850 }
+        if name == "fiona" { score += 800 }
+        if name == "tessa" { score += 750 }
+        if voice.locale.lowercased().hasPrefix("en-us") { score += 100 }
+        else if voice.locale.lowercased().hasPrefix("en") { score += 50 }
+
+        let noveltyVoices = [
+            "zarvox", "trinoids", "bad news", "good news", "pipe organ",
+            "bells", "boing", "whisper", "cellos", "princess", "fred",
+            "albert", "bubbles", "deranged", "hysterical", "junior", "ralph"
+        ]
+        if noveltyVoices.contains(where: { name.contains($0) }) {
+            score -= 1000
+        }
+        return score
+    }
+
+    return voiceInfos.sorted { scoreVoice($0) > scoreVoice($1) }.first?.id ?? available.first?.rawValue
+}
+
+public func ensureIOSOnMacPinnedVoice() -> String? {
+    nil
+}
+#endif
+
+// MARK: - Shortcuts TTS Helper for iOS on Mac
+// This helper provides TTS functionality via macOS Shortcuts when running as an iPad app on Mac
+// Available for both iOS and macOS targets (but only functional on iOS when running on Mac)
+public class ShortcutsTTS {
+    public static let shared = ShortcutsTTS()
+    private let shortcutName = "Speak Text"
+    
+    private init() {}
+    
+    /// Speaks text using macOS Shortcuts when running as iPad app on Mac
+    /// - Parameters:
+    ///   - text: The text to speak
+    ///   - completion: Called when speech completes or fails
+    @discardableResult
+    public func speakText(_ text: String, completion: (() -> Void)? = nil) -> Bool {
+        guard !text.isEmpty else {
+            print("🔊 [ShortcutsTTS] Empty text, skipping")
+            completion?()
+            return false
+        }
+
+#if os(macOS)
+        return speakUsingShortcutsCLI(text, completion: completion)
+#elseif os(iOS)
+    #if targetEnvironment(macCatalyst)
+        return speakUsingShortcutsCLI(text, completion: completion)
+    #else
+        return speakUsingXCallbackOniOS(text, completion: completion)
+    #endif
+#else
+        print("🔊 [ShortcutsTTS] Platform not supported")
+        completion?()
+        return false
+#endif
+    }
+    
+    /// Stops any current speech
+    /// Note: We can't actually stop shortcuts once launched via URL scheme
+    public func stopSpeaking() {
+        // Could potentially open a "stop" shortcut if you create one
+        print("🔊 [ShortcutsTTS] Stop not available with URL scheme")
+    }
+    
+    /// Checks if currently speaking
+    public var isSpeaking: Bool {
+        // We can't track speaking state with URL scheme
+        return false
+    }
+}
+
+#if os(iOS) && !targetEnvironment(macCatalyst)
+extension ShortcutsTTS {
+    @discardableResult
+    fileprivate func speakUsingXCallbackOniOS(_ text: String, completion: (() -> Void)?) -> Bool {
+        // Check if we're running on Mac
+        guard ProcessInfo.processInfo.isiOSAppOnMac else {
+            print("🔊 [ShortcutsTTS] Not running on Mac, skipping")
+            completion?()
+            return false
+        }
+
+        var originalClipboard: String?
+        let pasteboard = UIPasteboard.general
+        originalClipboard = pasteboard.string
+        pasteboard.string = text
+
+        guard let encodedName = shortcutName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let encodedText = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            print("🔊 [ShortcutsTTS] Failed to encode text or name")
+            if pasteboard.string == text {
+                pasteboard.string = originalClipboard
+            }
+            completion?()
+            return false
+        }
+
+        let urlString = "shortcuts://x-callback-url/run-shortcut?name=\(encodedName)&input=\(encodedText)"
+
+        print("🔊 [ShortcutsTTS] Shortcut name: '\(shortcutName)'")
+        print("🔊 [ShortcutsTTS] Encoded name: '\(encodedName)'")
+        print("🔊 [ShortcutsTTS] Text preview: '\(String(text.prefix(50)))...'")
+        print("🔊 [ShortcutsTTS] Full URL: \(urlString)")
+
+        guard let url = URL(string: urlString) else {
+            print("🔊 [ShortcutsTTS] Failed to create shortcuts URL")
+            if pasteboard.string == text {
+                pasteboard.string = originalClipboard
+            }
+            completion?()
+            return false
+        }
+
+        UIApplication.shared.open(url, options: [:]) { success in
+            if success {
+                print("🔊 [ShortcutsTTS] Launched shortcut successfully")
+                let words = text.split(separator: " ").count
+                let estimatedDuration = Double(words) / 150.0 * 60.0
+                let delay = min(max(estimatedDuration, 2.0), 30.0)
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    if pasteboard.string == text {
+                        pasteboard.string = originalClipboard
+                    }
+                    completion?()
+                }
+            } else {
+                print("🔊 [ShortcutsTTS] Failed to launch shortcut")
+                if pasteboard.string == text {
+                    pasteboard.string = originalClipboard
+                }
+                completion?()
+            }
+        }
+
+        return true
+    }
+}
+#endif
+
+#if os(macOS) || targetEnvironment(macCatalyst)
+extension ShortcutsTTS {
+    @discardableResult
+    fileprivate func speakUsingShortcutsCLI(_ text: String, completion: (() -> Void)?) -> Bool {
+        let tempDir = FileManager.default.temporaryDirectory
+        let inputFile = tempDir.appendingPathComponent("shortcut_tts_input_\(UUID().uuidString).txt")
+        let outputFile = tempDir.appendingPathComponent("shortcut_tts_output_\(UUID().uuidString).txt")
+
+        do {
+            try text.write(to: inputFile, atomically: true, encoding: .utf8)
+        } catch {
+            print("⚠️ [ShortcutsTTS] Failed to write CLI input file: \(error.localizedDescription)")
+            return launchShortcutViaURLSchemeForMac(text: text, completion: completion)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+        process.arguments = [
+            "run",
+            shortcutName,
+            "--input-path", inputFile.path,
+            "--output-path", outputFile.path,
+            "--output-type", "public.plain-text"
+        ]
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer {
+                try? FileManager.default.removeItem(at: inputFile)
+                try? FileManager.default.removeItem(at: outputFile)
+            }
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let status = process.terminationStatus
+                let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                let stdoutData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                DispatchQueue.main.async {
+                    if status == 0 {
+                        print("🔊 [ShortcutsTTS] CLI invocation succeeded for '\(self.shortcutName)'")
+                        completion?()
+                    } else {
+                        let combined = [stderr, stdout].filter { !$0.isEmpty }.joined(separator: " | ")
+                        print("⚠️ [ShortcutsTTS] CLI exited with status \(status): \(combined)")
+                        _ = self.launchShortcutViaURLSchemeForMac(text: text, completion: completion)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    print("⚠️ [ShortcutsTTS] Failed to run Shortcuts CLI: \(error.localizedDescription)")
+                    _ = self.launchShortcutViaURLSchemeForMac(text: text, completion: completion)
+                }
+            }
+        }
+
+        return true
+    }
+
+    @discardableResult
+    fileprivate func launchShortcutViaURLSchemeForMac(text: String, completion: (() -> Void)?) -> Bool {
+        guard let encodedName = shortcutName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let encodedText = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            print("⚠️ [ShortcutsTTS] Failed to encode shortcut parameters for fallback")
+            completion?()
+            return false
+        }
+
+        let urlString = "shortcuts://x-callback-url/run-shortcut?name=\(encodedName)&input=\(encodedText)"
+        guard let url = URL(string: urlString) else {
+            print("⚠️ [ShortcutsTTS] Failed to create fallback shortcuts URL")
+            completion?()
+            return false
+        }
+
+        print("🔊 [ShortcutsTTS] Falling back to Shortcuts URL scheme for '\(shortcutName)' (text length: \(text.count))")
+
+        var originalClipboard: String?
+
+        #if os(macOS)
+        let pasteboard = NSPasteboard.general
+        originalClipboard = pasteboard.string(forType: .string)
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+
+        NSWorkspace.shared.open(url)
+        print("🔊 [ShortcutsTTS] Launched fallback shortcut via NSWorkspace")
+        #else
+        let pasteboard = UIPasteboard.general
+        originalClipboard = pasteboard.string
+        pasteboard.string = text
+
+        UIApplication.shared.open(url, options: [:]) { success in
+            if success {
+                print("🔊 [ShortcutsTTS] Launched fallback shortcut via UIApplication")
+            } else {
+                print("⚠️ [ShortcutsTTS] Failed to launch fallback shortcut via UIApplication")
+            }
+        }
+        #endif
+
+        let words = text.split(separator: " ").count
+        let estimatedDuration = Double(words) / 150.0 * 60.0
+        let delay = min(max(estimatedDuration, 2.0), 30.0)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            #if os(macOS)
+            let pasteboard = NSPasteboard.general
+            if pasteboard.string(forType: .string) == text {
+                pasteboard.clearContents()
+                if let original = originalClipboard {
+                    pasteboard.setString(original, forType: .string)
+                }
+            }
+            #else
+            let pasteboard = UIPasteboard.general
+            if pasteboard.string == text {
+                pasteboard.string = originalClipboard
+            }
+            #endif
+            completion?()
+        }
+
+        return true
+    }
+}
+#endif

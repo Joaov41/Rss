@@ -27,5 +27,11 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_rss-sum._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>RSSReaderApp connects to the Summarize bridge or Apple PCC Gateway running on your Mac for local AI summaries.</string>
 </dict>
 </plist>

@@ -1409,6 +1409,7 @@ private extension WebAIHandoffRepresentable {
                     text.includes("could not load content") ||
                     text.includes("couldn't load content") ||
                     text.includes("unable to load content") ||
+                    (text.includes("something went wrong") && text.includes("1096")) ||
                     (text.includes("something went wrong") && hasRetryButton) ||
                     (text.length < 240 && hasRetryButton && text.includes("failed"));
             })();
@@ -1912,6 +1913,7 @@ private extension WebAIHandoffRepresentable {
                   text.includes("could not load content") ||
                   text.includes("couldn't load content") ||
                   text.includes("unable to load content") ||
+                  (text.includes("something went wrong") && text.includes("1096")) ||
                   ((text.includes("something went wrong") || text.includes("failed to load")) && text.length < 260);
               }
 
@@ -2234,6 +2236,17 @@ private extension WebAIHandoffRepresentable {
                     return null;
                 }
 
+                function uniqueElements(list) {
+                    return Array.from(new Set(list.filter(Boolean)));
+                }
+
+                function normalizeText(value) {
+                    return (value || "")
+                        .replace(/\\u00a0/g, " ")
+                        .replace(/\\s+/g, " ")
+                        .trim();
+                }
+
                 function findInput() {
                     if (provider === "chatgpt") {
                         return pickFirst([
@@ -2247,14 +2260,96 @@ private extension WebAIHandoffRepresentable {
                     }
 
                     return pickFirst([
+                        document.querySelector("rich-textarea [contenteditable='true']"),
+                        document.querySelector("rich-textarea textarea"),
+                        document.querySelector("rich-textarea .ql-editor"),
+                        document.querySelector("[aria-label*='Enter a prompt'][contenteditable='true']"),
+                        document.querySelector("[aria-label*='Enter a prompt'][role='textbox']"),
+                        document.querySelector("[aria-label*='Ask Gemini'][contenteditable='true']"),
+                        document.querySelector("[data-placeholder*='Enter a prompt'][contenteditable='true']"),
+                        document.querySelector("[role='textbox'][contenteditable='true']"),
+                        document.querySelector("[role='textbox']"),
                         document.querySelector("textarea"),
                         document.querySelector("[contenteditable='true']")
                     ]);
                 }
 
+                function editableText(el) {
+                    if (!el) return "";
+                    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+                        return el.value || "";
+                    }
+                    return el.innerText || el.textContent || "";
+                }
+
+                function dispatchInputEvents(el, value) {
+                    try {
+                        el.dispatchEvent(new InputEvent("beforeinput", {
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true,
+                            inputType: "insertText",
+                            data: value
+                        }));
+                    } catch (error) {
+                    }
+
+                    try {
+                        el.dispatchEvent(new InputEvent("input", {
+                            bubbles: true,
+                            cancelable: true,
+                            composed: true,
+                            inputType: "insertText",
+                            data: value
+                        }));
+                    } catch (error) {
+                        el.dispatchEvent(new Event("input", { bubbles: true }));
+                    }
+
+                    el.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+
+                function setContentEditableValue(el, value) {
+                    if (!el) return false;
+                    el.focus();
+
+                    let inserted = false;
+                    try {
+                        const selection = window.getSelection();
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                        inserted = document.execCommand("insertText", false, value);
+                    } catch (error) {
+                        inserted = false;
+                    }
+
+                    if (!inserted || normalizeText(editableText(el)) !== normalizeText(value)) {
+                        const lines = value.split("\\n");
+                        el.innerHTML = "";
+                        lines.forEach(line => {
+                            const p = document.createElement("p");
+                            p.textContent = line.length ? line : " ";
+                            el.appendChild(p);
+                        });
+                    }
+
+                    dispatchInputEvents(el, value);
+                    return true;
+                }
+
                 function setValue(el, value) {
                     if (!el) return false;
                     el.focus();
+
+                    if (provider === "gemini" && (
+                        el.getAttribute("contenteditable") === "true" ||
+                        el.getAttribute("role") === "textbox" ||
+                        el.classList.contains("ql-editor")
+                    )) {
+                        return setContentEditableValue(el, value);
+                    }
 
                     const isProseMirror = el.classList.contains("ProseMirror") || el.querySelector("p") !== null;
                     if (isProseMirror) {
@@ -2283,23 +2378,12 @@ private extension WebAIHandoffRepresentable {
                         } catch (error) {
                             el.value = value;
                         }
-                        el.dispatchEvent(new Event("input", { bubbles: true }));
-                        el.dispatchEvent(new Event("change", { bubbles: true }));
+                        dispatchInputEvents(el, value);
                         return true;
                     }
 
                     if (el.getAttribute("contenteditable") === "true") {
-                        const p = document.createElement("p");
-                        p.textContent = value;
-                        el.innerHTML = "";
-                        el.appendChild(p);
-                        el.dispatchEvent(new InputEvent("input", {
-                            bubbles: true,
-                            cancelable: true,
-                            inputType: "insertText",
-                            data: value
-                        }));
-                        return true;
+                        return setContentEditableValue(el, value);
                     }
 
                     return false;
@@ -2315,11 +2399,23 @@ private extension WebAIHandoffRepresentable {
                         keyCode: 13,
                         which: 13,
                         bubbles: true,
-                        cancelable: true
+                        cancelable: true,
+                        composed: true,
+                        shiftKey: false
                     };
 
+                    const targets = uniqueElements([
+                        el,
+                        el.closest("rich-textarea"),
+                        el.closest("[role='textbox']"),
+                        document.activeElement,
+                        document
+                    ]);
+
                     ["keydown", "keypress", "keyup"].forEach(type => {
-                        el.dispatchEvent(new KeyboardEvent(type, eventInit));
+                        targets.forEach(target => {
+                            target.dispatchEvent(new KeyboardEvent(type, eventInit));
+                        });
                     });
 
                     const form = el.closest("form");
@@ -2360,7 +2456,7 @@ private extension WebAIHandoffRepresentable {
                         style.pointerEvents !== "none";
                 }
 
-                function activateAction(node) {
+                function activateAction(node, callNativeClick = true) {
                     if (!isUsableAction(node)) return false;
                     const rect = node.getBoundingClientRect();
                     const clientX = Math.max(rect.left + 1, Math.min(rect.left + rect.width / 2, rect.right - 1));
@@ -2384,7 +2480,7 @@ private extension WebAIHandoffRepresentable {
                             buttons: type.endsWith("down") ? 1 : 0
                         }));
                     });
-                    if (typeof node.click === "function") {
+                    if (callNativeClick && typeof node.click === "function") {
                         node.click();
                     }
                     return true;
@@ -2396,7 +2492,8 @@ private extension WebAIHandoffRepresentable {
                     const hasLoadFailure = bodyText.includes("content failed to load") ||
                         bodyText.includes("could not load content") ||
                         bodyText.includes("couldn't load content") ||
-                        bodyText.includes("unable to load content");
+                        bodyText.includes("unable to load content") ||
+                        (bodyText.includes("something went wrong") && bodyText.includes("1096"));
                     if (!hasLoadFailure) return false;
 
                     const retryButton = Array.from(document.querySelectorAll("button, [role='button'], a")).find(node => {
@@ -2503,9 +2600,82 @@ private extension WebAIHandoffRepresentable {
                         })[0] || null;
                 }
 
+                function labelForAction(node) {
+                    if (!node) return "";
+                    return [
+                        node.textContent,
+                        node.getAttribute("aria-label"),
+                        node.getAttribute("title"),
+                        node.getAttribute("data-test-id"),
+                        node.getAttribute("data-testid")
+                    ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim().toLowerCase();
+                }
+
+                function distanceFromInput(node, input) {
+                    if (!node || !input) return Number.MAX_SAFE_INTEGER;
+                    const nr = node.getBoundingClientRect();
+                    const ir = input.getBoundingClientRect();
+                    const nx = nr.left + nr.width / 2;
+                    const ny = nr.top + nr.height / 2;
+                    const ix = ir.right;
+                    const iy = ir.bottom;
+                    return Math.abs(nx - ix) + Math.abs(ny - iy);
+                }
+
+                function looksLikeGeminiSendButton(node, input) {
+                    if (!isUsableAction(node)) return false;
+
+                    const label = labelForAction(node);
+                    const blocked = ["attach", "upload", "image", "voice", "microphone", "mic", "settings", "tools", "stop"];
+                    if (blocked.some(value => label.includes(value))) return false;
+                    if (label.includes("send") || label.includes("submit")) return true;
+
+                    const iconText = Array.from(node.querySelectorAll("mat-icon, .google-symbols, .material-symbols-outlined, .material-icons"))
+                        .map(icon => (icon.textContent || "").trim().toLowerCase())
+                        .join(" ");
+                    if (/\\b(send|arrow_upward|arrow_forward)\\b/.test(iconText)) return true;
+
+                    if (!input) return false;
+                    const nr = node.getBoundingClientRect();
+                    const ir = input.getBoundingClientRect();
+                    const nearComposer = nr.width <= 84 &&
+                        nr.height <= 84 &&
+                        nr.left >= ir.left - 24 &&
+                        nr.right <= ir.right + 140 &&
+                        nr.top >= ir.top - 48 &&
+                        nr.bottom <= ir.bottom + 140;
+                    const iconOnly = Boolean(node.querySelector("svg, mat-icon, .google-symbols, .material-symbols-outlined")) ||
+                        (node.textContent || "").trim().length <= 24;
+
+                    return nearComposer && iconOnly && nr.left > ir.left + ir.width * 0.55;
+                }
+
+                function findGeminiSendButton(input) {
+                    const containers = uniqueElements([
+                        input?.closest("form"),
+                        input?.closest("rich-textarea")?.parentElement,
+                        input?.closest("[class*='composer']"),
+                        input?.closest("[class*='input']"),
+                        input?.closest("[class*='prompt']"),
+                        input?.parentElement?.parentElement,
+                        input?.parentElement
+                    ]);
+
+                    const scoped = containers.flatMap(container =>
+                        Array.from(container.querySelectorAll("button, [role='button'], [aria-label], [data-test-id], [data-testid]"))
+                    );
+                    const iconButtons = Array.from(document.querySelectorAll("mat-icon, .google-symbols, .material-symbols-outlined, .material-icons"))
+                        .map(icon => icon.closest("button, [role='button']"));
+                    const global = Array.from(document.querySelectorAll("button, [role='button'], [aria-label], [data-test-id], [data-testid]"));
+
+                    return uniqueElements(scoped.concat(iconButtons, global))
+                        .filter(node => looksLikeGeminiSendButton(node, input))
+                        .sort((a, b) => distanceFromInput(a, input) - distanceFromInput(b, input))[0] || null;
+                }
+
                 function findSendButton(input) {
                     if (provider === "chatgpt") {
-                        return pickFirst([
+                        return findChatGPTSendButton(input) || pickFirst([
                             document.querySelector("button[data-testid='send-button']"),
                             document.querySelector("button[data-testid='composer-send-button']"),
                             document.querySelector("button[aria-label='Send prompt']"),
@@ -2516,9 +2686,11 @@ private extension WebAIHandoffRepresentable {
                         ]);
                     }
 
-                    return pickFirst([
+                    return findGeminiSendButton(input) || pickFirst([
                         document.querySelector("button[aria-label='Send message']"),
+                        document.querySelector("button[aria-label='Send prompt']"),
                         document.querySelector("button[aria-label='Send']"),
+                        document.querySelector("button[aria-label='Submit']"),
                         document.querySelector("button[type='submit']"),
                         document.querySelector("div[role='button'][aria-label*='Send']")
                     ]);
@@ -2568,49 +2740,6 @@ private extension WebAIHandoffRepresentable {
                 }
 
                 function selectGeminiModelIfNeeded() {
-                    if (provider !== "gemini") return "ready";
-                    if (window.__codexGeminiLiteSelectionState === "ready") return "ready";
-
-                    const modelButton = pickFirst([
-                        document.querySelector("button[aria-label*='model']"),
-                        document.querySelector("[data-test-id='model-selector']"),
-                        Array.from(document.querySelectorAll("button, [role='button']")).find(button =>
-                            button.textContent && (button.textContent.includes("Gemini") || button.textContent.includes("Pro") || button.textContent.includes("Flash") || button.textContent.includes("Lite"))
-                        )
-                    ]);
-
-                    if (!modelButton) return "ready";
-
-                    const currentModelText = (modelButton.textContent || "").toLowerCase();
-                    if (currentModelText.includes("lite")) {
-                        window.__codexGeminiLiteSelectionState = "ready";
-                        return "ready";
-                    }
-
-                    const liteOption = pickFirst([
-                        Array.from(document.querySelectorAll("[role='option'], [role='menuitem'], button, div")).find(option =>
-                            option.textContent && option.textContent.toLowerCase().includes("flash-lite")
-                        ),
-                        Array.from(document.querySelectorAll("[role='option'], [role='menuitem'], button")).find(option =>
-                            option.textContent && option.textContent.toLowerCase().includes("lite")
-                        )
-                    ]);
-
-                    if (liteOption) {
-                        liteOption.click();
-                        window.__codexGeminiLiteSelectionState = "ready";
-                        document.body.click();
-                        return "waiting";
-                    }
-
-                    if (window.__codexGeminiLiteSelectionState !== "opened") {
-                        window.__codexGeminiLiteSelectionState = "opened";
-                        modelButton.click();
-                        return "waiting";
-                    }
-
-                    window.__codexGeminiLiteSelectionState = "ready";
-                    document.body.click();
                     return "ready";
                 }
 
@@ -2646,6 +2775,19 @@ private extension WebAIHandoffRepresentable {
                 }
 
                 const input = findInput();
+
+                if (provider === "gemini" && window.__codexGeminiSubmissionPending === text) {
+                    const pendingAge = Date.now() - (window.__codexGeminiSubmissionPendingAt || 0);
+                    const startingTurns = window.__codexGeminiSubmissionTurnCount || 0;
+                    const inputNow = input ? normalizeText(editableText(input)) : "";
+                    if (assistantTurnCount() > startingTurns || (pendingAge > 350 && (!input || inputNow.length === 0))) {
+                        window.__codexGeminiSubmissionPending = "";
+                        return "success";
+                    }
+                    if (pendingAge < 2600) return "waiting";
+                    window.__codexGeminiSubmissionPending = "";
+                }
+
                 if (!input) return "waiting";
 
                 const geminiModelStatus = selectGeminiModelIfNeeded();
@@ -2653,33 +2795,44 @@ private extension WebAIHandoffRepresentable {
 
                 if (!setValue(input, text)) return "waiting";
 
+                const startingAssistantTurns = assistantTurnCount();
                 const sendButton = findSendButton(input);
                 if (sendButton && !sendButton.disabled) {
-                    if (provider === "chatgpt" || activateAction(sendButton)) {
+                    if (provider === "chatgpt" || activateAction(sendButton, false)) {
                         if (provider === "chatgpt") {
                             sendButton.click();
+                            blurComposer(input);
+                            return "success";
                         }
+                        window.__codexGeminiSubmissionPending = text;
+                        window.__codexGeminiSubmissionPendingAt = Date.now();
+                        window.__codexGeminiSubmissionTurnCount = startingAssistantTurns;
                         blurComposer(input);
-                        return "success";
+                        return "waiting";
                     }
                 }
 
                 dispatchEnter(input);
                 blurComposer(input);
 
+                if (provider === "gemini") {
+                    window.__codexGeminiSubmissionPending = text;
+                    window.__codexGeminiSubmissionPendingAt = Date.now();
+                    window.__codexGeminiSubmissionTurnCount = startingAssistantTurns;
+                    return "waiting";
+                }
+
                 const retryButton = findSendButton(input);
                 if (retryButton && !retryButton.disabled) {
-                    if (provider === "chatgpt" || activateAction(retryButton)) {
-                        if (provider === "chatgpt") {
-                            retryButton.click();
-                        }
+                    if (provider === "chatgpt") {
+                        retryButton.click();
                         blurComposer(input);
                         return "success";
                     }
                 }
 
                 blurComposer(input);
-                return provider === "chatgpt" ? "waiting" : "success";
+                return "waiting";
             })();
             """
         }
@@ -2787,6 +2940,7 @@ private extension WebAIHandoffRepresentable {
                     if (text.includes("could not load content")) return true;
                     if (text.includes("couldn't load content")) return true;
                     if (text.includes("unable to load content")) return true;
+                    if (text.includes("something went wrong") && text.includes("1096")) return true;
                     if (text === "gemini apps activity is off") return true;
                     if (text.includes("apps activity is off") && text.length < 120) return true;
                     if (text.includes("gemini is ai and can make mistakes")) return true;

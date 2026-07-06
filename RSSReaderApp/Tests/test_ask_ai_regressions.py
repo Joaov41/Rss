@@ -57,21 +57,21 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIsNotNone(method)
         self.assertIn("performExplicitWebAIQuestion", method.group(0))
 
-    def test_web_qa_prompts_use_bounded_summary_style_context(self):
+    def test_web_qa_prompts_use_summary_style_context(self):
         source = read("RSSReaderApp/Controllers/AppState.swift")
         article_prompt = re.search(
-            r"func articleQAPrompt\(article: Article, question: String\) -> String \{[\s\S]*?\n    \}",
+            r"func articleQAPrompt\([\s\S]*?\n    func redditQAPrompt",
             source,
         )
         reddit_prompt = re.search(
-            r"func redditQAPrompt\(post: RedditPost, comments: \[RedditCommentModel\], question: String\) -> String \{[\s\S]*?\n    \}",
+            r"func redditQAPrompt\([\s\S]*?\n    func commentSummaryPrompt",
             source,
         )
         self.assertIsNotNone(article_prompt)
         self.assertIsNotNone(reddit_prompt)
         self.assertIn("strictQAPrompt", source)
         self.assertIn("normalizedSummarySourceText(content, maxCharacters: 12_000)", article_prompt.group(0))
-        self.assertIn("redditSummarySourceText(post: post, comments: comments)", reddit_prompt.group(0))
+        self.assertIn("redditSummarySourceText(post: post, comments: comments, maxComments: maxComments)", reddit_prompt.group(0))
         self.assertNotIn("\\(content)", article_prompt.group(0))
         self.assertNotIn("extractAllCommentTexts", reddit_prompt.group(0))
 
@@ -85,6 +85,50 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("normalized(selectedText, maxCharacters: 1_500)", method.group(0))
         self.assertIn("normalized(extractedContext, maxCharacters: 8_000)", method.group(0))
         self.assertIn("Return plain text only", method.group(0))
+
+    def test_ask_ai_response_formatter_preserves_readable_spacing(self):
+        source = read("RSSReaderApp/Views/AskAIUtilities.swift")
+        formatter = re.search(
+            r"func formatAskAIResponseForDisplay\(_ input: String\) -> String \{[\s\S]*?\n\}\n\nfunc buildAskAISelectionPrompt",
+            source,
+        )
+        self.assertIsNotNone(formatter)
+        self.assertIn("cleanMarkdownArtifactsForDisplay(input)", formatter.group(0))
+        self.assertIn('!value.contains("\\n\\n")', formatter.group(0))
+        self.assertIn('sentences.joined(separator: "\\n\\n")', formatter.group(0))
+        self.assertIn('replacingOccurrences(of: "\\\\n{3,}"', formatter.group(0))
+
+    def test_ask_ai_sheet_uses_response_formatter(self):
+        source = read("RSSReaderApp/Views/AskAIUtilities.swift")
+        view = re.search(
+            r"struct AskAIWebView: View \{[\s\S]*?struct AskAIResponseSheet: View",
+            source,
+        )
+        self.assertIsNotNone(view)
+        self.assertIn("Text(formatAskAIResponseForDisplay(content))", view.group(0))
+
+    def test_selection_ask_ai_prompts_request_blank_line_paragraphs(self):
+        source = read("RSSReaderApp/Views/AskAIUtilities.swift")
+        self.assertIn(
+            "Use short paragraphs separated by a blank line when the answer has multiple ideas.",
+            source,
+        )
+
+    def test_ask_ai_answer_paths_store_formatted_responses(self):
+        content = read("RSSReaderApp/Views/ContentView.swift")
+        summary_column = read("RSSReaderApp/Views/SummaryColumnView.swift")
+        reddit = read("RSSReaderApp/Views/RedditDetailView.swift")
+        infographic = read("RSSReaderApp/Views/InfographicView.swift")
+
+        for source in (content, summary_column, reddit, infographic):
+            self.assertIn("formatAskAIResponseForDisplay(answer)", source)
+
+        self.assertIn("formatAskAIResponseForDisplay(processed)", reddit)
+        self.assertNotIn("selectionAskAIResponse = cleanMarkdownArtifactsForDisplay(answer)", content)
+        self.assertNotIn("selectionAskAIResponse = cleanMarkdownArtifactsForDisplay(answer)", summary_column)
+        self.assertNotIn("selectionAskAIResponse = cleanMarkdownArtifactsForDisplay(answer)", reddit)
+        self.assertNotIn("qaState.answerText = cleanMarkdownArtifactsForDisplay(answer)", content)
+        self.assertNotIn("answerText = cleanMarkdownArtifactsForDisplay(answer)", reddit)
 
     def test_long_press_menu_exposes_standard_and_web_actions(self):
         source = read("RSSReaderApp/Views/AskAIUtilities.swift")
@@ -227,9 +271,14 @@ class AskAIRegressionTests(unittest.TestCase):
 
     def test_article_no_summary_state_exposes_web_ai_globe(self):
         content = read("RSSReaderApp/Views/ContentView.swift")
-        article_empty = re.search(
-            r"private func summarySection\(article: Article\) -> some View \{[\s\S]*?\} else \{[\s\S]*?Label\(\"Summarize Article\", systemImage: \"text\.bubble\"\)[\s\S]*?appState\.requestWebSummary\(for: article\)[\s\S]*?Image\(systemName: \"globe\"\)",
+        summary_section = re.search(
+            r"private func summarySection\(article: Article\) -> some View \{[\s\S]*?\n    private func qaSection",
             content,
+        )
+        self.assertIsNotNone(summary_section)
+        article_empty = re.search(
+            r"else\s*\{\s*if shouldShowExplicitWebAIControls \{[\s\S]*?appState\.requestWebSummary\(for: article\)[\s\S]*?Image\(systemName: \"globe\"\)",
+            summary_section.group(0),
         )
         self.assertIsNotNone(article_empty)
 
@@ -249,7 +298,7 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("function geminiCandidates()", source)
         self.assertIn("function findChatGPTSendButton(input)", source)
         self.assertIn("function looksLikeChatGPTSendButton(node)", source)
-        self.assertIn("function activateAction(node)", source)
+        self.assertIn("function activateAction(node, callNativeClick = true)", source)
         self.assertIn("#if os(macOS)", source)
         self.assertIn("let usesPrivateStore = provider == .chatgpt", source)
         self.assertIn("let requiresFreshWebView = usesPrivateStore", source)
@@ -282,7 +331,12 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("reloadFromOrigin()", source)
         self.assertIn("cachePolicy: .reloadIgnoringLocalAndRemoteCacheData", source)
         self.assertIn("sendButton.click();", source)
-        self.assertIn('return provider === "chatgpt" ? "waiting" : "success";', source)
+        self.assertIn("function findGeminiSendButton(input)", source)
+        self.assertIn("function looksLikeGeminiSendButton(node, input)", source)
+        self.assertIn("activateAction(sendButton, false)", source)
+        self.assertIn("__codexGeminiSubmissionPending", source)
+        self.assertIn('text.includes("something went wrong") && text.includes("1096")', source)
+        self.assertNotIn('return provider === "chatgpt" ? "waiting" : "success";', source)
         self.assertNotIn('status == "chatgptVerify"', source)
         self.assertNotIn("checkChatGPTSubmissionStarted", source)
         self.assertNotIn("__codexChatGPTSendState", source)

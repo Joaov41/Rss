@@ -37,9 +37,17 @@
 		A1B2C3D4E5F6A7B8C9D0E21C /* RedditDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E21B /* RedditDetailView.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E21D /* CommentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E21F /* CommentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E274 /* GeminiBackgroundTaskManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E273 /* GeminiBackgroundTaskManager.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E275 /* GeminiBackgroundTaskManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E273 /* GeminiBackgroundTaskManager.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E291 /* CloudSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E290 /* CloudSyncManager.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E292 /* CloudSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E290 /* CloudSyncManager.swift */; };
+		ASKAI0001000100010001 /* AskAIUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = ASKAI0001000100010003 /* AskAIUtilities.swift */; };
+		ASKAI0001000100010002 /* AskAIUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = ASKAI0001000100010003 /* AskAIUtilities.swift */; };
 		C10CDDAF2D8E00EC0099A59A /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C10CDDAE2D8E00EC0099A59A /* Kingfisher */; };
 		C148C40D2D8AD71D00E006A0 /* FeedKit in Frameworks */ = {isa = PBXBuildFile; productRef = C148C40C2D8AD71D00E006A0 /* FeedKit */; };
 		C148C40F2D8AD72A00E006A0 /* FeedKit in Frameworks */ = {isa = PBXBuildFile; productRef = C148C40E2D8AD72A00E006A0 /* FeedKit */; };
+		C19B2CF42E8D88CF00C5F4E8 /* RedditOAuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19B2CF32E8D88CF00C5F4E8 /* RedditOAuthManager.swift */; };
+		C19B2CF52E8D88CF00C5F4E8 /* RedditOAuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19B2CF32E8D88CF00C5F4E8 /* RedditOAuthManager.swift */; };
 		C1CA448B2D8CC92F00B81B54 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = C1CA448A2D8CC92F00B81B54 /* SwiftSoup */; };
 		C1DA2C612D8B1AA400A9D660 /* SummaryColumnView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */; };
 		C1DA2C622D8B1AA400A9D660 /* SummaryColumnView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */; };
@@ -47,7 +55,84 @@
 		C1DA2C652D8B1C7A00A9D660 /* MainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */; };
 		C1DA2C672D8B1E7C00A9D660 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */; };
 		C1DA2C682D8B1E7C00A9D660 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */; };
+		C1E3EDAA2EF2103E00AF5F7D /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDA92EF2103E00AF5F7D /* MLX */; };
+		C1E3EDAC2EF2103E00AF5F7D /* MLXFFT in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDAB2EF2103E00AF5F7D /* MLXFFT */; };
+		C1E3EDAE2EF2103E00AF5F7D /* MLXFast in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDAD2EF2103E00AF5F7D /* MLXFast */; };
+		C1E3EDB02EF2103E00AF5F7D /* MLXLinalg in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDAF2EF2103E00AF5F7D /* MLXLinalg */; };
+		C1E3EDB22EF2103E00AF5F7D /* MLXNN in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB12EF2103E00AF5F7D /* MLXNN */; };
+		C1E3EDB52EF2114E00AF5F7D /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB42EF2114E00AF5F7D /* MLXEmbedders */; };
+		C1E3EDB72EF2114E00AF5F7D /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB62EF2114E00AF5F7D /* MLXLLM */; };
+		C1E3EDB92EF2114E00AF5F7D /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB82EF2114E00AF5F7D /* MLXLMCommon */; };
+		C1E3EDBA2EF2114E00AF5F7D /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDBC2EF2114E00AF5F7D /* MLXVLM */; };
+		D1A100012F40000100AAA001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = D1A100032F40000100AAA001 /* MLXAudioCore */; };
+		D1A100022F40000100AAA001 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = D1A100042F40000100AAA001 /* MLXAudioTTS */; };
+		MACD0001000100010001 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB62EF2114E00AF5F7D /* MLXLLM */; };
+		MACD0001000100010002 /* MLXFast in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDAD2EF2103E00AF5F7D /* MLXFast */; };
+		MACD0001000100010003 /* MLXLinalg in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDAF2EF2103E00AF5F7D /* MLXLinalg */; };
+		MACD0001000100010004 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = D1A100032F40000100AAA001 /* MLXAudioCore */; };
+		MACD0001000100010005 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = D1A100042F40000100AAA001 /* MLXAudioTTS */; };
+		MACD0001000100010006 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB82EF2114E00AF5F7D /* MLXLMCommon */; };
+		MACD0001000100010007 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDBC2EF2114E00AF5F7D /* MLXVLM */; };
+		MACD0001000100010008 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB42EF2114E00AF5F7D /* MLXEmbedders */; };
+		MACD0001000100010009 /* MLXNN in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDB12EF2103E00AF5F7D /* MLXNN */; };
+		MACD0001000100010010 /* MLXFFT in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDAB2EF2103E00AF5F7D /* MLXFFT */; };
+		MACD0001000100010011 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = C1E3EDA92EF2103E00AF5F7D /* MLX */; };
+		MACD0001000100010012 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C10CDDAE2D8E00EC0099A59A /* Kingfisher */; };
+		MACD0001000100010013 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = C1CA448A2D8CC92F00B81B54 /* SwiftSoup */; };
+		D1E2F3A4B5C6D7E8F9A0B1D0 /* LatestNewsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D7E8F9A0B1C0 /* LatestNewsStore.swift */; };
+		D1E2F3A4B5C6D7E8F9A0B1D1 /* LatestNewsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D7E8F9A0B1C0 /* LatestNewsStore.swift */; };
+		D1E2F3A4B5C6D7E8F9A0B1D2 /* LatestNewsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D7E8F9A0B1C1 /* LatestNewsWidget.swift */; };
+		D1E2F3A4B5C6D7E8F9A0B1D3 /* LatestNewsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D7E8F9A0B1C0 /* LatestNewsStore.swift */; };
+		D1E2F3A4B5C6D7E8F9A0B1D4 /* LatestNewsWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = D1E2F3A4B5C6D7E8F9A0B1C3 /* LatestNewsWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		F0C0C0C0C0C0C0C0C0C0C0D1 /* KokoroTTSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */; };
+		F0C0C0C0C0C0C0C0C0C0C0D2 /* KokoroPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C0C0C0C0C0C0C0C0C0C0C2 /* KokoroPlayback.swift */; };
+		F0C0C0C0C0C0C0C0C0C0C0D3 /* KokoroTTSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */; };
+		F0C0C0C0C0C0C0C0C0C0C0D4 /* KokoroPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C0C0C0C0C0C0C0C0C0C0C2 /* KokoroPlayback.swift */; };
+		WEBAI0001000100010001 /* WebAIHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WEBAI0001000100010003 /* WebAIHandoffView.swift */; };
+		WEBAI0001000100010002 /* WebAIHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WEBAI0001000100010003 /* WebAIHandoffView.swift */; };
+		MLX0001000100010001 /* MLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010002 /* MLXLocalService.swift */; };
+		MLX0001000100010003 /* MLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010002 /* MLXLocalService.swift */; };
+		MLX0001000100010004 /* MLXJSONRepairUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010005 /* MLXJSONRepairUtils.swift */; };
+		MLX0001000100010006 /* MLXJSONRepairUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010005 /* MLXJSONRepairUtils.swift */; };
+		MLX0001000100010007 /* InfographicView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010008 /* InfographicView.swift */; };
+		MLX0001000100010009 /* InfographicView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010008 /* InfographicView.swift */; };
+		LLM0001000100010001 /* LiteRTLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010004 /* LiteRTLocalService.swift */; };
+		LLM0001000100010002 /* CoreAIMLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010005 /* CoreAIMLXLocalService.swift */; };
+		LLM0001000100010003 /* LocalLLMCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010006 /* LocalLLMCompatibility.swift */; };
+		LLM0001000100010007 /* LiteRTLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010004 /* LiteRTLocalService.swift */; };
+		LLM0001000100010008 /* CoreAIMLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010005 /* CoreAIMLXLocalService.swift */; };
+		LLM0001000100010009 /* LocalLLMCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010006 /* LocalLLMCompatibility.swift */; };
+		LLM0001000100010010 /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = LLM0001000100010012 /* LiteRTFoundation */; };
+		LLM0001000100010011 /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = LLM0001000100010012 /* LiteRTFoundation */; };
+		READABILITY0001000101 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
+		READABILITY0001000102 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
+		SUMM0001000100010001 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
+		SUMM0001000100010002 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		D1E2F3A4B5C6D7E8F9A0B1D5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1B2C3D4E5F6A7B8C9D0E237 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D1E2F3A4B5C6D7E8F9A0B1F2;
+			remoteInfo = LatestNewsWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D1E2F3A4B5C6D7E8F9A0B200 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D1E2F3A4B5C6D7E8F9A0B1D4 /* LatestNewsWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSReaderApp.swift; sourceTree = "<group>"; };
@@ -71,9 +156,30 @@
 		A1B2C3D4E5F6A7B8C9D0E222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E223 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E224 /* RSSReaderApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RSSReaderApp.entitlements; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E273 /* GeminiBackgroundTaskManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiBackgroundTaskManager.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E290 /* CloudSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncManager.swift; sourceTree = "<group>"; };
+		ASKAI0001000100010003 /* AskAIUtilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAIUtilities.swift; sourceTree = "<group>"; };
+		C19B2CF32E8D88CF00C5F4E8 /* RedditOAuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditOAuthManager.swift; sourceTree = "<group>"; };
+		C1D5AFE22EE89F9F003802BC /* RSSReaderApp (iOS)Release.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "RSSReaderApp (iOS)Release.entitlements"; sourceTree = "<group>"; };
 		C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryColumnView.swift; sourceTree = "<group>"; };
 		C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSplitView.swift; sourceTree = "<group>"; };
 		C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D1E2F3A4B5C6D7E8F9A0B1C0 /* LatestNewsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestNewsStore.swift; sourceTree = "<group>"; };
+		D1E2F3A4B5C6D7E8F9A0B1C1 /* LatestNewsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LatestNewsWidget.swift; sourceTree = "<group>"; };
+		D1E2F3A4B5C6D7E8F9A0B1C2 /* LatestNewsWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LatestNewsWidget.entitlements; sourceTree = "<group>"; };
+		D1E2F3A4B5C6D7E8F9A0B1C3 /* LatestNewsWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LatestNewsWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1E2F3A4B5C6D7E8F9A0B1C4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroTTSService.swift; sourceTree = "<group>"; };
+		F0C0C0C0C0C0C0C0C0C0C0C2 /* KokoroPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroPlayback.swift; sourceTree = "<group>"; };
+		WEBAI0001000100010003 /* WebAIHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAIHandoffView.swift; sourceTree = "<group>"; };
+		MLX0001000100010002 /* MLXLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXLocalService.swift; sourceTree = "<group>"; };
+		MLX0001000100010005 /* MLXJSONRepairUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXJSONRepairUtils.swift; sourceTree = "<group>"; };
+		MLX0001000100010008 /* InfographicView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfographicView.swift; sourceTree = "<group>"; };
+		LLM0001000100010004 /* LiteRTLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteRTLocalService.swift; sourceTree = "<group>"; };
+		LLM0001000100010005 /* CoreAIMLXLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAIMLXLocalService.swift; sourceTree = "<group>"; };
+		LLM0001000100010006 /* LocalLLMCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMCompatibility.swift; sourceTree = "<group>"; };
+		READABILITY0001000100 /* Readability.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Readability.js; sourceTree = "<group>"; };
+		SUMM0001000100010003 /* SummarizeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummarizeBridge.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -81,6 +187,18 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C1E3EDB72EF2114E00AF5F7D /* MLXLLM in Frameworks */,
+				C1E3EDAE2EF2103E00AF5F7D /* MLXFast in Frameworks */,
+				C1E3EDB02EF2103E00AF5F7D /* MLXLinalg in Frameworks */,
+				D1A100012F40000100AAA001 /* MLXAudioCore in Frameworks */,
+				D1A100022F40000100AAA001 /* MLXAudioTTS in Frameworks */,
+				C1E3EDB92EF2114E00AF5F7D /* MLXLMCommon in Frameworks */,
+				LLM0001000100010010 /* LiteRTFoundation in Frameworks */,
+				C1E3EDBA2EF2114E00AF5F7D /* MLXVLM in Frameworks */,
+				C1E3EDB52EF2114E00AF5F7D /* MLXEmbedders in Frameworks */,
+				C1E3EDB22EF2103E00AF5F7D /* MLXNN in Frameworks */,
+				C1E3EDAC2EF2103E00AF5F7D /* MLXFFT in Frameworks */,
+				C1E3EDAA2EF2103E00AF5F7D /* MLX in Frameworks */,
 				C10CDDAF2D8E00EC0099A59A /* Kingfisher in Frameworks */,
 				C148C40D2D8AD71D00E006A0 /* FeedKit in Frameworks */,
 				C1CA448B2D8CC92F00B81B54 /* SwiftSoup in Frameworks */,
@@ -91,7 +209,28 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				MACD0001000100010001 /* MLXLLM in Frameworks */,
+				MACD0001000100010002 /* MLXFast in Frameworks */,
+				MACD0001000100010003 /* MLXLinalg in Frameworks */,
+				MACD0001000100010004 /* MLXAudioCore in Frameworks */,
+				MACD0001000100010005 /* MLXAudioTTS in Frameworks */,
+				MACD0001000100010006 /* MLXLMCommon in Frameworks */,
+				LLM0001000100010011 /* LiteRTFoundation in Frameworks */,
+				MACD0001000100010007 /* MLXVLM in Frameworks */,
+				MACD0001000100010008 /* MLXEmbedders in Frameworks */,
+				MACD0001000100010009 /* MLXNN in Frameworks */,
+				MACD0001000100010010 /* MLXFFT in Frameworks */,
+				MACD0001000100010011 /* MLX in Frameworks */,
+				MACD0001000100010012 /* Kingfisher in Frameworks */,
 				C148C40F2D8AD72A00E006A0 /* FeedKit in Frameworks */,
+				MACD0001000100010013 /* SwiftSoup in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D1E2F3A4B5C6D7E8F9A0B1F1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,8 +240,10 @@
 		A1B2C3D4E5F6A7B8C9D0E227 = {
 			isa = PBXGroup;
 			children = (
+				C1D5AFE22EE89F9F003802BC /* RSSReaderApp (iOS)Release.entitlements */,
 				A1B2C3D4E5F6A7B8C9D0E228 /* RSSReaderApp */,
 				A1B2C3D4E5F6A7B8C9D0E229 /* Products */,
+				D1E2F3A4B5C6D7E8F9A0B1E1 /* LatestNewsWidget */,
 			);
 			sourceTree = "<group>";
 		};
@@ -113,7 +254,10 @@
 				A1B2C3D4E5F6A7B8C9D0E22B /* Views */,
 				A1B2C3D4E5F6A7B8C9D0E22C /* Controllers */,
 				A1B2C3D4E5F6A7B8C9D0E22D /* Services */,
+				F0C0C0C0C0C0C0C0C0C0C0C3 /* Utilities */,
+				D1E2F3A4B5C6D7E8F9A0B1E0 /* Shared */,
 				A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */,
+				READABILITY0001000100 /* Readability.js */,
 				A1B2C3D4E5F6A7B8C9D0E1F9 /* Assets.xcassets */,
 				A1B2C3D4E5F6A7B8C9D0E222 /* Info.plist */,
 				A1B2C3D4E5F6A7B8C9D0E223 /* Info-macOS.plist */,
@@ -128,6 +272,7 @@
 			children = (
 				A1B2C3D4E5F6A7B8C9D0E220 /* RSSReaderApp.app */,
 				A1B2C3D4E5F6A7B8C9D0E221 /* RSSReaderApp.app */,
+				D1E2F3A4B5C6D7E8F9A0B1C3 /* LatestNewsWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -148,9 +293,12 @@
 				C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */,
 				C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */,
+				WEBAI0001000100010003 /* WebAIHandoffView.swift */,
 				A1B2C3D4E5F6A7B8C9D0E218 /* PlatformViews.swift */,
 				A1B2C3D4E5F6A7B8C9D0E21B /* RedditDetailView.swift */,
 				A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */,
+				MLX0001000100010008 /* InfographicView.swift */,
+				ASKAI0001000100010003 /* AskAIUtilities.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -166,11 +314,21 @@
 		A1B2C3D4E5F6A7B8C9D0E22D /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				C19B2CF32E8D88CF00C5F4E8 /* RedditOAuthManager.swift */,
 				A1B2C3D4E5F6A7B8C9D0E209 /* FeedService.swift */,
 				A1B2C3D4E5F6A7B8C9D0E20C /* RedditService.swift */,
 				A1B2C3D4E5F6A7B8C9D0E20F /* SummaryService.swift */,
 				A1B2C3D4E5F6A7B8C9D0E212 /* CommentSummaryService.swift */,
+				A1B2C3D4E5F6A7B8C9D0E273 /* GeminiBackgroundTaskManager.swift */,
 				A1B2C3D4E5F6A7B8C9D0E215 /* PersistenceManager.swift */,
+				A1B2C3D4E5F6A7B8C9D0E290 /* CloudSyncManager.swift */,
+					MLX0001000100010002 /* MLXLocalService.swift */,
+					LLM0001000100010004 /* LiteRTLocalService.swift */,
+					LLM0001000100010005 /* CoreAIMLXLocalService.swift */,
+					LLM0001000100010006 /* LocalLLMCompatibility.swift */,
+					MLX0001000100010005 /* MLXJSONRepairUtils.swift */,
+				SUMM0001000100010003 /* SummarizeBridge.swift */,
+				F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -184,6 +342,32 @@
 			path = "Preview Content";
 			sourceTree = "<group>";
 		};
+		D1E2F3A4B5C6D7E8F9A0B1E0 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				D1E2F3A4B5C6D7E8F9A0B1C0 /* LatestNewsStore.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		D1E2F3A4B5C6D7E8F9A0B1E1 /* LatestNewsWidget */ = {
+			isa = PBXGroup;
+			children = (
+				D1E2F3A4B5C6D7E8F9A0B1C1 /* LatestNewsWidget.swift */,
+				D1E2F3A4B5C6D7E8F9A0B1C4 /* Info.plist */,
+				D1E2F3A4B5C6D7E8F9A0B1C2 /* LatestNewsWidget.entitlements */,
+			);
+			path = LatestNewsWidget;
+			sourceTree = "<group>";
+		};
+		F0C0C0C0C0C0C0C0C0C0C0C3 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				F0C0C0C0C0C0C0C0C0C0C0C2 /* KokoroPlayback.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -194,10 +378,12 @@
 				A1B2C3D4E5F6A7B8C9D0E225 /* Frameworks */,
 				A1B2C3D4E5F6A7B8C9D0E231 /* Sources */,
 				A1B2C3D4E5F6A7B8C9D0E232 /* Resources */,
+				D1E2F3A4B5C6D7E8F9A0B200 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D1E2F3A4B5C6D7E8F9A0B1D6 /* PBXTargetDependency */,
 			);
 			name = "RSSReaderApp (iOS)";
 			productName = RSSReaderApp;
@@ -221,6 +407,23 @@
 			productReference = A1B2C3D4E5F6A7B8C9D0E221 /* RSSReaderApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		D1E2F3A4B5C6D7E8F9A0B1F2 /* LatestNewsWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D1E2F3A4B5C6D7E8F9A0B212 /* Build configuration list for PBXNativeTarget "LatestNewsWidget" */;
+			buildPhases = (
+				D1E2F3A4B5C6D7E8F9A0B1F0 /* Sources */,
+				D1E2F3A4B5C6D7E8F9A0B1F1 /* Frameworks */,
+				D1E2F3A4B5C6D7E8F9A0B1F3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LatestNewsWidget;
+			productName = LatestNewsWidget;
+			productReference = D1E2F3A4B5C6D7E8F9A0B1C3 /* LatestNewsWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -235,6 +438,9 @@
 						CreatedOnToolsVersion = 15.0;
 					};
 					A1B2C3D4E5F6A7B8C9D0E233 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					D1E2F3A4B5C6D7E8F9A0B1F2 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -252,13 +458,19 @@
 				C148C40B2D8AD71D00E006A0 /* XCRemoteSwiftPackageReference "FeedKit" */,
 				C1CA44892D8CC92F00B81B54 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
 				C10CDDAD2D8E00EC0099A59A /* XCRemoteSwiftPackageReference "Kingfisher" */,
-			);
+				C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */,
+					C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+					D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */,
+					D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */,
+					LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */,
+				);
 			productRefGroup = A1B2C3D4E5F6A7B8C9D0E229 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				A1B2C3D4E5F6A7B8C9D0E22F /* RSSReaderApp (iOS) */,
 				A1B2C3D4E5F6A7B8C9D0E233 /* RSSReaderApp (macOS) */,
+				D1E2F3A4B5C6D7E8F9A0B1F2 /* LatestNewsWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -270,6 +482,7 @@
 			files = (
 				A1B2C3D4E5F6A7B8C9D0E1F8 /* Assets.xcassets in Resources */,
 				A1B2C3D4E5F6A7B8C9D0E1FB /* Preview Assets.xcassets in Resources */,
+				READABILITY0001000101 /* Readability.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +492,14 @@
 			files = (
 				A1B2C3D4E5F6A7B8C9D0E1FA /* Assets.xcassets in Resources */,
 				A1B2C3D4E5F6A7B8C9D0E1FD /* Preview Assets.xcassets in Resources */,
+				READABILITY0001000102 /* Readability.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D1E2F3A4B5C6D7E8F9A0B1F3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -296,15 +517,30 @@
 				A1B2C3D4E5F6A7B8C9D0E202 /* RedditCommentModels.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E205 /* AppState.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E208 /* FeedService.swift in Sources */,
+				C19B2CF42E8D88CF00C5F4E8 /* RedditOAuthManager.swift in Sources */,
 				C1DA2C652D8B1C7A00A9D660 /* MainSplitView.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E20B /* RedditService.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E20E /* SummaryService.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E274 /* GeminiBackgroundTaskManager.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E211 /* CommentSummaryService.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E214 /* PersistenceManager.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E291 /* CloudSyncManager.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E217 /* PlatformViews.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E21A /* RedditDetailView.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E21D /* CommentViews.swift in Sources */,
+				D1E2F3A4B5C6D7E8F9A0B1D0 /* LatestNewsStore.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* RSSReaderApp.swift in Sources */,
+				WEBAI0001000100010001 /* WebAIHandoffView.swift in Sources */,
+				MLX0001000100010001 /* MLXLocalService.swift in Sources */,
+				LLM0001000100010001 /* LiteRTLocalService.swift in Sources */,
+				LLM0001000100010002 /* CoreAIMLXLocalService.swift in Sources */,
+				LLM0001000100010003 /* LocalLLMCompatibility.swift in Sources */,
+				MLX0001000100010004 /* MLXJSONRepairUtils.swift in Sources */,
+				MLX0001000100010007 /* InfographicView.swift in Sources */,
+				ASKAI0001000100010001 /* AskAIUtilities.swift in Sources */,
+				SUMM0001000100010001 /* SummarizeBridge.swift in Sources */,
+				F0C0C0C0C0C0C0C0C0C0C0D1 /* KokoroTTSService.swift in Sources */,
+				F0C0C0C0C0C0C0C0C0C0C0D2 /* KokoroPlayback.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -319,19 +555,51 @@
 				A1B2C3D4E5F6A7B8C9D0E204 /* RedditCommentModels.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E207 /* AppState.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E20A /* FeedService.swift in Sources */,
+				C19B2CF52E8D88CF00C5F4E8 /* RedditOAuthManager.swift in Sources */,
 				C1DA2C642D8B1C7A00A9D660 /* MainSplitView.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E20D /* RedditService.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E210 /* SummaryService.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E275 /* GeminiBackgroundTaskManager.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E213 /* CommentSummaryService.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E216 /* PersistenceManager.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E292 /* CloudSyncManager.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E219 /* PlatformViews.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E21C /* RedditDetailView.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E21F /* CommentViews.swift in Sources */,
+				D1E2F3A4B5C6D7E8F9A0B1D1 /* LatestNewsStore.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F4 /* RSSReaderApp.swift in Sources */,
+				WEBAI0001000100010002 /* WebAIHandoffView.swift in Sources */,
+				MLX0001000100010003 /* MLXLocalService.swift in Sources */,
+				LLM0001000100010007 /* LiteRTLocalService.swift in Sources */,
+				LLM0001000100010008 /* CoreAIMLXLocalService.swift in Sources */,
+				LLM0001000100010009 /* LocalLLMCompatibility.swift in Sources */,
+				MLX0001000100010006 /* MLXJSONRepairUtils.swift in Sources */,
+				MLX0001000100010009 /* InfographicView.swift in Sources */,
+				ASKAI0001000100010002 /* AskAIUtilities.swift in Sources */,
+				SUMM0001000100010002 /* SummarizeBridge.swift in Sources */,
+				F0C0C0C0C0C0C0C0C0C0C0D3 /* KokoroTTSService.swift in Sources */,
+				F0C0C0C0C0C0C0C0C0C0C0D4 /* KokoroPlayback.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D1E2F3A4B5C6D7E8F9A0B1F0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1E2F3A4B5C6D7E8F9A0B1D2 /* LatestNewsWidget.swift in Sources */,
+				D1E2F3A4B5C6D7E8F9A0B1D3 /* LatestNewsStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D1E2F3A4B5C6D7E8F9A0B1D6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D1E2F3A4B5C6D7E8F9A0B1F2 /* LatestNewsWidget */;
+			targetProxy = D1E2F3A4B5C6D7E8F9A0B1D5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A1B2C3D4E5F6A7B8C9D0E239 /* Debug */ = {
@@ -455,26 +723,29 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = RSSReaderApp/RSSReaderApp.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = RSSReaderApp/Info.plist;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiredDeviceCapabilities = armv7;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -490,26 +761,29 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "RSSReaderApp (iOS)Release.entitlements";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = RSSReaderApp/Info.plist;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiredDeviceCapabilities = armv7;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -532,6 +806,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
+				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "RSSReaderApp/Info-macOS.plist";
@@ -540,7 +815,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
@@ -561,6 +836,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
+				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "RSSReaderApp/Info-macOS.plist";
@@ -569,13 +845,70 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		D1E2F3A4B5C6D7E8F9A0B210 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = LatestNewsWidget/LatestNewsWidget.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = HNG8WV554B;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LatestNewsWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D1E2F3A4B5C6D7E8F9A0B211 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = LatestNewsWidget/LatestNewsWidget.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = HNG8WV554B;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LatestNewsWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -609,6 +942,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		D1E2F3A4B5C6D7E8F9A0B212 /* Build configuration list for PBXNativeTarget "LatestNewsWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D1E2F3A4B5C6D7E8F9A0B210 /* Debug */,
+				D1E2F3A4B5C6D7E8F9A0B211 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -636,6 +978,34 @@
 				minimumVersion = 2.8.7;
 			};
 		};
+		C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift";
+				requirement = {
+					kind = upToNextMajorVersion;
+					minimumVersion = 0.31.4;
+				};
+			};
+		C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "rss mac/Packages/mlx-audio-swift";
+		};
+		D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "rss mac/Packages/EventSource";
+		};
+		LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "swift-litert-lm local gemma fast us ethi sone";
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -658,6 +1028,66 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C1CA44892D8CC92F00B81B54 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
 			productName = SwiftSoup;
+		};
+		C1E3EDA92EF2103E00AF5F7D /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
+		};
+		C1E3EDAB2EF2103E00AF5F7D /* MLXFFT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXFFT;
+		};
+		C1E3EDAD2EF2103E00AF5F7D /* MLXFast */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXFast;
+		};
+		C1E3EDAF2EF2103E00AF5F7D /* MLXLinalg */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXLinalg;
+		};
+		C1E3EDB12EF2103E00AF5F7D /* MLXNN */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDA82EF2103E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXNN;
+		};
+		C1E3EDB42EF2114E00AF5F7D /* MLXEmbedders */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXEmbedders;
+		};
+		C1E3EDB62EF2114E00AF5F7D /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLLM;
+		};
+		C1E3EDB82EF2114E00AF5F7D /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		C1E3EDBC2EF2114E00AF5F7D /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXVLM;
+		};
+		D1A100032F40000100AAA001 /* MLXAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioCore;
+		};
+		D1A100042F40000100AAA001 /* MLXAudioTTS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioTTS;
+		};
+		LLM0001000100010012 /* LiteRTFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */;
+			productName = LiteRTFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

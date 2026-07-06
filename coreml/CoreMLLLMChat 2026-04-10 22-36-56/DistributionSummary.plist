@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CoreMLLLMChat.ipa</key>
+	<array>
+		<dict>
+			<key>architectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>buildNumber</key>
+			<string>1</string>
+			<key>certificate</key>
+			<dict>
+				<key>SHA1</key>
+				<string>F140CFC5D1DD136D0433A035453666708D5A233E</string>
+				<key>dateExpires</key>
+				<string>11/30/26</string>
+				<key>type</key>
+				<string>Apple Development</string>
+			</dict>
+			<key>entitlements</key>
+			<dict>
+				<key>application-identifier</key>
+				<string>HNG8WV554B.com.jv.CoreMLLLMChat</string>
+				<key>com.apple.developer.kernel.extended-virtual-addressing</key>
+				<true/>
+				<key>com.apple.developer.kernel.increased-memory-limit</key>
+				<true/>
+				<key>com.apple.developer.team-identifier</key>
+				<string>HNG8WV554B</string>
+				<key>get-task-allow</key>
+				<true/>
+			</dict>
+			<key>name</key>
+			<string>CoreMLLLMChat.app</string>
+			<key>profile</key>
+			<dict>
+				<key>UUID</key>
+				<string>b1a99b64-bf95-439f-81f3-91993e7e22ec</string>
+				<key>dateExpires</key>
+				<string>4/10/27</string>
+				<key>name</key>
+				<string>iOS Team Provisioning Profile: com.jv.CoreMLLLMChat</string>
+			</dict>
+			<key>team</key>
+			<dict>
+				<key>id</key>
+				<string>HNG8WV554B</string>
+				<key>name</key>
+				<string>Joao Valente</string>
+			</dict>
+			<key>versionNumber</key>
+			<string>1.0</string>
+		</dict>
+	</array>
+</dict>
+</plist>

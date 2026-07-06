@@ -6,21 +6,21 @@ This document contains all the prompts used in the app for interacting with the 
 
 ```swift
 // Default prompt for article summarization
-prompt = "Summarize the following text in a concise way, highlighting the key points: \(text)"
+prompt = "Provide a brief 2-3 sentence summary of the following text, capturing only the most essential points: \(text)"
 ```
 
 ## Article Summarization
 
 ```swift
 // Create a customized prompt for article summarization
-let articlePrompt = "Summarize the following article, highlighting the key points, main arguments, and important conclusions. Focus on providing a concise overview that captures the essential information:\n\n\(article.content)"
+let articlePrompt = "Provide a brief 3-4 sentence summary of this article. Include only the main point and most important conclusion. Keep it under 100 words:\n\n\(article.content)"
 ```
 
 ## Reddit Post Summarization
 
 ```swift
 // Create a customized prompt for Reddit post summarization
-let redditPostPrompt = "Summarize the following Reddit post, highlighting the main question or discussion topic, key points made by the author, and any important context provided. Focus on creating a concise and informative summary that captures the essence of the post:\n\n\(post.content)"
+let redditPostPrompt = "Provide a brief 2-3 sentence summary of this Reddit post. State the main question/topic and key point. Keep it under 75 words:\n\n\(post.content)"
 ```
 
 ## Reddit Comments Summarization

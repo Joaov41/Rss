@@ -7,6 +7,10 @@ import SwiftSoup // <-- Add SwiftSoup import
 import AVFoundation
 import UIKit
 
+private extension Notification.Name {
+    static let articleReaderScrollToTopRequested = Notification.Name("articleReaderScrollToTopRequested")
+}
+
 // MARK: - Reader Mode Service (Mozilla Readability.js)
 // Provides intelligent article extraction using the same algorithm as Safari Reader, Firefox, and Pocket
 
@@ -947,13 +951,31 @@ struct AppColors {
         #endif
     }
 
+    @ViewBuilder
+    static func feedListBackground(for colorScheme: ColorScheme, scrollOffset: CGFloat = 0) -> some View {
+        if colorScheme == .dark {
+            feedListDarkBackground(scrollOffset: scrollOffset)
+        } else {
+            background
+        }
+    }
+
+    static func feedListCardFill(for colorScheme: ColorScheme) -> Color {
+        if colorScheme == .dark {
+            return Color(red: 0.075, green: 0.105, blue: 0.150).opacity(0.82)
+        }
+        return systemGray6
+    }
+
     static func redditBackground(for colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? .black : background
+        colorScheme == .dark
+            ? Color(red: 0.135, green: 0.245, blue: 0.315)
+            : background
     }
 
     static func redditCardFill(for colorScheme: ColorScheme) -> Color {
         if colorScheme == .dark {
-            return Color(red: 0.035, green: 0.035, blue: 0.04)
+            return feedListCardFill(for: colorScheme)
         }
         return Color.orange.opacity(0.05)
     }
@@ -967,6 +989,45 @@ struct AppColors {
             ],
             startPoint: .leading,
             endPoint: .trailing
+        )
+    }
+
+    private static func feedListDarkBackground(scrollOffset: CGFloat) -> LinearGradient {
+        let progress = min(max(scrollOffset / 950, 0), 1)
+
+        return LinearGradient(
+            colors: [
+                interpolatedColor(
+                    from: (0.105, 0.205, 0.270),
+                    to: (0.310, 0.490, 0.585),
+                    progress: progress
+                ),
+                interpolatedColor(
+                    from: (0.175, 0.275, 0.375),
+                    to: (0.360, 0.485, 0.610),
+                    progress: progress
+                ),
+                interpolatedColor(
+                    from: (0.095, 0.105, 0.215),
+                    to: (0.175, 0.220, 0.345),
+                    progress: progress
+                )
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private static func interpolatedColor(
+        from start: (Double, Double, Double),
+        to end: (Double, Double, Double),
+        progress: CGFloat
+    ) -> Color {
+        let amount = Double(progress)
+        return Color(
+            red: start.0 + (end.0 - start.0) * amount,
+            green: start.1 + (end.1 - start.1) * amount,
+            blue: start.2 + (end.2 - start.2) * amount
         )
     }
 }
@@ -989,6 +1050,49 @@ private func currentPlatformScreenHeight() -> CGFloat {
     return 900
     #endif
 }
+
+private let articleChromeContinuityAnimation = Animation.spring(response: 0.34, dampingFraction: 0.88, blendDuration: 0.12)
+
+private struct ArticleChromeContinuityModifier: ViewModifier {
+    let isVisible: Bool
+    let edge: Edge
+
+    private var verticalOffset: CGFloat {
+        guard !isVisible else { return 0 }
+        return edge == .top ? -12 : 12
+    }
+
+    private var anchor: UnitPoint {
+        edge == .top ? .top : .bottom
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .blur(radius: isVisible ? 0 : 2.5)
+            .scaleEffect(isVisible ? 1 : 0.985, anchor: anchor)
+            .offset(y: verticalOffset)
+    }
+}
+
+private extension AnyTransition {
+    static func articleChromeContinuity(edge: Edge) -> AnyTransition {
+        .modifier(
+            active: ArticleChromeContinuityModifier(isVisible: false, edge: edge),
+            identity: ArticleChromeContinuityModifier(isVisible: true, edge: edge)
+        )
+    }
+}
+
+#if os(iOS)
+private struct ArticleDetailScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+#endif
 
 // Extension to enable enhanced swipe back navigation
 extension View {
@@ -1252,6 +1356,134 @@ class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
 }
 #endif
 
+private extension View {
+    func feedListColumnStyle(
+        colorScheme: ColorScheme,
+        scrollOffset: CGFloat,
+        onScrollOffsetChange: @escaping (CGFloat) -> Void
+    ) -> some View {
+        #if os(iOS)
+        return self
+            .scrollContentBackground(.hidden)
+            .background {
+                AppColors.feedListBackground(for: colorScheme, scrollOffset: scrollOffset)
+                    .ignoresSafeArea()
+            }
+            .background(
+                FeedListScrollOffsetObserver(onOffsetChange: onScrollOffsetChange)
+                    .frame(width: 0, height: 0)
+            )
+        #else
+        return self
+            .scrollContentBackground(.hidden)
+            .background {
+                AppColors.feedListBackground(for: colorScheme, scrollOffset: scrollOffset)
+                    .ignoresSafeArea()
+            }
+        #endif
+    }
+}
+
+#if os(iOS)
+private final class FeedListScrollOffsetHostView: UIView {
+    var onWindowChange: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onWindowChange?()
+    }
+}
+
+private struct FeedListScrollOffsetObserver: UIViewRepresentable {
+    let onOffsetChange: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> FeedListScrollOffsetHostView {
+        let view = FeedListScrollOffsetHostView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        view.onWindowChange = { [weak view] in
+            guard let view else { return }
+            MainActor.assumeIsolated {
+                context.coordinator.tryAttach(from: view)
+            }
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: FeedListScrollOffsetHostView, context: Context) {
+        context.coordinator.onOffsetChange = onOffsetChange
+        uiView.onWindowChange = { [weak uiView] in
+            guard let uiView else { return }
+            MainActor.assumeIsolated {
+                context.coordinator.tryAttach(from: uiView)
+            }
+        }
+        MainActor.assumeIsolated {
+            context.coordinator.tryAttach(from: uiView)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onOffsetChange: onOffsetChange)
+    }
+
+    @MainActor
+    final class Coordinator {
+        var onOffsetChange: (CGFloat) -> Void
+        private weak var scrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+        private var didScheduleRetry = false
+        private var lastReportedOffset: CGFloat = -1
+
+        init(onOffsetChange: @escaping (CGFloat) -> Void) {
+            self.onOffsetChange = onOffsetChange
+        }
+
+        func tryAttach(from view: UIView) {
+            guard view.window != nil else { return }
+
+            if scrollView == nil {
+                if let scrollView = view.firstSuperview(of: UIScrollView.self) {
+                    attach(to: scrollView)
+                } else if !didScheduleRetry {
+                    didScheduleRetry = true
+                    DispatchQueue.main.async { [weak self, weak view] in
+                        guard let self, let view else { return }
+                        MainActor.assumeIsolated {
+                            self.didScheduleRetry = false
+                            self.tryAttach(from: view)
+                        }
+                    }
+                }
+            }
+        }
+
+        private func attach(to scrollView: UIScrollView) {
+            guard self.scrollView !== scrollView else { return }
+
+            observation?.invalidate()
+            self.scrollView = scrollView
+
+            observation = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] scrollView, _ in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.reportOffset(from: scrollView)
+                }
+            }
+        }
+
+        private func reportOffset(from scrollView: UIScrollView) {
+            let normalizedOffset = max(0, scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+            let quantizedOffset = (normalizedOffset / 8).rounded() * 8
+            guard abs(quantizedOffset - lastReportedOffset) >= 8 else { return }
+
+            lastReportedOffset = quantizedOffset
+            onOffsetChange(quantizedOffset)
+        }
+    }
+}
+#endif
+
 #if os(iOS)
 private final class SidebarScrollObserverHostView: UIView {
     var onWindowChange: (() -> Void)?
@@ -1421,11 +1653,131 @@ private extension UIView {
     }
 }
 
+#if os(iOS)
+@MainActor
+private final class ArticleScrollToTopController {
+    static let shared = ArticleScrollToTopController()
+
+    private weak var outerScrollView: UIScrollView?
+    private weak var readerWebView: WKWebView?
+
+    func registerOuterScrollView(_ scrollView: UIScrollView) {
+        outerScrollView = scrollView
+    }
+
+    func registerReaderWebView(_ webView: WKWebView) {
+        readerWebView = webView
+    }
+
+    func scrollToTop() {
+        performScrollToTop(animated: true)
+
+        for delay in [0.05, 0.18, 0.35, 0.60] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                Task { @MainActor in
+                    self?.performScrollToTop(animated: true)
+                }
+            }
+        }
+    }
+
+    private func performScrollToTop(animated: Bool) {
+        if let outerScrollView {
+            outerScrollView.setContentOffset(topContentOffset(for: outerScrollView), animated: animated)
+        }
+
+        if let readerWebView {
+            scrollWebViewToTop(readerWebView, animated: animated)
+        }
+
+        for scrollView in visibleScrollViews() {
+            scrollView.setContentOffset(topContentOffset(for: scrollView), animated: animated)
+            if let webView = scrollView.firstSuperview(of: WKWebView.self) {
+                scrollWebViewToTop(webView, animated: animated)
+            }
+        }
+    }
+
+    private func topContentOffset(for scrollView: UIScrollView) -> CGPoint {
+        CGPoint(x: -scrollView.adjustedContentInset.left, y: -scrollView.adjustedContentInset.top)
+    }
+
+    private func scrollWebViewToTop(_ webView: WKWebView, animated: Bool) {
+        let readerScrollView = webView.scrollView
+        readerScrollView.setContentOffset(topContentOffset(for: readerScrollView), animated: animated)
+        readerScrollView.setContentOffset(.zero, animated: animated)
+        readerScrollView.scrollRectToVisible(CGRect(x: 0, y: 0, width: 1, height: 1), animated: animated)
+        webView.evaluateJavaScript(
+            """
+            (function() {
+              var targets = [document.scrollingElement, document.documentElement, document.body].filter(Boolean);
+              document.querySelectorAll('*').forEach(function(element) {
+                var style = window.getComputedStyle(element);
+                var canScrollY = /(auto|scroll|overlay)/.test(style.overflowY || style.overflow);
+                if (canScrollY && element.scrollHeight > element.clientHeight) {
+                  targets.push(element);
+                }
+              });
+              targets.forEach(function(target) {
+                target.scrollTop = 0;
+                target.scrollLeft = 0;
+                if (target.scrollTo) { target.scrollTo({ top: 0, left: 0, behavior: 'auto' }); }
+              });
+              window.scrollTo(0, 0);
+              return true;
+            })();
+            """,
+            completionHandler: nil
+        )
+    }
+
+    private func visibleScrollViews() -> [UIScrollView] {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .filter { $0.isKeyWindow }
+            .flatMap { collectScrollViews(in: $0) }
+            .filter { !$0.isHidden && $0.alpha > 0.01 && $0.window != nil }
+    }
+
+    private func collectScrollViews(in view: UIView) -> [UIScrollView] {
+        var results: [UIScrollView] = []
+        if let scrollView = view as? UIScrollView {
+            results.append(scrollView)
+        }
+        for subview in view.subviews {
+            results.append(contentsOf: collectScrollViews(in: subview))
+        }
+        return results
+    }
+}
+
+private struct ArticleOuterScrollViewResolver: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            if let scrollView = uiView.firstSuperview(of: UIScrollView.self) {
+                ArticleScrollToTopController.shared.registerOuterScrollView(scrollView)
+            }
+        }
+    }
+}
+#endif
+
 struct DetailTopBar: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     @Binding var showShareSheet: Bool
     @Binding var shareItems: [Any]
+
+    private var shouldShowExplicitWebAIControls: Bool {
+        appState.settings.selectedSummaryProvider != .webAI
+    }
 
     var body: some View {
         ZStack {
@@ -1447,16 +1799,24 @@ struct DetailTopBar: View {
                         Button(action: {
                             appState.requestSummary(for: article)
                         }) {
-                            Image(systemName: "text.quote")
-                                .font(.subheadline)
+                            topBarIcon("text.quote")
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
+
+                        if shouldShowExplicitWebAIControls {
+                            Button(action: {
+                                appState.requestWebSummary(for: article)
+                            }) {
+                                topBarIcon("globe")
+                            }
+                            .buttonStyle(LiquidGlassButtonStyle())
+                            .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
+                        }
                     } else if let post = appState.selectedRedditPost {
                         Button(action: {
                             appState.requestSummary(for: nil, redditPost: post)
                         }) {
-                            Image(systemName: "text.quote")
-                                .font(.subheadline)
+                            topBarIcon("text.quote")
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
                     }
@@ -1465,18 +1825,14 @@ struct DetailTopBar: View {
                         Button(action: {
                             appState.toggleArticleFavorite(article)
                         }) {
-                            Image(systemName: article.isFavorite ? "star.fill" : "star")
-                                .font(.subheadline)
-                                .foregroundColor(article.isFavorite ? .yellow : .primary)
+                            topBarIcon(article.isFavorite ? "star.fill" : "star", color: article.isFavorite ? .yellow : .primary)
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
                     } else if let post = appState.selectedRedditPost {
                         Button(action: {
                             appState.toggleRedditPostFavorite(post)
                         }) {
-                            Image(systemName: post.isFavorite ? "star.fill" : "star")
-                                .font(.subheadline)
-                                .foregroundColor(post.isFavorite ? .yellow : .primary)
+                            topBarIcon(post.isFavorite ? "star.fill" : "star", color: post.isFavorite ? .yellow : .primary)
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
                     }
@@ -1485,8 +1841,7 @@ struct DetailTopBar: View {
                         Button(action: {
                             ArticleQAState.shared.toggleQAInterface()
                         }) {
-                            Image(systemName: "questionmark.circle")
-                                .font(.subheadline)
+                            topBarIcon("questionmark.circle")
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
                     }
@@ -1500,8 +1855,7 @@ struct DetailTopBar: View {
                             }
                             showShareSheet = true
                         }) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.subheadline)
+                            topBarIcon("square.and.arrow.up")
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
                     } else if let post = appState.selectedRedditPost {
@@ -1514,8 +1868,7 @@ struct DetailTopBar: View {
                             }
                             showShareSheet = true
                         }) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.subheadline)
+                            topBarIcon("square.and.arrow.up")
                         }
                         .buttonStyle(LiquidGlassButtonStyle())
                     }
@@ -1528,6 +1881,13 @@ struct DetailTopBar: View {
         }
         .frame(height: 60)
         .zIndex(2000)
+    }
+
+    private func topBarIcon(_ systemName: String, color: Color = .primary) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundColor(color)
+            .frame(width: 24, height: 24)
     }
 }
 #endif
@@ -1718,6 +2078,25 @@ struct RedditDetailViewWrapper: View {
     }
 }
 
+private struct RedditSortPicker: View {
+    @Binding var selection: RedditService.SortOption
+
+    var body: some View {
+        Picker("Sort", selection: $selection) {
+            ForEach(RedditService.SortOption.allCases) { option in
+                Text(option.displayName)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .tag(option)
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .frame(height: 34)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
@@ -1744,10 +2123,12 @@ struct ContentView: View {
     @State private var showRedditSummaryScopePicker = false
     @State private var redditSummaryScopeSubreddit: String?
     @State private var isRestoringScrollPosition = false
+    @State private var feedListScrollOffset: CGFloat = 0
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
     @State private var isBackSwipeInProgress = false
+    @State private var isArticleReadingChromeHidden = false
     #endif
     
     private var isRunningOnMac: Bool {
@@ -1857,7 +2238,7 @@ struct ContentView: View {
                         .zIndex(1)
                         .navigationBarHidden(true)
                         .overlay(alignment: .top) {
-                            if UIDevice.current.userInterfaceIdiom == .pad {
+                            if UIDevice.current.userInterfaceIdiom == .pad && !shouldUsePhoneLayout {
                                 DetailTopBar(showShareSheet: $showShareSheet, shareItems: $shareItems)
                             }
                         }
@@ -1865,16 +2246,17 @@ struct ContentView: View {
                             appState.navigateBack()
                         }
                 } else if let article = appState.selectedArticle {
-                    ArticleDetailView()
+                    ArticleDetailView(isReadingChromeHidden: $isArticleReadingChromeHidden)
                         .transition(.move(edge: .trailing))
                         .zIndex(1)
                         .navigationBarHidden(true)
                         .overlay(alignment: .top) {
-                            if UIDevice.current.userInterfaceIdiom == .pad {
+                            if UIDevice.current.userInterfaceIdiom == .pad && !shouldUsePhoneLayout {
                                 DetailTopBar(showShareSheet: $showShareSheet, shareItems: $shareItems)
+                                    .transition(.articleChromeContinuity(edge: .top))
                             }
                         }
-                        .phoneStyleBackGestures(enabled: shouldUsePhoneLayout) {
+                        .phoneStyleBackGestures(enabled: shouldUsePhoneLayout, usesSystemEdgeSwipe: false) {
                             appState.navigateBack()
                         }
                 } else if let activeURL = appState.activeSubscriptionURL, let subscription = appState.subscriptions.first(where: { $0.url == activeURL }) {
@@ -1910,7 +2292,7 @@ struct ContentView: View {
                                 appState.navigateBack()
                             }
                     } else if let article = appState.selectedArticle {
-                        ArticleDetailView()
+                        ArticleDetailView(isReadingChromeHidden: $isArticleReadingChromeHidden)
                             .transition(.move(edge: .trailing))
                             .zIndex(1)
                             .enhancedSwipeBack {
@@ -1972,8 +2354,9 @@ struct ContentView: View {
             Group {
                 #if os(iOS)
                 if !shouldUsePhoneLayout &&
-                    (appState.selectedRedditPost != nil || appState.selectedArticle != nil) {
+                    (appState.selectedRedditPost != nil || (appState.selectedArticle != nil && !isArticleReadingChromeHidden)) {
                     DetailTopBar(showShareSheet: $showShareSheet, shareItems: $shareItems)
+                        .transition(.articleChromeContinuity(edge: .top))
                 } // iPhone action bar moved into detail views (bottom HUD)
                 #else
                 if appState.selectedRedditPost != nil || appState.selectedArticle != nil {
@@ -2062,6 +2445,30 @@ struct ContentView: View {
                 .presentationCornerRadius(40) // Balanced radius to prevent clipping
                 .presentationBackground(.ultraThinMaterial) // Use thin material for iOS 26
                 .presentationBackgroundInteraction(.enabled)
+        }
+        .confirmationDialog(
+            "Local request is too large",
+            isPresented: Binding(
+                get: { appState.pendingLocalReroute?.presentationScope == .global },
+                set: {
+                    if !$0, appState.pendingLocalReroute?.presentationScope == .global {
+                        appState.dismissPendingLocalReroute()
+                    }
+                }
+            ),
+            titleVisibility: .visible,
+            presenting: appState.pendingLocalReroute
+        ) { _ in
+            ForEach(LocalRerouteProvider.allCases) { provider in
+                Button(provider.displayName) {
+                    appState.reroutePendingLocalRequest(to: provider)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                appState.dismissPendingLocalReroute()
+            }
+        } message: { request in
+            Text(request.message)
         }
         // Global Summary overlay and floating button
         .overlay(
@@ -2162,43 +2569,219 @@ struct ContentView: View {
 
     // presentMacShare function removed - using ShareLink instead
     
+    private var sidebarSelectionAccent: Color {
+        Color.blue
+    }
+
+    private var sidebarSurfaceBackground: some View {
+        Group {
+            if colorScheme == .dark {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.055, green: 0.058, blue: 0.095),
+                        Color(red: 0.025, green: 0.026, blue: 0.047)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.035),
+                            Color(red: 0.35, green: 0.18, blue: 0.75).opacity(0.08),
+                            Color.clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+            } else {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.985, green: 0.988, blue: 1.0),
+                        Color(red: 0.925, green: 0.940, blue: 0.975)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.55),
+                            Color.blue.opacity(0.045),
+                            Color.clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+            }
+        }
+    }
+
+    private var sidebarHeaderTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.45) : Color.black.opacity(0.46)
+    }
+
+    private var sidebarDividerColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.10)
+    }
+
+    private func sidebarSelectionRailColor(for accentColor: Color) -> Color {
+        colorScheme == .dark ? Color.white.opacity(0.75) : accentColor.opacity(0.95)
+    }
+
+    private func sidebarSelectionGradient(for accentColor: Color) -> LinearGradient {
+        LinearGradient(
+            colors: [
+                accentColor.opacity(colorScheme == .dark ? 0.82 : 0.90),
+                accentColor.opacity(colorScheme == .dark ? 0.46 : 0.68)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func sidebarSelectionStrokeColor(for accentColor: Color) -> Color {
+        accentColor.opacity(colorScheme == .dark ? 0.52 : 0.62)
+    }
+
+    private var sidebarUnselectedTextColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.88) : Color.black.opacity(0.78)
+    }
+
+    private var sidebarSelectedTextColor: Color {
+        Color.white.opacity(0.98)
+    }
+
+    private var sidebarCountPillTextColor: Color {
+        colorScheme == .dark
+            ? Color(red: 0.74, green: 0.78, blue: 1.0).opacity(0.9)
+            : Color(red: 0.24, green: 0.31, blue: 0.63)
+    }
+
+    private var sidebarCountPillBackground: Color {
+        colorScheme == .dark
+            ? Color(red: 0.10, green: 0.11, blue: 0.20).opacity(0.92)
+            : Color(red: 0.86, green: 0.89, blue: 0.98).opacity(0.95)
+    }
+
+    private var sidebarSelectedCountPillTextColor: Color {
+        Color.white.opacity(0.95)
+    }
+
+    private var sidebarSelectedCountPillBackground: Color {
+        Color.white.opacity(colorScheme == .dark ? 0.16 : 0.22)
+    }
+
+    private func sidebarSectionHeader(_ title: String, showsDivider: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if showsDivider {
+                Rectangle()
+                    .fill(sidebarDividerColor)
+                    .frame(height: 1)
+                    .padding(.bottom, 2)
+            }
+
+            Text(title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(sidebarHeaderTextColor)
+                .textCase(nil)
+                .tracking(0.6)
+        }
+        .padding(.top, showsDivider ? 10 : 22)
+        .padding(.bottom, 2)
+    }
+
+    private func sidebarSystemIcon(_ systemName: String, tint: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .medium))
+            .foregroundStyle(tint)
+            .frame(width: 28, height: 28)
+    }
+
+    private func sidebarRedditIcon(size: CGFloat = 26) -> some View {
+        Image("RedditLogo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private func sidebarSubscriptionIcon(for subscription: Subscription, isSelected: Bool = false) -> some View {
+        if subscription.type == .rss {
+            if let url = URL(string: subscription.url), let host = url.host {
+                DomainIconView(domain: host, size: 18)
+                    .frame(width: 28, height: 28)
+            } else {
+                sidebarSystemIcon("rss", tint: Color(red: 0.56, green: 0.67, blue: 1.0))
+            }
+        } else {
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                sidebarRedditIcon()
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.95) : Color(red: 1.0, green: 0.28, blue: 0.10))
+            } else {
+                sidebarRedditIcon()
+            }
+            #else
+            sidebarRedditIcon()
+            #endif
+        }
+    }
+
+    private func sidebarMenuRow<Icon: View>(
+        title: String,
+        unreadCount: Int? = nil,
+        isSelected: Bool = false,
+        accentColor: Color = Color(red: 0.56, green: 0.67, blue: 1.0),
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        SidebarMenuRow(
+            title: title,
+            unreadCount: unreadCount,
+            isSelected: isSelected,
+            accentColor: accentColor,
+            selectedTextColor: sidebarSelectedTextColor,
+            unselectedTextColor: sidebarUnselectedTextColor,
+            selectionGradient: sidebarSelectionGradient(for: accentColor),
+            selectionStrokeColor: sidebarSelectionStrokeColor(for: accentColor),
+            selectionRailColor: sidebarSelectionRailColor(for: accentColor),
+            countPillTextColor: sidebarCountPillTextColor,
+            countPillBackground: sidebarCountPillBackground,
+            selectedCountPillTextColor: sidebarSelectedCountPillTextColor,
+            selectedCountPillBackground: sidebarSelectedCountPillBackground,
+            icon: icon
+        )
+    }
+
+    private func isLibraryCategorySelected(_ category: FeedCategory) -> Bool {
+        appState.activeSubscriptionURL == nil && appState.lastSelectedCategory == category
+    }
+
     // MARK: - Sidebar
     var sidebar: some View {
         ScrollViewReader { scrollProxy in
             List {
                 Section(header: 
-                    Text("Feeds")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .textCase(.none)
-                        .padding(.leading, 8)
+                    sidebarSectionHeader("LIBRARY")
                 ) {
                 NavigationLink(destination: redditView) {
-                    HStack {
-                        Image("RedditLogo")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 20, height: 20)
-                            .foregroundColor(.orange)
-                        Text(FeedCategory.reddit.rawValue)
-                        Spacer()
+                    let unreadRedditCount = appState.redditFeeds
+                        .flatMap { $0.posts }
+                        .filter { !$0.isRead }
+                        .count
 
-                        let unreadRedditCount = appState.redditFeeds
-                            .flatMap { $0.posts }
-                            .filter { !$0.isRead }
-                            .count
-
-                        if unreadRedditCount > 0 {
-                            Text("\(unreadRedditCount)")
-                                .font(.caption)
-                                .foregroundColor(.blue.opacity(0.7))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(8)
-                        }
+                    sidebarMenuRow(
+                        title: FeedCategory.reddit.rawValue,
+                        unreadCount: unreadRedditCount,
+                        isSelected: isLibraryCategorySelected(.reddit),
+                        accentColor: Color(red: 1.0, green: 0.28, blue: 0.10)
+                    ) {
+                        sidebarRedditIcon()
                     }
                 }
+                .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                 #if os(iOS)
                 .simultaneousGesture(
@@ -2216,29 +2799,22 @@ struct ContentView: View {
                     appState.activeSubscriptionURL = nil
                 })
                 #endif
-                
+	                
                 NavigationLink(destination: allView) {
-                    HStack {
-                        Image(systemName: FeedCategory.all.systemImageName)
-                        Text(FeedCategory.all.rawValue)
-                        Spacer()
+                    let unreadArticlesCount = appState.feeds
+                        .flatMap { $0.articles }
+                        .filter { !$0.isRead }
+                        .count
 
-                        let unreadArticlesCount = appState.feeds
-                            .flatMap { $0.articles }
-                            .filter { !$0.isRead }
-                            .count
-
-                        if unreadArticlesCount > 0 {
-                            Text("\(unreadArticlesCount)")
-                                .font(.caption)
-                                .foregroundColor(.blue.opacity(0.7))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(8)
-                        }
+                    sidebarMenuRow(
+                        title: FeedCategory.all.rawValue,
+                        unreadCount: unreadArticlesCount,
+                        isSelected: isLibraryCategorySelected(.all)
+                    ) {
+                        sidebarSystemIcon(FeedCategory.all.systemImageName, tint: Color(red: 0.64, green: 0.68, blue: 1.0))
                     }
                 }
+                .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                 #if os(iOS)
                 .simultaneousGesture(
@@ -2256,10 +2832,16 @@ struct ContentView: View {
                     appState.activeSubscriptionURL = nil
                 })
                 #endif
-                
+	                
                 NavigationLink(destination: unreadView) {
-                    Label(FeedCategory.unread.rawValue, systemImage: FeedCategory.unread.systemImageName)
+                    sidebarMenuRow(
+                        title: FeedCategory.unread.rawValue,
+                        isSelected: isLibraryCategorySelected(.unread)
+                    ) {
+                        sidebarSystemIcon(FeedCategory.unread.systemImageName, tint: Color(red: 0.52, green: 0.65, blue: 1.0))
+                    }
                 }
+                .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                 #if os(iOS)
                 .simultaneousGesture(
@@ -2277,10 +2859,16 @@ struct ContentView: View {
                     appState.activeSubscriptionURL = nil
                 })
                 #endif
-                
+	                
                 NavigationLink(destination: favoritesView) {
-                    Label(FeedCategory.favorites.rawValue, systemImage: FeedCategory.favorites.systemImageName)
+                    sidebarMenuRow(
+                        title: FeedCategory.favorites.rawValue,
+                        isSelected: isLibraryCategorySelected(.favorites)
+                    ) {
+                        sidebarSystemIcon("star", tint: Color(red: 0.60, green: 0.67, blue: 1.0))
+                    }
                 }
+                .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                 #if os(iOS)
                 .simultaneousGesture(
@@ -2298,40 +2886,28 @@ struct ContentView: View {
                     appState.activeSubscriptionURL = nil
                 })
                 #endif
-                
+	                
                 NavigationLink(destination: todayView) {
-                    HStack {
-                        Image(systemName: FeedCategory.today.systemImageName)
-                            .font(.system(size: 18))
-                        Text(FeedCategory.today.rawValue)
-                            .font(.callout)
-                            .fontWeight(.medium)
-                        Spacer()
+                    let calendar = Calendar.current
+                    let todayArticlesCount = appState.feeds
+                        .flatMap { $0.articles }
+                        .filter { calendar.isDateInToday($0.publishDate) && !$0.isRead }
+                        .count
+                    let todayRedditCount = appState.redditFeeds
+                        .flatMap { $0.posts }
+                        .filter { calendar.isDateInToday($0.publishDate) && !$0.isRead }
+                        .count
+                    let totalTodayUnseen = todayArticlesCount + todayRedditCount
 
-                        let calendar = Calendar.current
-                        let todayArticlesCount = appState.feeds
-                            .flatMap { $0.articles }
-                            .filter { calendar.isDateInToday($0.publishDate) && !$0.isRead }
-                            .count
-                        let todayRedditCount = appState.redditFeeds
-                            .flatMap { $0.posts }
-                            .filter { calendar.isDateInToday($0.publishDate) && !$0.isRead }
-                            .count
-                        let totalTodayUnseen = todayArticlesCount + todayRedditCount
-
-                        if totalTodayUnseen > 0 {
-                            Text("\(totalTodayUnseen)")
-                                .font(.caption)
-                                .foregroundColor(.blue.opacity(0.7))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(8)
-                        }
+                    sidebarMenuRow(
+                        title: FeedCategory.today.rawValue,
+                        unreadCount: totalTodayUnseen,
+                        isSelected: isLibraryCategorySelected(.today)
+                    ) {
+                        sidebarSystemIcon(FeedCategory.today.systemImageName, tint: Color(red: 0.58, green: 0.65, blue: 1.0))
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
                 }
+                .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                 #if os(iOS)
                 .simultaneousGesture(
@@ -2345,43 +2921,15 @@ struct ContentView: View {
                 #else
                 .simultaneousGesture(TapGesture().onEnded { 
                     selectedCategory = .today 
-                    appState.lastSelectedCategory = .today
-                    appState.activeSubscriptionURL = nil
-                })
-                #endif
-                
-                Button(action: { showSettings = true }) {
-                    HStack {
-                        Image(systemName: "gearshape.fill")
-                            .font(.system(size: 18))
-                        Text("Settings")
-                            .font(.callout)
-                            .fontWeight(.medium)
-                        Spacer()
-                    }
-                    .foregroundColor(.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background {
-                        if !isPhoneStyleLayout {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(.regularMaterial)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
-            }
-            
-            Section(header: 
-                Text("Subscriptions")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .textCase(.none)
-                    .padding(.leading, 8)
-            ) {
+	                    appState.lastSelectedCategory = .today
+	                    appState.activeSubscriptionURL = nil
+	                })
+	                #endif
+	            }
+	            
+	            Section(header: 
+	                sidebarSectionHeader("SUBSCRIPTIONS", showsDivider: true)
+	            ) {
                 let rssUnreadCounts = Dictionary(
                     uniqueKeysWithValues: appState.feeds.map { feed in
                         (feed.url, feed.articles.reduce(into: 0) { count, article in
@@ -2445,9 +2993,9 @@ struct ContentView: View {
                             appState.saveScrollPosition(for: "sidebar_subscriptions", itemID: subscription.id.uuidString)
                         }) {
                             subscriptionSidebarRow(for: subscription, unreadCount: unreadCount)
-                                .background(iPadShellBackground)
                         }
                         .buttonStyle(.plain)
+                        .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                         .id(subscription.id)
                         .onAppear {
                             // Don't save position if we're in the middle of restoring scroll
@@ -2466,8 +3014,9 @@ struct ContentView: View {
                     } else {
                     NavigationLink(tag: subscription.url, selection: $appState.activeSubscriptionURL, destination: { subscriptionView(for: subscription) }) {
                         subscriptionSidebarRow(for: subscription, unreadCount: unreadCount)
-                            .background(iPadShellBackground)
                     }
+                    .buttonStyle(.plain)
+                    .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                     .id(subscription.id)
                     .onAppear {
                         // Don't save position if we're in the middle of restoring scroll
@@ -2487,8 +3036,9 @@ struct ContentView: View {
                     #else
                     NavigationLink(tag: subscription.url, selection: $appState.activeSubscriptionURL, destination: { subscriptionView(for: subscription) }) {
                         subscriptionSidebarRow(for: subscription, unreadCount: unreadCount)
-                            .background(iPadShellBackground)
                     }
+                    .buttonStyle(.plain)
+                    .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                     .id(subscription.id)
                     .onAppear {
                         // Don't save position if we're in the middle of restoring scroll
@@ -2509,36 +3059,41 @@ struct ContentView: View {
                 .onDelete { indexSet in
                     appState.removeSubscription(at: indexSet)
                 }
-                
-                Button(action: { showAddSubscription = true }) {
-                    HStack {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 18))
-                        Text("Add Subscription")
-                            .font(.callout)
-                            .fontWeight(.medium)
-                        Spacer()
-                    }
-                    .foregroundColor(.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background {
-                        if !isPhoneStyleLayout {
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(.regularMaterial)
+	                
+	                Button(action: { showAddSubscription = true }) {
+	                    sidebarMenuRow(title: "Add Subscription", accentColor: Color(red: 0.42, green: 0.72, blue: 1.0)) {
+	                        sidebarSystemIcon("plus.circle.fill", tint: Color(red: 0.42, green: 0.72, blue: 1.0))
+	                    }
+	                }
+	                .buttonStyle(.plain)
+	                .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
+	            }
+
+                Section {
+                    Button(action: { showSettings = true }) {
+                        sidebarMenuRow(title: "Settings", accentColor: Color(red: 0.76, green: 0.78, blue: 0.88)) {
+                            sidebarSystemIcon("gearshape", tint: Color(red: 0.78, green: 0.80, blue: 0.90))
                         }
                     }
+                    .buttonStyle(.plain)
+                    .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
                 }
-                .buttonStyle(.plain)
-                .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
+	        }
+	        .listStyle(.plain)
+	        .scrollContentBackground(.hidden)
+	        .frame(minWidth: 200)
+            #if os(iOS)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    EmptyView()
+                }
             }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .frame(minWidth: 200)
-        .background(iPadShellBackground)
-        .ignoresSafeArea()
-        .background(
+            #endif
+	        .background(sidebarSurfaceBackground)
+	        .ignoresSafeArea()
+	        .background(
             Group {
                 #if os(iOS)
                 SidebarScrollOffsetObserver(appState: appState, isEnabled: usesCompactSidebarOffsetRestore)
@@ -2627,41 +3182,17 @@ struct ContentView: View {
     @ViewBuilder
     private func subscriptionSidebarRow(for subscription: Subscription, unreadCount: Int) -> some View {
         let isSelected = appState.activeSubscriptionURL == subscription.url
-        let selectionColor: Color = subscription.type == .reddit ? .orange : .blue
+        let selectionColor: Color = subscription.type == .reddit
+            ? Color(red: 1.0, green: 0.28, blue: 0.10)
+            : sidebarSelectionAccent
 
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                .fill(isSelected ? selectionColor : Color.clear)
-                .frame(width: 3, height: 22)
-
-            if subscription.type == .rss {
-                if let url = URL(string: subscription.url), let host = url.host {
-                    DomainIconView(domain: host, size: 16)
-                } else {
-                    Image(systemName: "rss")
-                }
-            } else {
-                Image("RedditLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 16, height: 16)
-                    .foregroundColor(.orange)
-            }
-
-            Text(subscription.title)
-                .foregroundColor(.primary)
-
-            Spacer()
-
-            if unreadCount > 0 {
-                Text("\(unreadCount)")
-                    .font(.caption)
-                    .foregroundColor(.blue.opacity(0.7))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(8)
-            }
+        sidebarMenuRow(
+            title: subscription.title,
+            unreadCount: unreadCount,
+            isSelected: isSelected,
+            accentColor: selectionColor
+        ) {
+            sidebarSubscriptionIcon(for: subscription, isSelected: isSelected)
         }
     }
 
@@ -2717,8 +3248,12 @@ struct ContentView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(iPadShellBackground)
+            .feedListColumnStyle(
+                colorScheme: colorScheme,
+                scrollOffset: feedListScrollOffset
+            ) { offset in
+                feedListScrollOffset = offset
+            }
             .onAppear {
                 #if os(iOS)
                 // Update navigation state for iPhone
@@ -2807,8 +3342,12 @@ struct ContentView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(iPadShellBackground)
+            .feedListColumnStyle(
+                colorScheme: colorScheme,
+                scrollOffset: feedListScrollOffset
+            ) { offset in
+                feedListScrollOffset = offset
+            }
             .onAppear {
                 // Update the last selected category when this view appears
                 appState.lastSelectedCategory = .unread
@@ -2916,8 +3455,12 @@ struct ContentView: View {
             }
         }
         .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color.clear)
+        .feedListColumnStyle(
+            colorScheme: colorScheme,
+            scrollOffset: feedListScrollOffset
+        ) { offset in
+            feedListScrollOffset = offset
+        }
         .onAppear {
             #if os(iOS)
             // Update navigation state for iPhone
@@ -3081,8 +3624,12 @@ struct ContentView: View {
                 }
             }
             .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(iPadShellBackground)
+            .feedListColumnStyle(
+                colorScheme: colorScheme,
+                scrollOffset: feedListScrollOffset
+            ) { offset in
+                feedListScrollOffset = offset
+            }
             .onAppear {
                 // Update the last selected category when this view appears
                 appState.lastSelectedCategory = .today
@@ -3198,22 +3745,38 @@ struct ContentView: View {
 
             VStack(spacing: 12) {
                 let unreadCount = feed.posts.filter { !$0.isRead }.count
-                Text("New: \(unreadCount) unread • Hot: \(feed.posts.count) posts")
+                Text("New: \(unreadCount) unread • Ranked: up to 50 posts")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                HStack(spacing: 12) {
-                    Button("New") {
-                        dismissRedditSummaryScopePicker()
-                        appState.summarizeSubredditPostsGlobally(subreddit: subscription.url, topComments: 10)
-                    }
-                    .buttonStyle(LiquidGlassButtonStyle())
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        Button("New") {
+                            dismissRedditSummaryScopePicker()
+                            appState.summarizeSubredditPostsGlobally(subreddit: subscription.url, topComments: 10)
+                        }
+                        .buttonStyle(LiquidGlassButtonStyle())
 
-                    Button("Hot") {
-                        dismissRedditSummaryScopePicker()
-                        appState.summarizeSubredditHotPostsGlobally(subreddit: subscription.url, topComments: 10)
+                        Button("Hot") {
+                            dismissRedditSummaryScopePicker()
+                            appState.summarizeSubredditHotPostsGlobally(subreddit: subscription.url, topComments: 10)
+                        }
+                        .buttonStyle(LiquidGlassButtonStyle())
                     }
-                    .buttonStyle(LiquidGlassButtonStyle())
+
+                    HStack(spacing: 12) {
+                        Button("Top Day") {
+                            dismissRedditSummaryScopePicker()
+                            appState.summarizeSubredditTopDayPostsGlobally(subreddit: subscription.url, topComments: 10)
+                        }
+                        .buttonStyle(LiquidGlassButtonStyle())
+
+                        Button("Top Week") {
+                            dismissRedditSummaryScopePicker()
+                            appState.summarizeSubredditTopWeekPostsGlobally(subreddit: subscription.url, topComments: 10)
+                        }
+                        .buttonStyle(LiquidGlassButtonStyle())
+                    }
                 }
 
                 Button("Cancel") {
@@ -3229,22 +3792,18 @@ struct ContentView: View {
     
     var redditView: some View {
         VStack {
-            Picker("Sort", selection: $appState.redditSortOption) {
-                Text("Hot").tag(RedditService.SortOption.hot)
-                Text("New").tag(RedditService.SortOption.new)
-            }
-            .pickerStyle(SegmentedPickerStyle())
-            .padding(.horizontal)
-            .onChange(of: appState.redditSortOption) { newOption in
-                print("📱 ContentView: Reddit sort option changed to \(newOption.rawValue) for r/\(appState.activeSubscriptionURL ?? "")")
-                // Provide feedback that we're loading
-                appState.isLoading = true
-                // Use a small delay to ensure UI updates before making the request
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    // Only refresh the current subreddit feed instead of all feeds
-                    appState.refreshRedditFeeds(specificSubreddit: appState.activeSubscriptionURL)
+            RedditSortPicker(selection: $appState.redditSortOption)
+                .padding(.horizontal)
+                .onChange(of: appState.redditSortOption) { newOption in
+                    print("📱 ContentView: Reddit sort option changed to \(newOption.rawValue) for r/\(appState.activeSubscriptionURL ?? "")")
+                    // Provide feedback that we're loading
+                    appState.isLoading = true
+                    // Use a small delay to ensure UI updates before making the request
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        // Only refresh the current subreddit feed instead of all feeds
+                        appState.refreshRedditFeeds(specificSubreddit: appState.activeSubscriptionURL)
+                    }
                 }
-            }
             
             ScrollViewReader { scrollProxy in
                 List {
@@ -3287,8 +3846,12 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(AppColors.redditBackground(for: colorScheme))
+                .feedListColumnStyle(
+                    colorScheme: colorScheme,
+                    scrollOffset: feedListScrollOffset
+                ) { offset in
+                    feedListScrollOffset = offset
+                }
                 .onAppear {
                     // Update the last selected category when this view appears
                     appState.lastSelectedCategory = .reddit
@@ -3308,7 +3871,10 @@ struct ContentView: View {
                 }
             }
         }
-        .background(AppColors.redditBackground(for: colorScheme))
+        .background {
+            AppColors.feedListBackground(for: colorScheme, scrollOffset: feedListScrollOffset)
+                .ignoresSafeArea()
+        }
         .navigationTitle("Reddit")
     }
     
@@ -3374,8 +3940,12 @@ struct ContentView: View {
             }
         }
         .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(iPadShellBackground)
+        .feedListColumnStyle(
+            colorScheme: colorScheme,
+            scrollOffset: feedListScrollOffset
+        ) { offset in
+            feedListScrollOffset = offset
+        }
         .navigationTitle(feed.title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -3467,20 +4037,16 @@ struct ContentView: View {
     private func redditSubscriptionView(feed: RedditFeed, subscription: Subscription) -> some View {
         ScrollViewReader { scrollProxy in
             VStack(spacing: 0) {
-                Picker("Sort", selection: $appState.redditSortOption) {
-                    Text("Hot").tag(RedditService.SortOption.hot)
-                    Text("New").tag(RedditService.SortOption.new)
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-                .onChange(of: appState.redditSortOption) { newOption in
-                    print("📱 ContentView: Reddit sort option changed to \(newOption.rawValue) for r/\(subscription.url)")
-                    appState.isLoading = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        appState.refreshRedditFeeds(specificSubreddit: subscription.url)
+                RedditSortPicker(selection: $appState.redditSortOption)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .onChange(of: appState.redditSortOption) { newOption in
+                        print("📱 ContentView: Reddit sort option changed to \(newOption.rawValue) for r/\(subscription.url)")
+                        appState.isLoading = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            appState.refreshRedditFeeds(specificSubreddit: subscription.url)
+                        }
                     }
-                }
 
                 if let statusMessage = appState.redditFeedStatusMessages[subscription.url] {
                     HStack(alignment: .top, spacing: 8) {
@@ -3520,8 +4086,12 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(AppColors.redditBackground(for: colorScheme))
+                .feedListColumnStyle(
+                    colorScheme: colorScheme,
+                    scrollOffset: feedListScrollOffset
+                ) { offset in
+                    feedListScrollOffset = offset
+                }
                 .onAppear {
                     appState.activeSubscriptionURL = subscription.url
                     appState.saveScrollPosition(for: "sidebar_subscriptions", itemID: subscription.url)
@@ -3550,7 +4120,10 @@ struct ContentView: View {
         }
         #endif
             }
-            .background(AppColors.redditBackground(for: colorScheme).ignoresSafeArea())
+            .background {
+                AppColors.feedListBackground(for: colorScheme, scrollOffset: feedListScrollOffset)
+                    .ignoresSafeArea()
+            }
             .navigationTitle("r/\(feed.subreddit)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -3638,7 +4211,11 @@ struct ContentView: View {
     var detailView: some View {
         Group {
             if appState.selectedArticle != nil {
+                #if os(iOS)
+                ArticleDetailView(isReadingChromeHidden: $isArticleReadingChromeHidden)
+                #else
                 ArticleDetailView()
+                #endif
             } else if let selectedRedditPost = appState.selectedRedditPost {
                 RedditDetailView()
                     .id("post-\(selectedRedditPost.id)") // Force view recreation with unique ID
@@ -4240,8 +4817,20 @@ struct DraggableGlobalSummaryView: View {
 
                                 ArticleGlassySummary(
                                     summary: formattedAggregateSummary,
-                                    onAskAISelection: handleSummaryAskAISelection(selectedText:context:),
-                                    onAskAIWebSelection: handleSummaryAskAIWebSelection(selectedText:context:),
+                                    onAskAISelection: { selectedText, context in
+                                        handleSummaryAskAISelection(
+                                            selectedText: selectedText,
+                                            context: context,
+                                            sourceContext: sourceContextForGlobalSelection()
+                                        )
+                                    },
+                                    onAskAIWebSelection: { selectedText, context in
+                                        handleSummaryAskAIWebSelection(
+                                            selectedText: selectedText,
+                                            context: context,
+                                            sourceContext: sourceContextForGlobalSelection()
+                                        )
+                                    },
                                     borderStyle: isRedditContent ? .reddit : .article
                                 )
                                     .environmentObject(appState)
@@ -4290,8 +4879,20 @@ struct DraggableGlobalSummaryView: View {
                                 ArticleGlassySummary(
                                     summary: item.summary,
                                     displaySummary: displaySummary,
-                                    onAskAISelection: handleSummaryAskAISelection(selectedText:context:),
-                                    onAskAIWebSelection: handleSummaryAskAIWebSelection(selectedText:context:),
+                                    onAskAISelection: { selectedText, context in
+                                        handleSummaryAskAISelection(
+                                            selectedText: selectedText,
+                                            context: context,
+                                            sourceContext: sourceContextForGlobalSelection(referenceId: item.referenceId)
+                                        )
+                                    },
+                                    onAskAIWebSelection: { selectedText, context in
+                                        handleSummaryAskAIWebSelection(
+                                            selectedText: selectedText,
+                                            context: context,
+                                            sourceContext: sourceContextForGlobalSelection(referenceId: item.referenceId)
+                                        )
+                                    },
                                     borderStyle: isRedditContent ? .reddit : .article
                                 )
                                     .environmentObject(appState)
@@ -4337,6 +4938,7 @@ struct DraggableGlobalSummaryView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 24))
         .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 8)
+        .askAILoadingOverlay(isAskingSelectionAI)
         .sheet(isPresented: $showAnswerSheet) {
             NavigationStack {
                 ScrollView {
@@ -4548,7 +5150,7 @@ struct DraggableGlobalSummaryView: View {
         
         appState.askQuestionAboutGlobalSummary(question: trimmed) { answer in
             DispatchQueue.main.async {
-                self.qaAnswerText = cleanMarkdownArtifactsForDisplay(answer)
+                self.qaAnswerText = formatAskAIResponseForDisplay(answer)
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
             }
@@ -4568,7 +5170,7 @@ struct DraggableGlobalSummaryView: View {
 
         appState.askWebQuestionAboutGlobalSummary(question: trimmed) { answer in
             DispatchQueue.main.async {
-                self.qaAnswerText = cleanMarkdownArtifactsForDisplay(answer)
+                self.qaAnswerText = formatAskAIResponseForDisplay(answer)
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
             }
@@ -4585,9 +5187,22 @@ struct DraggableGlobalSummaryView: View {
         }
     }
 
-    private func handleSummaryAskAISelection(selectedText: String, context: String) {
+    private func sourceContextForGlobalSelection(referenceId: String? = nil) -> (label: String, text: String)? {
+        appState.globalSummarySelectionSourceContext(referenceId: referenceId, isReddit: isRedditContent)
+    }
+
+    private func handleSummaryAskAISelection(
+        selectedText: String,
+        context: String,
+        sourceContext: (label: String, text: String)? = nil
+    ) {
         guard !isAskingSelectionAI else { return }
-        let prompt = buildAskAISelectionPrompt(selectedText: selectedText, extractedContext: context)
+        let prompt = buildAskAISelectionPrompt(
+            selectedText: selectedText,
+            extractedContext: context,
+            sourceContext: sourceContext?.text ?? "",
+            sourceLabel: sourceContext?.label ?? ""
+        )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
@@ -4596,16 +5211,25 @@ struct DraggableGlobalSummaryView: View {
 
         appState.askQuestionAboutSelection(prompt: prompt) { answer in
             DispatchQueue.main.async {
-                self.selectionAskAIResponse = cleanMarkdownArtifactsForDisplay(answer)
+                self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
             }
         }
     }
 
-    private func handleSummaryAskAIWebSelection(selectedText: String, context: String) {
+    private func handleSummaryAskAIWebSelection(
+        selectedText: String,
+        context: String,
+        sourceContext: (label: String, text: String)? = nil
+    ) {
         guard !isAskingSelectionAI else { return }
-        let prompt = buildAskAISelectionPrompt(selectedText: selectedText, extractedContext: context)
+        let prompt = buildAskAISelectionPrompt(
+            selectedText: selectedText,
+            extractedContext: context,
+            sourceContext: sourceContext?.text ?? "",
+            sourceLabel: sourceContext?.label ?? ""
+        )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
@@ -4614,7 +5238,7 @@ struct DraggableGlobalSummaryView: View {
 
         appState.askWebQuestionAboutSelection(prompt: prompt) { answer in
             DispatchQueue.main.async {
-                self.selectionAskAIResponse = cleanMarkdownArtifactsForDisplay(answer)
+                self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
             }
@@ -4625,12 +5249,12 @@ struct DraggableGlobalSummaryView: View {
 
     private func buildWhiteboardPrompt() -> String {
         let selectedProvider = appState.settings.selectedSummaryProvider
-        let summariesForPrompt = (selectedProvider == .appleCloud)
+        let summariesForPrompt = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway)
             ? Array(parsedSummaries.prefix(12).enumerated())
             : Array(parsedSummaries.enumerated())
         let rankedCandidates = rankedVisualCandidates(limit: isRedditContent ? 5 : 0)
 
-        let perItemLimit = selectedProvider == .appleCloud ? 600 : 2000
+        let perItemLimit = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? 600 : 2000
         let content = summariesForPrompt.map { index, item in
             let title = item.subject.isEmpty ? "Item \(index + 1)" : item.subject
             let truncatedContent = String(item.summary.prefix(perItemLimit))
@@ -4641,24 +5265,20 @@ struct DraggableGlobalSummaryView: View {
         if isRedditContent {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.redditFeeds {
-                    if let post = feed.posts.first(where: { $0.id == referenceId }),
-                       let postUrl = post.url {
-                        let arrow = selectedProvider == .appleCloud ? "→" : "->"
-                        return "[\(index + 1)] \"\(item.subject)\" \(arrow) \(postUrl.absoluteString)"
-                    }
+                if let post = appState.redditPostForGlobalSummaryReference(referenceId),
+                   let postUrl = post.url {
+                    let arrow = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? "→" : "->"
+                    return "[\(index + 1)] \"\(item.subject)\" \(arrow) \(postUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
         } else {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.feeds {
-                    if let article = feed.articles.first(where: { $0.id == referenceId }),
-                       let articleUrl = article.url {
-                        let arrow = selectedProvider == .appleCloud ? "→" : "->"
-                        return "[\(index + 1)] \"\(item.subject)\" \(arrow) \(articleUrl.absoluteString)"
-                    }
+                if let article = appState.articleForGlobalSummaryReference(referenceId),
+                   let articleUrl = article.url {
+                    let arrow = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? "→" : "->"
+                    return "[\(index + 1)] \"\(item.subject)\" \(arrow) \(articleUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
@@ -4675,11 +5295,11 @@ struct DraggableGlobalSummaryView: View {
 
     private func buildWhiteboardWebPrompt() -> String {
         let selectedProvider = appState.settings.selectedSummaryProvider
-        let summariesForPrompt = (selectedProvider == .appleCloud)
+        let summariesForPrompt = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway)
             ? Array(parsedSummaries.prefix(12).enumerated())
             : Array(parsedSummaries.enumerated())
         let rankedCandidates = rankedVisualCandidates(limit: isRedditContent ? 5 : 0)
-        let perItemLimit = selectedProvider == .appleCloud ? 600 : 2000
+        let perItemLimit = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? 600 : 2000
         let content = summariesForPrompt.map { index, item in
             let title = item.subject.isEmpty ? "Item \(index + 1)" : item.subject
             let truncatedContent = String(item.summary.prefix(perItemLimit))
@@ -4690,22 +5310,18 @@ struct DraggableGlobalSummaryView: View {
         if isRedditContent {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.redditFeeds {
-                    if let post = feed.posts.first(where: { $0.id == referenceId }),
-                       let postUrl = post.url {
-                        return "[\(index + 1)] \"\(item.subject)\" -> \(postUrl.absoluteString)"
-                    }
+                if let post = appState.redditPostForGlobalSummaryReference(referenceId),
+                   let postUrl = post.url {
+                    return "[\(index + 1)] \"\(item.subject)\" -> \(postUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
         } else {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.feeds {
-                    if let article = feed.articles.first(where: { $0.id == referenceId }),
-                       let articleUrl = article.url {
-                        return "[\(index + 1)] \"\(item.subject)\" -> \(articleUrl.absoluteString)"
-                    }
+                if let article = appState.articleForGlobalSummaryReference(referenceId),
+                   let articleUrl = article.url {
+                    return "[\(index + 1)] \"\(item.subject)\" -> \(articleUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
@@ -4782,8 +5398,8 @@ struct DraggableGlobalSummaryView: View {
 
         // Route to appropriate provider
         switch appState.settings.selectedSummaryProvider {
-        case .mlxLocal:
-            // MLX Local redirects to Apple Local for structured JSON (MLX struggles with strict JSON)
+        case .mlxLocal, .coreAIMLXLocal:
+            // Local models redirect to Apple Local for structured JSON.
             generateWhiteboardWithMLXLocal(prompt: prompt)
 
         case .appleLocal:
@@ -4791,8 +5407,10 @@ struct DraggableGlobalSummaryView: View {
             generateWhiteboardWithMLXLocal(prompt: prompt)
 
         case .appleCloud:
-            // For Whiteboard, use the same path as MLX Local (keeps regular summaries unchanged).
-            generateWhiteboardWithMLXLocal(prompt: prompt)
+            generateWhiteboardWithAppleCloud(prompt: prompt)
+
+        case .applePCCGateway:
+            generateWhiteboardWithPCCGateway(prompt: prompt)
 
         case .webAI:
             generateWhiteboardWithWebAI(prompt: prompt)
@@ -4977,6 +5595,38 @@ struct DraggableGlobalSummaryView: View {
         }
     }
 
+    private func generateWhiteboardWithPCCGateway(prompt: String) {
+        Task {
+            do {
+                let response = try await appState.performPCCGatewayRequestAsync(prompt: prompt, taskName: "Whiteboard")
+                guard let rawData = response.data(using: .utf8) else {
+                    throw NSError(domain: "Whiteboard", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not convert response to data."])
+                }
+                let payload: WhiteboardPayload
+                do {
+                    payload = try parseWhiteboardPayloadFromData(rawData)
+                } catch {
+                    let repairedData = try await repairInvalidJSON(kind: .whiteboard, rawOutput: response)
+                    payload = try parseWhiteboardPayloadFromData(repairedData)
+                }
+                let html = buildWhiteboardHTML(from: payload)
+                guard let htmlData = html.data(using: .utf8) else {
+                    throw NSError(domain: "Whiteboard", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to generate whiteboard HTML"])
+                }
+                await MainActor.run {
+                    self.whiteboardContent = htmlData
+                    self.isGeneratingWhiteboard = false
+                    self.showWhiteboard = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.whiteboardError = "Whiteboard failed: \(error.localizedDescription)"
+                    self.isGeneratingWhiteboard = false
+                }
+            }
+        }
+    }
+
     private func runAppleCloudStructured(prompt: String, timeoutSeconds: TimeInterval? = nil, requiredTopLevelKeys: [String]? = nil) async throws -> String {
         var didReturn = false
         return try await withCheckedThrowingContinuation { continuation in
@@ -4986,25 +5636,38 @@ struct DraggableGlobalSummaryView: View {
                 continuation.resume(with: result)
             }
 
-            let originalClipboard = currentClipboardString()
-            appState.launchCloudRequest(for: prompt, type: .summary, useClipboardMonitoring: false, completion: nil)
+            func satisfiesRequiredKeys(_ text: String) -> Bool {
+                guard let requiredTopLevelKeys, !requiredTopLevelKeys.isEmpty else { return true }
+                let candidate = sanitizeStructuredJSONCandidate(text)
+                guard let data = candidate.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data),
+                      let dict = obj as? [String: Any] else {
+                    return false
+                }
+                return requiredTopLevelKeys.allSatisfy { dict[$0] != nil }
+            }
 
-            Task {
+            var timeoutTask: Task<Void, Never>?
+            timeoutTask = Task {
                 let effectiveTimeout = timeoutSeconds ?? appleCloudTimeoutSeconds(promptCharCount: prompt.count)
-                do {
-                    let fileResult = try await waitForAppleCloudOutput(
-                        timeout: effectiveTimeout,
-                        originalClipboard: originalClipboard,
-                        requiredTopLevelKeys: requiredTopLevelKeys
-                    )
-                    let trimmed = fileResult.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty {
-                        finish(.failure(NSError(domain: "AppleCloud", code: 1, userInfo: [NSLocalizedDescriptionKey: "Apple Cloud returned an empty response."])))
-                    } else {
-                        finish(.success(trimmed))
-                    }
-                } catch {
-                    finish(.failure(error))
+                try? await Task.sleep(nanoseconds: UInt64(effectiveTimeout * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                finish(.failure(NSError(
+                    domain: "AppleCloud",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Apple Cloud response timed out after \(Int(effectiveTimeout)) seconds."]
+                )))
+            }
+
+            appState.launchCloudRequest(for: prompt, type: .summary, useClipboardMonitoring: false) { response in
+                timeoutTask?.cancel()
+                let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    finish(.failure(NSError(domain: "AppleCloud", code: 1, userInfo: [NSLocalizedDescriptionKey: "Apple Cloud returned an empty response."])))
+                } else if !satisfiesRequiredKeys(trimmed) {
+                    finish(.failure(AppleCloudIncompleteStructuredOutput(message: "Apple Cloud returned incomplete structured data.")))
+                } else {
+                    finish(.success(trimmed))
                 }
             }
         }
@@ -5485,7 +6148,7 @@ struct DraggableGlobalSummaryView: View {
     private func repairInvalidJSON(kind: MLXStructuredJSONKind, rawOutput: String) async throws -> Data {
         let selectedProvider = appState.settings.selectedSummaryProvider
 
-        if selectedProvider == .appleCloud {
+        if selectedProvider == .appleCloud || selectedProvider == .applePCCGateway {
             let sanitized = sanitizeStructuredJSONCandidate(rawOutput)
             if let data = sanitized.data(using: .utf8) {
                 let domain = (kind == .infographic) ? "Infographic" : "Whiteboard"
@@ -5495,7 +6158,7 @@ struct DraggableGlobalSummaryView: View {
             }
         }
 
-        let clippedLimit = selectedProvider == .appleCloud ? 6_000 : 12_000
+        let clippedLimit = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? 6_000 : 12_000
         let clipped = String(rawOutput.prefix(clippedLimit))
         let keys: String
         let extraRules: String
@@ -5523,7 +6186,7 @@ struct DraggableGlobalSummaryView: View {
         - Keep the same meaning, but ensure it parses as JSON
         - Only use these top-level keys: \(keys)
         \(extraRules)
-        \(selectedProvider == .appleCloud ? "- Keep the JSON short to avoid truncation; prefer fewer items with shorter strings." : "")
+        \((selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? "- Keep the JSON short to avoid truncation; prefer fewer items with shorter strings." : "")
 
         Model output to fix:
         \(clipped)
@@ -5536,11 +6199,20 @@ struct DraggableGlobalSummaryView: View {
         case .mlxLocal:
             let modelID = appState.settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
             let maxOutputTokens = max(1, appState.settings.mlxMaxOutputTokens)
-            repaired = try await MLXLocalService.shared.generateText(
+            repaired = try await LiteRTLocalService.shared.generateText(
                 prompt: repairPrompt,
                 modelID: modelID,
                 maxOutputTokens: maxOutputTokens,
                 maxContextTokens: 4096
+            )
+        case .coreAIMLXLocal:
+            let modelID = appState.settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let maxOutputTokens = max(1, appState.settings.coreAIMLXMaxOutputTokens)
+            repaired = try await CoreAIMLXLocalService.shared.generateText(
+                prompt: repairPrompt,
+                modelID: modelID,
+                maxOutputTokens: maxOutputTokens,
+                maxContextTokens: appState.settings.coreAIMLXMaxContextTokens > 0 ? appState.settings.coreAIMLXMaxContextTokens : CoreAIMLXLocalService.defaultContextTokens
             )
         case .appleCloud:
             let requiredKeys = keys
@@ -5574,6 +6246,11 @@ struct DraggableGlobalSummaryView: View {
                 prompt: repairPrompt,
                 responseFormat: .strictJSON
             )
+        case .applePCCGateway:
+            repaired = try await appState.performPCCGatewayRequestAsync(
+                prompt: repairPrompt,
+                taskName: kind == .whiteboard ? "Whiteboard JSON Repair" : "Infographic JSON Repair"
+            )
         case .summarizeDaemon:
             repaired = try await appState.performSummarizeRequestAsync(
                 prompt: repairPrompt,
@@ -5599,7 +6276,7 @@ struct DraggableGlobalSummaryView: View {
         providerOverride: AppSettings.SummaryProvider? = nil
     ) -> String {
         let selectedProvider = providerOverride ?? appState.settings.selectedSummaryProvider
-        let maxChars = (selectedProvider == .appleCloud || selectedProvider == .mlxLocal) ? 8000 : 2000
+        let maxChars = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway || selectedProvider == .mlxLocal || selectedProvider == .coreAIMLXLocal) ? 8000 : 2000
         let trimmed = String(content.prefix(maxChars))
         let rankingSection = buildRankedPostSection(
             header: "KEY POST RANKING",
@@ -5631,7 +6308,7 @@ struct DraggableGlobalSummaryView: View {
         }
 
         let appleCloudStrict: String
-        if selectedProvider == .appleCloud {
+        if selectedProvider == .appleCloud || selectedProvider == .applePCCGateway {
             appleCloudStrict = """
 
             APPLE CLOUD STRICT MODE:
@@ -5645,7 +6322,7 @@ struct DraggableGlobalSummaryView: View {
             appleCloudStrict = ""
         }
 
-        if selectedProvider == .mlxLocal {
+        if selectedProvider == .mlxLocal || selectedProvider == .coreAIMLXLocal {
             let contextHint = isRedditContent ? "r/subreddit • topic focus" : "Articles • topic focus"
             let takeawaysTemplate: String
             if isRedditContent {
@@ -6320,18 +6997,12 @@ struct DraggableGlobalSummaryView: View {
     private func openItem(_ item: GlobalSummaryItem, isReddit: Bool) {
         guard let referenceId = item.referenceId else { return }
         if isReddit {
-            for feed in appState.redditFeeds {
-                if let post = feed.posts.first(where: { $0.id == referenceId }) {
-                    appState.setSelectedRedditPost(post)
-                    return
-                }
+            if let post = appState.redditPostForGlobalSummaryReference(referenceId) {
+                appState.setSelectedRedditPost(post)
             }
         } else {
-            for feed in appState.feeds {
-                if let article = feed.articles.first(where: { $0.id == referenceId }) {
-                    appState.setSelectedArticle(article)
-                    return
-                }
+            if let article = appState.articleForGlobalSummaryReference(referenceId) {
+                appState.setSelectedArticle(article)
             }
         }
     }
@@ -6353,6 +7024,14 @@ struct DraggableGlobalSummaryView: View {
             if postsByID[post.id] == nil {
                 postsByID[post.id] = post
             }
+        }
+        for summary in parsedSummaries {
+            guard let referenceId = summary.referenceId,
+                  postsByID[referenceId] == nil,
+                  let post = appState.redditPostForGlobalSummaryReference(referenceId) else {
+                continue
+            }
+            postsByID[referenceId] = post
         }
 
         let now = Date().timeIntervalSince1970
@@ -6463,12 +7142,12 @@ struct DraggableGlobalSummaryView: View {
 
     private func buildInfographicPrompt() -> String {
         let selectedProvider = appState.settings.selectedSummaryProvider
-        let summariesForPrompt = (selectedProvider == .appleCloud)
+        let summariesForPrompt = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway)
             ? Array(parsedSummaries.prefix(12).enumerated())
             : Array(parsedSummaries.enumerated())
         let rankedCandidates = rankedVisualCandidates(limit: isRedditContent ? 4 : 0)
 
-        let perItemLimit = selectedProvider == .appleCloud ? 600 : 2000
+        let perItemLimit = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? 600 : 2000
         let content = summariesForPrompt.map { index, item in
             let title = item.subject.isEmpty ? "Item \(index + 1)" : item.subject
             let truncatedContent = String(item.summary.prefix(perItemLimit))
@@ -6479,22 +7158,18 @@ struct DraggableGlobalSummaryView: View {
         if isRedditContent {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.redditFeeds {
-                    if let post = feed.posts.first(where: { $0.id == referenceId }),
-                       let postUrl = post.url {
-                        return "[\(index + 1)] \"\(item.subject)\" → \(postUrl.absoluteString)"
-                    }
+                if let post = appState.redditPostForGlobalSummaryReference(referenceId),
+                   let postUrl = post.url {
+                    return "[\(index + 1)] \"\(item.subject)\" → \(postUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
         } else {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.feeds {
-                    if let article = feed.articles.first(where: { $0.id == referenceId }),
-                       let articleUrl = article.url {
-                        return "[\(index + 1)] \"\(item.subject)\" → \(articleUrl.absoluteString)"
-                    }
+                if let article = appState.articleForGlobalSummaryReference(referenceId),
+                   let articleUrl = article.url {
+                    return "[\(index + 1)] \"\(item.subject)\" → \(articleUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
@@ -6511,11 +7186,11 @@ struct DraggableGlobalSummaryView: View {
 
     private func buildInfographicWebPrompt() -> String {
         let selectedProvider = appState.settings.selectedSummaryProvider
-        let summariesForPrompt = (selectedProvider == .appleCloud)
+        let summariesForPrompt = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway)
             ? Array(parsedSummaries.prefix(12).enumerated())
             : Array(parsedSummaries.enumerated())
         let rankedCandidates = rankedVisualCandidates(limit: isRedditContent ? 4 : 0)
-        let perItemLimit = selectedProvider == .appleCloud ? 600 : 2000
+        let perItemLimit = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway) ? 600 : 2000
         let content = summariesForPrompt.map { index, item in
             let title = item.subject.isEmpty ? "Item \(index + 1)" : item.subject
             let truncatedContent = String(item.summary.prefix(perItemLimit))
@@ -6526,22 +7201,18 @@ struct DraggableGlobalSummaryView: View {
         if isRedditContent {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.redditFeeds {
-                    if let post = feed.posts.first(where: { $0.id == referenceId }),
-                       let postUrl = post.url {
-                        return "[\(index + 1)] \"\(item.subject)\" -> \(postUrl.absoluteString)"
-                    }
+                if let post = appState.redditPostForGlobalSummaryReference(referenceId),
+                   let postUrl = post.url {
+                    return "[\(index + 1)] \"\(item.subject)\" -> \(postUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
         } else {
             urlReferenceList = summariesForPrompt.compactMap { (index, item) -> String? in
                 guard let referenceId = item.referenceId else { return nil }
-                for feed in appState.feeds {
-                    if let article = feed.articles.first(where: { $0.id == referenceId }),
-                       let articleUrl = article.url {
-                        return "[\(index + 1)] \"\(item.subject)\" -> \(articleUrl.absoluteString)"
-                    }
+                if let article = appState.articleForGlobalSummaryReference(referenceId),
+                   let articleUrl = article.url {
+                    return "[\(index + 1)] \"\(item.subject)\" -> \(articleUrl.absoluteString)"
                 }
                 return nil
             }.joined(separator: "\n")
@@ -6665,14 +7336,14 @@ struct DraggableGlobalSummaryView: View {
                     (selectedProvider == .appleLocal || selectedProvider == .appleCloud) ? .mlxLocal : selectedProvider
 
                 // MLX-specific: Clear GPU cache to prevent stale context
-                if effectiveProvider == .mlxLocal {
+                if effectiveProvider == .mlxLocal || effectiveProvider == .coreAIMLXLocal {
                     await MLXLocalService.shared.clearTransientCache()
                     print("🔀 [Infographic] MLX selected - redirecting to Apple Local for JSON generation")
                 }
 
                 let rawResponse: String
                 switch effectiveProvider {
-                case .mlxLocal:
+                case .mlxLocal, .coreAIMLXLocal:
                     // MLX redirects to Apple Local for structured JSON
                     if #available(iOS 18.2, macOS 15.2, *) {
                         rawResponse = try await withCheckedThrowingContinuation { continuation in
@@ -6694,11 +7365,16 @@ struct DraggableGlobalSummaryView: View {
                         rawResponse = try await appState.summaryService.generateContentWithGemini(prompt: prompt)
                     }
                 case .appleCloud:
-                    // Apple Cloud via Shortcuts - can handle JSON with explicit instructions
+                    // Apple Cloud via Private Cloud Compute can handle JSON with explicit instructions.
                     rawResponse = try await runAppleCloudStructured(
                         prompt: prompt,
                         timeoutSeconds: 300,
                         requiredTopLevelKeys: ["title", "subtitle", "focus", "palette", "statTiles", "barSections", "sentiment", "sentimentBand", "majorThemes", "themes", "keyTopics", "notableTrends", "takeaway", "topPosts"]
+                    )
+                case .applePCCGateway:
+                    rawResponse = try await appState.performPCCGatewayRequestAsync(
+                        prompt: prompt,
+                        taskName: "Infographic"
                     )
                 case .gemini:
                     rawResponse = try await appState.summaryService.generateContentWithGemini(prompt: prompt)
@@ -6715,7 +7391,7 @@ struct DraggableGlobalSummaryView: View {
                     )
                 }
 
-                let responseForParsing = effectiveProvider == .appleCloud
+                let responseForParsing = (effectiveProvider == .appleCloud || effectiveProvider == .applePCCGateway)
                     ? sanitizeStructuredJSONCandidate(rawResponse)
                     : rawResponse
 
@@ -6737,7 +7413,7 @@ struct DraggableGlobalSummaryView: View {
                     }
                 } catch {
                     // If parsing fails for local/cloud/Summarize providers, attempt JSON repair using the same provider.
-                    if effectiveProvider == .mlxLocal || effectiveProvider == .appleCloud || effectiveProvider == .summarizeDaemon {
+                    if effectiveProvider == .mlxLocal || effectiveProvider == .appleCloud || effectiveProvider == .applePCCGateway || effectiveProvider == .summarizeDaemon {
                         print("⚠️ [Infographic] Initial JSON parsing failed for \(effectiveProvider.rawValue) output, attempting repair...")
                         do {
                             let repairedData = try await repairInvalidJSON(kind: .infographic, rawOutput: responseForParsing)
@@ -6838,7 +7514,7 @@ struct DraggableGlobalSummaryView: View {
         providerOverride: AppSettings.SummaryProvider? = nil
     ) -> String {
         let selectedProvider = providerOverride ?? appState.settings.selectedSummaryProvider
-        let maxChars = (selectedProvider == .appleCloud || selectedProvider == .mlxLocal) ? 8000 : 2000
+        let maxChars = (selectedProvider == .appleCloud || selectedProvider == .applePCCGateway || selectedProvider == .mlxLocal || selectedProvider == .coreAIMLXLocal) ? 8000 : 2000
         let trimmed = String(content.prefix(maxChars))
         let contentType = isRedditContent ? "Reddit" : "Article"
         let rankingSection = buildRankedPostSection(
@@ -6848,7 +7524,7 @@ struct DraggableGlobalSummaryView: View {
             limit: 4
         )
 
-        if selectedProvider == .mlxLocal {
+        if selectedProvider == .mlxLocal || selectedProvider == .coreAIMLXLocal {
             return """
             READ THIS CONTENT FIRST - You must extract information from it:
 
@@ -6897,7 +7573,7 @@ struct DraggableGlobalSummaryView: View {
             """
         }
 
-        if selectedProvider == .appleCloud {
+        if selectedProvider == .appleCloud || selectedProvider == .applePCCGateway {
             return """
             You are designing an image-like infographic for a \(contentType.lowercased()) batch summary.
 
@@ -7746,7 +8422,7 @@ struct WhiteboardView: View {
         appState.askQuestionAboutGlobalSummary(question: prompt) { answer in
             DispatchQueue.main.async {
                 self.isAskingAI = false
-                self.askAIResponse = cleanMarkdownArtifactsForDisplay(answer)
+                self.askAIResponse = formatAskAIResponseForDisplay(answer)
                 self.showAskAIResponseSheet = true
             }
         }
@@ -8058,12 +8734,7 @@ struct ArticleRow: View {
     let article: Article
 
     private var cardBackground: Color {
-        #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .pad && colorScheme == .dark {
-            return .black
-        }
-        #endif
-        return AppColors.systemGray6
+        AppColors.feedListCardFill(for: colorScheme)
     }
 
     private var cardBorderColor: Color {
@@ -8227,11 +8898,6 @@ struct RedditPostRow: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var cardBackground: Color {
-        #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .pad && colorScheme == .dark {
-            return .black
-        }
-        #endif
         return AppColors.redditCardFill(for: colorScheme)
     }
     
@@ -8380,6 +9046,7 @@ struct RedditPostRow: View {
 struct ArticleDetailView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var qaState = ArticleQAState.shared
+    @Binding var isReadingChromeHidden: Bool
     @State private var cancellables = Set<AnyCancellable>()
     @State private var articleViewMode: ArticleContentRenderer.ViewMode = .reader
     @Environment(\.colorScheme) var colorScheme
@@ -8395,6 +9062,7 @@ struct ArticleDetailView: View {
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
     @State private var showSelectionAskAISheet = false
+    @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
 #if os(iOS)
     @State private var audioPlayerQA: AVAudioPlayer?
     @State private var localSpeechSynthQA: AVSpeechSynthesizer?
@@ -8413,14 +9081,25 @@ struct ArticleDetailView: View {
     #endif
     
 #if os(iOS)
-// iPhone-only: bottom action bar visibility controller (always visible now)
+// iPhone-only: bottom action bar visibility controller.
 @State private var showActionBar: Bool = true
+@State private var actionBarRestoreWorkItem: DispatchWorkItem?
+@State private var lastActionBarScrollOffset: CGFloat?
 #endif
-
+    @State private var articleReaderScrollToTopTrigger: Int = 0
     private let articleTopAnchor = "articleDetailTopAnchor"
+    private let articleQAAnchor = "articleDetailQAAnchor"
+    #if os(iOS)
+    private let articleScrollCoordinateSpace = "articleDetailScrollCoordinateSpace"
+    private let actionBarRestoreDelay: TimeInterval = 0.75
+    #endif
+
+    init(isReadingChromeHidden: Binding<Bool> = .constant(false)) {
+        self._isReadingChromeHidden = isReadingChromeHidden
+    }
 
     private var detailBackground: Color {
-        colorScheme == .dark ? .black : AppColors.background
+        colorScheme == .dark ? Color(red: 0.02, green: 0.025, blue: 0.04) : AppColors.background
     }
 
     private var articleDetailTitleSize: CGFloat {
@@ -8439,25 +9118,41 @@ struct ArticleDetailView: View {
         #endif
     }
 
+    private var usesPhoneArticleLayout: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
+    private var shouldShowArticleLanguageChip: Bool {
+        #if os(iOS)
+        return !usesPhoneArticleLayout
+        #else
+        return true
+        #endif
+    }
+
     private var articleHeaderHorizontalPadding: CGFloat {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone ? 0 : 24
+        return usesPhoneArticleLayout ? 18 : 32
         #else
-        return 24
+        return 32
         #endif
     }
 
     private var articleContentHorizontalPadding: CGFloat {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone ? 0 : 4
+        return usesPhoneArticleLayout ? 12 : 28
         #else
-        return 4
+        return 28
         #endif
     }
 
     private var articleCardOuterHorizontalPadding: CGFloat {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone ? 0 : 16
+        return usesPhoneArticleLayout ? 0 : 16
         #else
         return 16
         #endif
@@ -8465,9 +9160,9 @@ struct ArticleDetailView: View {
 
     private var articleTopSpacerHeight: CGFloat {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone ? 16 : 110
+        return usesPhoneArticleLayout ? 56 : 76
         #else
-        return 110
+        return 72
         #endif
     }
 
@@ -8498,12 +9193,18 @@ struct ArticleDetailView: View {
                 .onAppear {
                     configureArticleDetailAppearance(for: article)
                 }
+                .onChange(of: article.id) { _ in
+                    resetArticleReadingChrome()
+                }
+                .onDisappear {
+                    resetArticleReadingChrome()
+                }
         }
     }
 
     private func articleScene(article: Article, proxy: ScrollViewProxy) -> some View {
         ZStack {
-            detailBackground
+            articleDetailBackground
                 .ignoresSafeArea()
 
             articleScrollContent(article: article)
@@ -8518,9 +9219,31 @@ struct ArticleDetailView: View {
                 Spacer()
             }
         }
-        .overlay(alignment: .bottom) { phoneBottomActionBar(proxy: proxy) }
+        #if os(iOS)
+        .safeAreaInset(edge: .bottom) {
+            if usesPhoneArticleLayout && !isReadingChromeHidden {
+                phoneBottomActionBar(proxy: proxy)
+                    .transition(.articleChromeContinuity(edge: .bottom))
+                    .zIndex(10_000)
+            }
+        }
+        #endif
         .overlay { phoneFloatingStatusOverlay() }
-        .overlay(alignment: .bottomTrailing) { scrollToTopOverlay(proxy: proxy) }
+        .overlay(alignment: .bottomTrailing) {
+            if !isReadingChromeHidden {
+                scrollToTopOverlay(proxy: proxy)
+                    .transition(.articleChromeContinuity(edge: .bottom))
+            }
+        }
+        .askAILoadingOverlay(isAskingSelectionAI)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                revealArticleReadingChrome()
+            }
+        )
+        .onChange(of: qaState.showQAInterface) { isVisible in
+            scrollToArticleQAIfNeeded(isVisible: isVisible, proxy: proxy)
+        }
         .sheet(isPresented: $showSelectionAskAISheet) {
             AskAIResponseSheet(
                 question: selectionAskAIPrompt,
@@ -8534,6 +9257,137 @@ struct ArticleDetailView: View {
         }
     }
 
+    private var articleDetailBackground: some View {
+        ZStack {
+            detailBackground
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(colorScheme == .dark ? 0.05 : 0.35),
+                    Color.clear,
+                    Color.black.opacity(colorScheme == .dark ? 0.18 : 0.04)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    private func scrollToArticleQAIfNeeded(isVisible: Bool, proxy: ScrollViewProxy) {
+        guard isVisible else { return }
+
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut) {
+                proxy.scrollTo(articleQAAnchor, anchor: UnitPoint(x: 0.5, y: 0.35))
+            }
+        }
+    }
+
+    private func scrollArticleToTop(proxy: ScrollViewProxy) {
+        print("⬆️ Article bottom toolbar scroll-to-top tapped")
+        #if os(iOS)
+        if usesPhoneArticleLayout {
+            articleReaderScrollToTopTrigger += 1
+            NotificationCenter.default.post(name: .articleReaderScrollToTopRequested, object: nil)
+            ArticleScrollToTopController.shared.scrollToTop()
+            resetPhoneActionBarVisibility()
+        }
+        #endif
+
+        withAnimation(.easeInOut) {
+            proxy.scrollTo(articleTopAnchor, anchor: .top)
+        }
+    }
+
+    private func noteArticleTextScrollActivity() {
+        articleChromeRestoreWorkItem?.cancel()
+
+        if !isReadingChromeHidden {
+            isReadingChromeHidden = true
+        }
+
+        let restoreWorkItem = DispatchWorkItem {
+            withAnimation(articleChromeContinuityAnimation) {
+                isReadingChromeHidden = false
+            }
+        }
+        articleChromeRestoreWorkItem = restoreWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: restoreWorkItem)
+    }
+
+    private func revealArticleReadingChrome() {
+        guard isReadingChromeHidden else { return }
+
+        articleChromeRestoreWorkItem?.cancel()
+        articleChromeRestoreWorkItem = nil
+
+        withAnimation(articleChromeContinuityAnimation) {
+            isReadingChromeHidden = false
+        }
+    }
+
+    private func resetArticleReadingChrome() {
+        articleChromeRestoreWorkItem?.cancel()
+        articleChromeRestoreWorkItem = nil
+        isReadingChromeHidden = false
+        #if os(iOS)
+        resetPhoneActionBarVisibility()
+        #endif
+    }
+
+    #if os(iOS)
+    private func handlePhoneArticleScrollOffsetChange(_ offset: CGFloat) {
+        guard usesPhoneArticleLayout else { return }
+
+        guard let previousOffset = lastActionBarScrollOffset else {
+            lastActionBarScrollOffset = offset
+            return
+        }
+
+        guard abs(offset - previousOffset) > 0.5 else { return }
+        lastActionBarScrollOffset = offset
+        notePhoneActionBarScrollActivity()
+    }
+
+    private func notePhoneActionBarScrollActivity() {
+        guard usesPhoneArticleLayout else { return }
+
+        actionBarRestoreWorkItem?.cancel()
+
+        if showActionBar {
+            withAnimation(.easeOut(duration: 0.12)) {
+                showActionBar = false
+            }
+        }
+
+        let restoreWorkItem = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showActionBar = true
+            }
+        }
+
+        actionBarRestoreWorkItem = restoreWorkItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + actionBarRestoreDelay, execute: restoreWorkItem)
+    }
+
+    private func resetPhoneActionBarVisibility() {
+        actionBarRestoreWorkItem?.cancel()
+        actionBarRestoreWorkItem = nil
+        lastActionBarScrollOffset = nil
+        showActionBar = true
+    }
+
+    private var phoneArticleScrollOffsetReader: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: ArticleDetailScrollOffsetPreferenceKey.self,
+                value: geometry.frame(in: .named(articleScrollCoordinateSpace)).minY
+            )
+        }
+    }
+    #else
+    private func notePhoneActionBarScrollActivity() {}
+    #endif
+
     private var emptyArticlePlaceholder: some View {
         Text("Select an article to read")
             .font(.title)
@@ -8544,7 +9398,7 @@ struct ArticleDetailView: View {
     @ViewBuilder
     private func scrollToTopOverlay(proxy: ScrollViewProxy) -> some View {
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom != .phone {
+        if !usesPhoneArticleLayout {
             Button(action: {
                 withAnimation(.easeInOut) {
                     proxy.scrollTo(articleTopAnchor, anchor: .top)
@@ -8563,6 +9417,7 @@ struct ArticleDetailView: View {
     }
 
     private func configureArticleDetailAppearance(for article: Article) {
+        resetArticleReadingChrome()
         articleViewMode = .reader
         if appState.selectedArticleId != article.id || appState.selectedArticle?.id != article.id {
             appState.setSelectedArticle(article)
@@ -8593,20 +9448,33 @@ struct ArticleDetailView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear
-                    .frame(height: 0)
+                    .frame(height: usesPhoneArticleLayout ? 1 : 0)
                     .id(articleTopAnchor)
+                    #if os(iOS)
+                    .background(phoneArticleScrollOffsetReader)
+                    #endif
 
                 Spacer()
-                    .frame(height: articleTopSpacerHeight)
+                    .frame(height: isReadingChromeHidden ? 0 : articleTopSpacerHeight)
 
-                articleHeader(article: article)
-                articleSummaryAndQASection(article: article)
+                if !isReadingChromeHidden {
+                    VStack(alignment: .leading, spacing: 0) {
+                        articleHeader(article: article)
+                        articleSummaryAndQASection(article: article)
+                    }
+                    .transition(.articleChromeContinuity(edge: .top))
+                }
 
                 ArticleContentRenderer(
                     content: contentToRender,
                     baseURL: article.url,
                     prefersCompactTitleSizing: usesCompactTitleSizing,
-                    viewMode: $articleViewMode
+                    viewMode: $articleViewMode,
+                    isReadingChromeHidden: isReadingChromeHidden,
+                    scrollToTopTrigger: articleReaderScrollToTopTrigger,
+                    onPhoneScrollActivity: notePhoneActionBarScrollActivity,
+                    onArticleTextScroll: noteArticleTextScrollActivity,
+                    onArticleTextTap: revealArticleReadingChrome
                 )
                 .padding(.top, 8)
                 .padding(.horizontal, articleContentHorizontalPadding)
@@ -8614,8 +9482,12 @@ struct ArticleDetailView: View {
                 Spacer()
                     .frame(height: 40)
 
-                articleFooter(article: article)
+                if !isReadingChromeHidden {
+                    articleFooter(article: article)
+                        .transition(.articleChromeContinuity(edge: .bottom))
+                }
             }
+            .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
             #if os(iOS)
             .padding(.horizontal, articleCardOuterHorizontalPadding)
             .padding(.bottom, 20)
@@ -8625,44 +9497,189 @@ struct ArticleDetailView: View {
             .padding(.bottom, 20)
             #endif
         }
+        #if os(iOS)
+        .coordinateSpace(name: articleScrollCoordinateSpace)
+        .background(ArticleOuterScrollViewResolver().frame(width: 0, height: 0))
+        .onPreferenceChange(ArticleDetailScrollOffsetPreferenceKey.self, perform: handlePhoneArticleScrollOffsetChange)
+        #endif
     }
 
     private func articleHeader(article: Article) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                if let url = article.url, let host = url.host {
-                    DomainIconView(domain: host, size: 16)
-                }
-                Text(article.feedTitle)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-
-                if let author = article.author, !author.isEmpty {
-                    Text("–")
-                        .foregroundColor(.secondary)
-                    Text(author)
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Text(formattedDate(article.publishDate))
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, articleHeaderHorizontalPadding)
-            .padding(.top, 24)
-            .padding(.bottom, 16)
-
+        VStack(alignment: .leading, spacing: 18) {
+            articleMetadataCard(article: article)
             if articleViewMode == .rss {
                 Text(article.title)
                     .font(.system(size: articleDetailTitleSize, weight: .bold))
                     .lineSpacing(0)
-                    .padding(.horizontal, articleHeaderHorizontalPadding)
-                    .padding(.bottom, 30)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 36)
+                    .padding(.top, 8)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(articlePanelBackground(cornerRadius: 24))
             }
         }
+        .padding(.horizontal, articleHeaderHorizontalPadding)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    private func articleMetadataCard(article: Article) -> some View {
+        Group {
+            if usesPhoneArticleLayout {
+                HStack(alignment: .top, spacing: 0) {
+                    articleMetadataCompactItem(
+                        icon: "clock.fill",
+                        title: article.feedTitle,
+                        subtitle: "Source",
+                        accent: .blue
+                    )
+
+                    articleMetadataCompactItem(
+                        icon: "person",
+                        title: normalizedArticleAuthor(article),
+                        subtitle: "Author",
+                        accent: .secondary
+                    )
+
+                    articleMetadataCompactItem(
+                        icon: "calendar",
+                        title: formattedDate(article.publishDate),
+                        subtitle: "Published",
+                        accent: .secondary
+                    )
+                }
+            } else {
+                HStack(spacing: 0) {
+                    articleMetadataItem(
+                        icon: "clock.fill",
+                        title: article.feedTitle,
+                        subtitle: "Source",
+                        accent: .blue
+                    )
+
+                    articleMetadataDivider()
+
+                    articleMetadataItem(
+                        icon: "person",
+                        title: normalizedArticleAuthor(article),
+                        subtitle: "Author",
+                        accent: .secondary
+                    )
+
+                    articleMetadataDivider()
+
+                    articleMetadataItem(
+                        icon: "calendar",
+                        title: formattedDate(article.publishDate),
+                        subtitle: "Published",
+                        accent: .secondary
+                    )
+
+                    Spacer(minLength: 18)
+
+                    if shouldShowArticleLanguageChip {
+                        articleLanguageChip
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, usesPhoneArticleLayout ? 16 : 18)
+        .padding(.vertical, usesPhoneArticleLayout ? 16 : 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(articlePanelBackground(cornerRadius: 22))
+    }
+
+    private var articleLanguageChip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "globe")
+                .font(.caption.weight(.semibold))
+            Text("English")
+                .font(.caption.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(articleSoftFill, in: Capsule())
+    }
+
+    private func articleMetadataCompactItem(icon: String, title: String, subtitle: String, accent: Color) -> some View {
+        VStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(accent)
+                .frame(width: 36, height: 36)
+                .background(articleSoftFill, in: Circle())
+
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func articleMetadataItem(icon: String, title: String, subtitle: String, accent: Color) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(accent)
+                .frame(width: 38, height: 38)
+                .background(articleSoftFill, in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func articleMetadataDivider() -> some View {
+        Rectangle()
+            .fill(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.24))
+            .frame(width: 1, height: 48)
+            .padding(.horizontal, 18)
+    }
+
+    private func normalizedArticleAuthor(_ article: Article) -> String {
+        let trimmed = article.author?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Unknown" : trimmed
+    }
+
+    private func articlePanelBackground(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(articlePanelFill)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.35), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 10, x: 0, y: 6)
+    }
+
+    private var articlePanelFill: Color {
+        colorScheme == .dark ? Color.white.opacity(0.095) : Color.white.opacity(0.72)
+    }
+
+    private var articleSoftFill: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.05)
     }
 
     private func articleSummaryAndQASection(article: Article) -> some View {
@@ -8675,24 +9692,15 @@ struct ArticleDetailView: View {
 
     @ViewBuilder
     private func summarySection(article: Article) -> some View {
-        if appState.isLoading && article.summary == nil {
+        if appState.isSummarizingArticle(article) && article.summary == nil {
             VStack(spacing: 16) {
                 HStack {
                     Text("Summary")
                         .font(.headline)
                     Spacer()
-                    if shouldShowExplicitWebAIControls {
-                        Button {
-                            appState.requestWebSummary(for: article)
-                        } label: {
-                            Image(systemName: "globe")
-                        }
-                        .buttonStyle(LiquidGlassButtonStyle())
-                        .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
-                    }
                 }
                 let streamText = appState.mlxStreamingText
-                if appState.settings.selectedSummaryProvider == .mlxLocal && !streamText.isEmpty {
+                if (appState.settings.selectedSummaryProvider == .appleLocal || appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !streamText.isEmpty {
                     ScrollView {
                         Text(streamText)
                             .font(.body)
@@ -8723,15 +9731,6 @@ struct ArticleDetailView: View {
                     Text("Summary")
                         .font(.headline)
                     Spacer()
-                    if shouldShowExplicitWebAIControls {
-                        Button {
-                            appState.requestWebSummary(for: article)
-                        } label: {
-                            Image(systemName: "globe")
-                        }
-                        .buttonStyle(LiquidGlassButtonStyle())
-                        .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
-                    }
                 }
                 VStack(spacing: 8) {
                     ProgressView()
@@ -8751,15 +9750,6 @@ struct ArticleDetailView: View {
                     Text("Summary")
                         .font(.headline)
                     Spacer()
-                    if shouldShowExplicitWebAIControls {
-                        Button {
-                            appState.requestWebSummary(for: article)
-                        } label: {
-                            Image(systemName: "globe")
-                        }
-                        .buttonStyle(LiquidGlassButtonStyle())
-                        .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
-                    }
                 }
                 ArticleGlassySummary(
                     summary: summary,
@@ -8779,81 +9769,169 @@ struct ArticleDetailView: View {
             }
             .padding(.bottom, 16)
         } else {
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    Button {
-                        appState.requestSummary(for: article)
-                    } label: {
-                        Label("Summarize Article", systemImage: "text.bubble")
-                    }
-                    .buttonStyle(LiquidGlassButtonStyle())
-                    .help("Generate article summary with \(appState.settings.selectedSummaryProvider.displayName)")
-
-                    if shouldShowExplicitWebAIControls {
-                        Button {
-                            appState.requestWebSummary(for: article)
-                        } label: {
-                            Image(systemName: "globe")
-                                .font(.subheadline)
-                        }
-                        .buttonStyle(LiquidGlassButtonStyle())
-                        .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.bottom, 16)
+            EmptyView()
         }
     }
 
     @ViewBuilder
     private func qaSection(article: Article) -> some View {
         if qaState.showQAInterface {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Ask a question about this article:")
-                    .font(.headline)
-
-                qaInputField(article: article)
-                qaActionRow(article: article)
+            VStack(alignment: .leading, spacing: 18) {
+                qaSectionHeader(article: article)
+                qaPromptField(article: article)
+                    .id(articleQAAnchor)
                 qaAnswerContent()
                 if !qaAnswerUnavailable {
                     qaUtilityButtons()
                 }
                 qaStatusIndicators()
             }
-            .padding()
-            .modifier(QuestionAnswerGlassModifier())
+            .padding(24)
+            .background(qaCardBackground)
             .padding(.bottom, 16)
         }
     }
 
-    @ViewBuilder
-    private func qaInputField(article: Article) -> some View {
-        if #available(iOS 26.0, *) {
-            TextField("Type your question...", text: $qaState.questionText)
-                .textFieldStyle(LiquidGlassTextFieldStyle())
-                .disabled(qaState.isProcessingQuestion)
-                .onSubmit {
-                    if !qaState.questionText.isEmpty && !qaState.isProcessingQuestion {
-                        askQuestion(article: article)
+    private func qaSectionHeader(article: Article) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.blue.opacity(0.92),
+                                Color.blue.opacity(0.46)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: Color.blue.opacity(0.36), radius: 12, x: 0, y: 0)
+
+                Image(systemName: "sparkles")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Ask a question about this article")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text("Get quick answers based on the article's content.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                if shouldShowExplicitWebAIControls {
+                    qaHeaderActionButton(
+                        systemName: "globe",
+                        accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+                        isDisabled: qaState.questionText.isEmpty || qaState.isProcessingQuestion
+                    ) {
+                        askWebQuestion(article: article)
                     }
                 }
-                .onAppear {
-                    print("📱 ArticleDetailView: Q&A interface appeared")
+
+                qaHeaderActionButton(systemName: "xmark", accessibilityLabel: "Cancel") {
+                    qaState.showQAInterface = false
+                    qaState.questionText = ""
+                    qaState.answerText = "Ask a question about this article..."
+                    print("📱 ArticleDetailView: Q&A interface canceled by user")
                 }
-        } else {
-            TextField("Type your question...", text: $qaState.questionText)
-                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(cornerRadius: 12, tintColor: .blue.opacity(0.3)))
-                .disabled(qaState.isProcessingQuestion)
-                .onSubmit {
-                    if !qaState.questionText.isEmpty && !qaState.isProcessingQuestion {
-                        askQuestion(article: article)
-                    }
-                }
-                .onAppear {
-                    print("📱 ArticleDetailView: Q&A interface appeared")
-                }
+            }
         }
+    }
+
+    private func qaPromptField(article: Article) -> some View {
+        HStack(spacing: 12) {
+            qaInputField(article: article)
+
+            Button(action: {
+                if !qaState.questionText.isEmpty {
+                    askQuestion(article: article)
+                }
+            }) {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(Circle().fill(Color.blue))
+                    .shadow(color: Color.blue.opacity(0.45), radius: 10, x: 0, y: 0)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Ask")
+            .disabled(qaState.questionText.isEmpty || qaState.isProcessingQuestion)
+            .opacity(qaState.questionText.isEmpty || qaState.isProcessingQuestion ? 0.45 : 1)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.blue.opacity(0.88), lineWidth: 1.2)
+        )
+        .shadow(color: Color.blue.opacity(colorScheme == .dark ? 0.22 : 0.12), radius: 10, x: 0, y: 0)
+    }
+
+    private func qaInputField(article: Article) -> some View {
+        TextField("Type your question...", text: $qaState.questionText)
+            .textFieldStyle(PlainTextFieldStyle())
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(.primary)
+            .submitLabel(.send)
+            .disabled(qaState.isProcessingQuestion)
+            .onSubmit {
+                if !qaState.questionText.isEmpty && !qaState.isProcessingQuestion {
+                    askQuestion(article: article)
+                }
+            }
+            .onAppear {
+                print("📱 ArticleDetailView: Q&A interface appeared")
+            }
+    }
+
+    private func qaHeaderActionButton(
+        systemName: String,
+        accessibilityLabel: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isDisabled ? Color.secondary : Color.blue)
+                .frame(width: 40, height: 34)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.035))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.blue.opacity(isDisabled ? 0.16 : 0.32), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1)
+    }
+
+    private var qaCardBackground: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .fill(articlePanelFill)
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.blue.opacity(colorScheme == .dark ? 0.28 : 0.24), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 12, x: 0, y: 8)
     }
 
     private func qaActionRow(article: Article) -> some View {
@@ -8902,7 +9980,7 @@ struct ArticleDetailView: View {
     private func qaAnswerContent() -> some View {
         if qaState.isProcessingQuestion {
             let qaStreamText = appState.mlxStreamingText
-            if appState.settings.selectedSummaryProvider == .mlxLocal && !qaStreamText.isEmpty {
+            if (appState.settings.selectedSummaryProvider == .appleLocal || appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !qaStreamText.isEmpty {
                 Text(qaStreamText)
                     .font(.body)
                     .foregroundColor(.primary)
@@ -9024,7 +10102,7 @@ struct ArticleDetailView: View {
         }
 
         let qaProvider = appState.settings.selectedSummaryProvider
-        if (qaProvider == .mlxLocal || qaProvider == .appleLocal || qaProvider == .summarizeDaemon),
+        if (qaProvider == .mlxLocal || qaProvider == .coreAIMLXLocal || qaProvider == .appleLocal || qaProvider == .applePCCGateway || qaProvider == .summarizeDaemon),
            !appState.mlxLastQAThroughput.isEmpty,
            !qaState.isProcessingQuestion,
            !qaAnswerUnavailable {
@@ -9051,7 +10129,13 @@ struct ArticleDetailView: View {
 
     private func runSelectionAskAI(selectedText: String, context: String, useWebPath: Bool) {
         guard !isAskingSelectionAI else { return }
-        let prompt = buildAskAISelectionPrompt(selectedText: selectedText, extractedContext: context)
+        let sourceContext = appState.selectedArticle.map { appState.articleSelectionSourceContext(for: $0) }
+        let prompt = buildAskAISelectionPrompt(
+            selectedText: selectedText,
+            extractedContext: context,
+            sourceContext: sourceContext?.text ?? "",
+            sourceLabel: sourceContext?.label ?? ""
+        )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
@@ -9060,7 +10144,7 @@ struct ArticleDetailView: View {
 
         let finish: (String) -> Void = { answer in
             DispatchQueue.main.async {
-                self.selectionAskAIResponse = cleanMarkdownArtifactsForDisplay(answer)
+                self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
             }
@@ -9104,17 +10188,24 @@ struct ArticleDetailView: View {
     @ViewBuilder
     private func phoneBottomActionBar(proxy: ScrollViewProxy) -> some View {
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if usesPhoneArticleLayout {
             HStack(spacing: 16) {
-                Button(action: {
-                    withAnimation(.easeInOut) {
-                        proxy.scrollTo(articleTopAnchor, anchor: .top)
-                    }
-                }) {
+                Button {
+                    scrollArticleToTop(proxy: proxy)
+                } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 64, height: 52)
                 }
-                .buttonStyle(LiquidGlassButtonStyle())
+                .buttonStyle(.plain)
+                .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .stroke(Color.white.opacity(0.46), lineWidth: 1)
+                )
+                .accessibilityLabel("Scroll to top")
 
                 Button(action: {
                     if let article = appState.selectedArticle {
@@ -9160,6 +10251,8 @@ struct ArticleDetailView: View {
             .padding(.bottom, 18)
             .frame(maxWidth: .infinity)
             .opacity(showActionBar ? 1 : 0)
+            .allowsHitTesting(showActionBar)
+            .accessibilityHidden(!showActionBar)
             .animation(.easeInOut(duration: 0.2), value: showActionBar)
         }
         #else
@@ -9170,9 +10263,11 @@ struct ArticleDetailView: View {
     @ViewBuilder
     private func phoneFloatingStatusOverlay() -> some View {
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if usesPhoneArticleLayout {
             ZStack {
-                if appState.isLoading && appState.selectedArticle?.summary == nil {
+                if let article = appState.selectedArticle,
+                   appState.isSummarizingArticle(article),
+                   article.summary == nil {
                     floatingStatusPill(text: "Summarizing article...")
                 }
 
@@ -9216,7 +10311,7 @@ struct ArticleDetailView: View {
 
         // Use AppState's askQuestionAboutArticle which handles both Gemini and Apple Intelligence
         appState.askQuestionAboutArticle(article: article, question: qaState.questionText) { answer in
-            self.qaState.answerText = cleanMarkdownArtifactsForDisplay(answer)
+            self.qaState.answerText = formatAskAIResponseForDisplay(answer)
             self.qaState.isProcessingQuestion = false
             // Update previous question for next time
             self.qaState.previousQuestionText = self.qaState.questionText
@@ -9233,7 +10328,7 @@ struct ArticleDetailView: View {
         qaState.answerText = "Thinking..."
 
         appState.askWebQuestionAboutArticle(article: article, question: qaState.questionText) { answer in
-            self.qaState.answerText = cleanMarkdownArtifactsForDisplay(answer)
+            self.qaState.answerText = formatAskAIResponseForDisplay(answer)
             self.qaState.isProcessingQuestion = false
             self.qaState.previousQuestionText = self.qaState.questionText
             print("📱 ArticleDetailView: Got WebAI answer, updating UI")
@@ -9771,11 +10866,37 @@ enum ReaderContentElement {
     case image(String)
 }
 
+private struct ArticleReaderPanelModifier: ViewModifier {
+    let colorScheme: ColorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .background(colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.74))
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.36), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 10, x: 0, y: 6)
+    }
+}
+
+private extension View {
+    func articleReaderPanel(colorScheme: ColorScheme) -> some View {
+        modifier(ArticleReaderPanelModifier(colorScheme: colorScheme))
+    }
+}
+
 struct ArticleContentRenderer: View {
     let content: String
     let baseURL: URL?
     let prefersCompactTitleSizing: Bool
     @Binding var viewMode: ViewMode
+    let isReadingChromeHidden: Bool
+    let scrollToTopTrigger: Int
+    let onPhoneScrollActivity: () -> Void
+    let onArticleTextScroll: () -> Void
+    let onArticleTextTap: () -> Void
 
     enum ViewMode: String, CaseIterable {
         case reader = "Reader"
@@ -9786,6 +10907,17 @@ struct ArticleContentRenderer: View {
     @State private var isLoadingReader: Bool = false
     @State private var readerModeAvailable: Bool = true
     @Environment(\.colorScheme) private var colorScheme
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    private var usesPhoneArticleLayout: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
 
     /// Check if we have a valid article URL to load in reader mode
     private var hasArticleURL: Bool {
@@ -9796,94 +10928,15 @@ struct ArticleContentRenderer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Toggle buttons for Reader vs RSS mode
-            HStack(spacing: 12) {
-                Text("View Mode:")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.secondary)
-
-                // Reader mode button - only enabled if we have a valid URL
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        viewMode = .reader
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.plaintext")
-                            .renderingMode(.template)
-                            .foregroundStyle(buttonTextColor(isActive: viewMode == .reader))
-                            .foregroundColor(buttonTextColor(isActive: viewMode == .reader))
-                        Text("Reader")
-                            .foregroundStyle(buttonTextColor(isActive: viewMode == .reader))
-                            .foregroundColor(buttonTextColor(isActive: viewMode == .reader))
-                    }
-                    .font(.system(size: 13, weight: viewMode == .reader ? .semibold : .medium))
-                }
-                .buttonStyle(LiquidGlassButtonStyle(isProminent: viewMode == .reader))
-                .disabled(!hasArticleURL)
-                .opacity(hasArticleURL ? 1.0 : 0.5)
-
-                // RSS content mode button
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        viewMode = .rss
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.text")
-                            .renderingMode(.template)
-                            .foregroundStyle(buttonTextColor(isActive: viewMode == .rss))
-                            .foregroundColor(buttonTextColor(isActive: viewMode == .rss))
-                        Text("RSS")
-                            .foregroundStyle(buttonTextColor(isActive: viewMode == .rss))
-                            .foregroundColor(buttonTextColor(isActive: viewMode == .rss))
-                    }
-                    .font(.system(size: 13, weight: viewMode == .rss ? .semibold : .medium))
-                }
-                .buttonStyle(LiquidGlassButtonStyle(isProminent: viewMode == .rss))
-
-                Spacer()
-
-                // Loading indicator for reader mode
-                if isLoadingReader && viewMode == .reader {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                }
+            if !isReadingChromeHidden {
+                articleModeControl
+                    .padding(.bottom, 12)
+                .transition(.articleChromeContinuity(edge: .top))
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(
-                Color.black.opacity(0.05)
-                    .overlay(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.1), Color.clear],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            )
 
-            Divider()
-
-            // Conditional content based on mode
-            if viewMode == .reader && hasArticleURL {
-                // Reader mode - load article URL and apply Readability.js
-                // Give explicit height since we're inside a parent ScrollView
-                ArticleReaderWebView(
-                    articleURL: baseURL!,
-                    isLoading: $isLoadingReader,
-                    readerModeAvailable: $readerModeAvailable,
-                    useCompactTitleSizing: prefersCompactTitleSizing
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: currentPlatformScreenHeight() - 200)
-            } else {
-                // RSS mode - show RSS content in WebView
-                HTMLWebView(htmlContent: enhanceHTML(content), baseURL: baseURL, contentHeight: $contentHeight)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: max(contentHeight, 200))
-            }
+            articleContentPanel
         }
+        .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: content) { _ in
             if viewMode == .rss {
@@ -9895,6 +10948,102 @@ struct ArticleContentRenderer: View {
             if !hasArticleURL {
                 viewMode = .rss
             }
+        }
+    }
+
+    private var articleModeControl: some View {
+        HStack {
+            Spacer(minLength: 0)
+
+            HStack(spacing: 0) {
+                articleModeButton(.reader, icon: "doc.plaintext")
+                    .disabled(!hasArticleURL)
+                    .opacity(hasArticleURL ? 1.0 : 0.45)
+
+                articleModeButton(.rss, icon: "dot.radiowaves.left.and.right")
+            }
+            .padding(4)
+            .frame(maxWidth: 420)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.28), lineWidth: 1)
+                    )
+            )
+
+            if !usesPhoneArticleLayout {
+                Color.clear
+                    .frame(width: 28, height: 1)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func articleModeButton(_ mode: ViewMode, icon: String) -> some View {
+        let isActive = viewMode == mode
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                viewMode = mode
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(mode.rawValue)
+                    .font(.system(size: 14, weight: isActive ? .semibold : .medium))
+            }
+            .foregroundStyle(isActive ? Color.white : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background {
+                if isActive {
+                    Capsule(style: .continuous)
+                        .fill(Color.blue.opacity(0.72))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Color.blue.opacity(0.95), lineWidth: 1)
+                        )
+                        .shadow(color: Color.blue.opacity(0.50), radius: 12, x: 0, y: 0)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var articleContentPanel: some View {
+        if viewMode == .reader && hasArticleURL {
+            ArticleReaderWebView(
+                articleURL: baseURL!,
+                isLoading: $isLoadingReader,
+                readerModeAvailable: $readerModeAvailable,
+                useCompactTitleSizing: prefersCompactTitleSizing,
+                scrollToTopTrigger: scrollToTopTrigger,
+                onScrollActivity: onPhoneScrollActivity
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: isReadingChromeHidden ? currentPlatformScreenHeight() : currentPlatformScreenHeight() - 200)
+            .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
+        } else {
+            HTMLWebView(htmlContent: enhanceHTML(content), baseURL: baseURL, contentHeight: $contentHeight)
+                .frame(maxWidth: .infinity)
+                .frame(height: max(contentHeight, 200))
+                .articleReaderPanel(colorScheme: colorScheme)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { _ in
+                            onArticleTextScroll()
+                        }
+                )
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        onArticleTextTap()
+                    }
+                )
         }
     }
 
@@ -10671,9 +11820,11 @@ struct ArticleReaderWebView: NSViewRepresentable {
     @Binding var isLoading: Bool
     @Binding var readerModeAvailable: Bool
     let useCompactTitleSizing: Bool
+    let scrollToTopTrigger: Int
+    let onScrollActivity: () -> Void
 
     private static func conceal(_ webView: WKWebView) {
-        webView.alphaValue = 0
+        webView.alphaValue = 1
     }
 
     private static func reveal(_ webView: WKWebView) {
@@ -10682,6 +11833,10 @@ struct ArticleReaderWebView: NSViewRepresentable {
             context.duration = 0.15
             webView.animator().alphaValue = 1
         }
+    }
+
+    private static func scrollToTop(_ webView: WKWebView) {
+        webView.evaluateJavaScript("window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });", completionHandler: nil)
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -10701,6 +11856,8 @@ struct ArticleReaderWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
+        context.coordinator.parent = self
+
         if context.coordinator.currentURL != articleURL || context.coordinator.currentUseCompactTitleSizing != useCompactTitleSizing {
             context.coordinator.currentURL = articleURL
             context.coordinator.currentUseCompactTitleSizing = useCompactTitleSizing
@@ -10716,6 +11873,13 @@ struct ArticleReaderWebView: NSViewRepresentable {
             print("📖 ArticleReaderWebView: Loading URL \(articleURL)")
             nsView.load(request)
         }
+
+        if context.coordinator.currentScrollToTopTrigger != scrollToTopTrigger {
+            context.coordinator.currentScrollToTopTrigger = scrollToTopTrigger
+            if scrollToTopTrigger > 0 {
+                Self.scrollToTop(nsView)
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -10730,6 +11894,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
         var pageLoaded: Bool = false
         var readerModeAttempt: Int = 0
         var pendingReaderModeRetry: DispatchWorkItem?
+        var currentScrollToTopTrigger: Int = 0
 
         init(_ parent: ArticleReaderWebView) {
             self.parent = parent
@@ -10883,9 +12048,11 @@ struct ArticleReaderWebView: UIViewRepresentable {
     @Binding var isLoading: Bool
     @Binding var readerModeAvailable: Bool
     let useCompactTitleSizing: Bool
+    let scrollToTopTrigger: Int
+    let onScrollActivity: () -> Void
 
     private static func conceal(_ webView: WKWebView) {
-        webView.alpha = 0
+        webView.alpha = 1
     }
 
     private static func reveal(_ webView: WKWebView) {
@@ -10895,12 +12062,24 @@ struct ArticleReaderWebView: UIViewRepresentable {
         }
     }
 
+    private static func scrollToTop(_ webView: WKWebView) {
+        let topOffset = CGPoint(x: 0, y: -webView.scrollView.adjustedContentInset.top)
+        webView.scrollView.setContentOffset(topOffset, animated: true)
+        webView.evaluateJavaScript(
+            "document.scrollingElement.scrollTo({ top: 0, left: 0, behavior: 'smooth' }); window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });",
+            completionHandler: nil
+        )
+    }
+
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        webView.scrollView.delegate = context.coordinator
+        context.coordinator.attachScrollToTopObserver(to: webView)
+        ArticleScrollToTopController.shared.registerReaderWebView(webView)
         webView.allowsBackForwardNavigationGestures = false
 
         // Important: Don't make it transparent - let the page render normally
@@ -10920,6 +12099,10 @@ struct ArticleReaderWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.attachScrollToTopObserver(to: uiView)
+        ArticleScrollToTopController.shared.registerReaderWebView(uiView)
+
         if context.coordinator.currentURL != articleURL || context.coordinator.currentUseCompactTitleSizing != useCompactTitleSizing {
             context.coordinator.currentURL = articleURL
             context.coordinator.currentUseCompactTitleSizing = useCompactTitleSizing
@@ -10935,13 +12118,20 @@ struct ArticleReaderWebView: UIViewRepresentable {
             print("📖 ArticleReaderWebView: Loading URL \(articleURL)")
             uiView.load(request)
         }
+
+        if context.coordinator.currentScrollToTopTrigger != scrollToTopTrigger {
+            context.coordinator.currentScrollToTopTrigger = scrollToTopTrigger
+            if scrollToTopTrigger > 0 {
+                Self.scrollToTop(uiView)
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
-    class Coordinator: NSObject, WKNavigationDelegate {
+    class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         var parent: ArticleReaderWebView
         var currentURL: URL?
         var currentUseCompactTitleSizing: Bool?
@@ -10949,9 +12139,32 @@ struct ArticleReaderWebView: UIViewRepresentable {
         var pageLoaded: Bool = false
         var readerModeAttempt: Int = 0
         var pendingReaderModeRetry: DispatchWorkItem?
+        var currentScrollToTopTrigger: Int = 0
+        private weak var webView: WKWebView?
+        private var scrollToTopObserver: NSObjectProtocol?
 
         init(_ parent: ArticleReaderWebView) {
             self.parent = parent
+        }
+
+        deinit {
+            if let scrollToTopObserver {
+                NotificationCenter.default.removeObserver(scrollToTopObserver)
+            }
+        }
+
+        func attachScrollToTopObserver(to webView: WKWebView) {
+            self.webView = webView
+            guard scrollToTopObserver == nil else { return }
+
+            scrollToTopObserver = NotificationCenter.default.addObserver(
+                forName: .articleReaderScrollToTopRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let webView = self?.webView else { return }
+                ArticleReaderWebView.scrollToTop(webView)
+            }
         }
 
         func resetReaderModeState() {
@@ -11097,6 +12310,11 @@ struct ArticleReaderWebView: UIViewRepresentable {
             print("📖 ArticleReaderWebView: Scheduling reader retry in \(String(format: "%.2f", delay))s")
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             return true
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard scrollView.isDragging || scrollView.isDecelerating || scrollView.isTracking else { return }
+            parent.onScrollActivity()
         }
     }
 }
@@ -11483,7 +12701,7 @@ struct ArticleGlassySummary: View {
 
     private var throughputText: String? {
         let provider = appState.settings.selectedSummaryProvider
-        guard (provider == .mlxLocal || provider == .appleLocal || provider == .summarizeDaemon), !appState.mlxLastThroughput.isEmpty else {
+        guard (provider == .mlxLocal || provider == .coreAIMLXLocal || provider == .appleLocal || provider == .applePCCGateway || provider == .summarizeDaemon), !appState.mlxLastThroughput.isEmpty else {
             return nil
         }
         return appState.mlxLastThroughput
@@ -12015,13 +13233,133 @@ struct SidebarButtonStyle: ViewModifier {
     }
 }
 
+private struct SidebarMenuRow<Icon: View>: View {
+    let title: String
+    let unreadCount: Int?
+    let isSelected: Bool
+    let accentColor: Color
+    let selectedTextColor: Color
+    let unselectedTextColor: Color
+    let selectionGradient: LinearGradient
+    let selectionStrokeColor: Color
+    let selectionRailColor: Color
+    let countPillTextColor: Color
+    let countPillBackground: Color
+    let selectedCountPillTextColor: Color
+    let selectedCountPillBackground: Color
+    let icon: Icon
+
+    init(
+        title: String,
+        unreadCount: Int?,
+        isSelected: Bool,
+        accentColor: Color,
+        selectedTextColor: Color,
+        unselectedTextColor: Color,
+        selectionGradient: LinearGradient,
+        selectionStrokeColor: Color,
+        selectionRailColor: Color,
+        countPillTextColor: Color,
+        countPillBackground: Color,
+        selectedCountPillTextColor: Color,
+        selectedCountPillBackground: Color,
+        @ViewBuilder icon: () -> Icon
+    ) {
+        self.title = title
+        self.unreadCount = unreadCount
+        self.isSelected = isSelected
+        self.accentColor = accentColor
+        self.selectedTextColor = selectedTextColor
+        self.unselectedTextColor = unselectedTextColor
+        self.selectionGradient = selectionGradient
+        self.selectionStrokeColor = selectionStrokeColor
+        self.selectionRailColor = selectionRailColor
+        self.countPillTextColor = countPillTextColor
+        self.countPillBackground = countPillBackground
+        self.selectedCountPillTextColor = selectedCountPillTextColor
+        self.selectedCountPillBackground = selectedCountPillBackground
+        self.icon = icon()
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            icon
+                .frame(width: 28, height: 28)
+
+            Text(title)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(isSelected ? selectedTextColor : unselectedTextColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 8)
+
+            if let unreadCount, unreadCount > 0 {
+                SidebarCountPill(
+                    count: unreadCount,
+                    isSelected: isSelected,
+                    textColor: countPillTextColor,
+                    backgroundColor: countPillBackground,
+                    selectedTextColor: selectedCountPillTextColor,
+                    selectedBackgroundColor: selectedCountPillBackground
+                )
+            }
+        }
+        .frame(minHeight: 40)
+        .padding(.leading, 12)
+        .padding(.trailing, 10)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(selectionGradient)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(selectionStrokeColor, lineWidth: 1)
+                    }
+            }
+        }
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Capsule(style: .continuous)
+                    .fill(selectionRailColor)
+                    .frame(width: 3, height: 24)
+                    .padding(.leading, 4)
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct SidebarCountPill: View {
+    let count: Int
+    let isSelected: Bool
+    let textColor: Color
+    let backgroundColor: Color
+    let selectedTextColor: Color
+    let selectedBackgroundColor: Color
+
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(isSelected ? selectedTextColor : textColor)
+            .padding(.horizontal, 8)
+            .frame(minWidth: 30, minHeight: 22)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? selectedBackgroundColor : backgroundColor)
+            }
+    }
+}
+
 private struct SidebarRowChromeModifier: ViewModifier {
     let backgroundColor: Color
 
     func body(content: Content) -> some View {
         content
-            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-            .listRowBackground(backgroundColor)
+            .listRowInsets(EdgeInsets(top: 3, leading: 18, bottom: 3, trailing: 18))
+            .listRowSeparator(.hidden)
+            .listRowBackground(backgroundColor.opacity(0))
     }
 }
 
@@ -12031,14 +13369,14 @@ private struct SidebarSelectionBorderModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let borderColor: Color = isSelected
-            ? (colorScheme == .dark ? Color.black : Color.white)
+            ? Color.white.opacity(colorScheme == .dark ? 0.10 : 0.16)
             : Color.clear
 
         content
             .modifier(SidebarRowChromeModifier(backgroundColor: .clear))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(borderColor, lineWidth: isSelected ? 1.25 : 0)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(borderColor, lineWidth: isSelected ? 1 : 0)
                     .allowsHitTesting(false)
             }
     }
@@ -12179,14 +13517,23 @@ extension View {
  // Native iPhone edge-swipe back (uses UIScreenEdgePanGestureRecognizer)
 extension View {
     @ViewBuilder
-    func systemEdgeBackSwipe(perform action: @escaping () -> Void) -> some View {
+    func systemEdgeBackSwipe(bottomExclusion: CGFloat = 0, perform action: @escaping () -> Void) -> some View {
         #if os(iOS)
         self.overlay(alignment: .leading) {
-            EdgeBackSwipeRecognizer(action: action)
-                .frame(width: 72)                    // generous hot zone for reliable swipes in compact layouts
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .allowsHitTesting(true)
+            VStack(spacing: 0) {
+                EdgeBackSwipeRecognizer(action: action)
+                    .frame(width: 72)                    // generous hot zone for reliable swipes in compact layouts
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(true)
+
+                if bottomExclusion > 0 {
+                    Color.clear
+                        .frame(width: 72, height: bottomExclusion)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         #else
         self
@@ -12194,12 +13541,22 @@ extension View {
     }
     
     @ViewBuilder
-    func phoneStyleBackGestures(enabled: Bool, action: @escaping () -> Void) -> some View {
+    func phoneStyleBackGestures(
+        enabled: Bool,
+        bottomExclusion: CGFloat = 0,
+        usesSystemEdgeSwipe: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
         #if os(iOS)
         if enabled {
-            self
-                .systemEdgeBackSwipe(perform: action)
-                .enhancedSwipeBack(perform: action)
+            if usesSystemEdgeSwipe {
+                self
+                    .systemEdgeBackSwipe(bottomExclusion: bottomExclusion, perform: action)
+                    .enhancedSwipeBack(perform: action)
+            } else {
+                self
+                    .enhancedSwipeBack(perform: action)
+            }
         } else {
             self
         }

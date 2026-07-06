@@ -1,0 +1,37 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+DerivedData/
+.build-xcode/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# The sample's .xcodeproj is committed for clone-and-run convenience (regenerate
+# with `xcodegen generate` after editing project.yml). Resolved SPM checkouts
+# stay out of git.
+SourcePackages/
+
+# Model files — never commit (large; downloaded at runtime)
+*.litertlm
+*.task
+*.tflite
+*.bin
+
+# Sample test/demo assets — regenerable fixtures (Samples/LiteRTDemo/fetch-test-assets.sh)
+Samples/LiteRTDemo/Resources/*
+!Samples/LiteRTDemo/Resources/.gitkeep
+
+# Core ML / build artifacts — never commit
+*.mlmodel
+*.mlmodelc
+*.mlpackage
+
+# macOS
+.DS_Store

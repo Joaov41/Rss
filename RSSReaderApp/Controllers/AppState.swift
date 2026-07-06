@@ -25,6 +25,48 @@ private final class GeminiAggregateBackgroundContext {
 }
 #endif
 
+struct LocalModelStorageItem: Identifiable, Hashable {
+    enum Kind: String {
+        case liteRT = "LiteRT"
+        case mlx = "MLX / Hugging Face"
+    }
+
+    let id: String
+    let name: String
+    let detail: String
+    let kind: Kind
+    let sizeBytes: UInt64
+    let url: URL
+    let isCurrentSelection: Bool
+
+    var sizeText: String {
+        ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
+    }
+}
+
+struct AppStorageBreakdownItem: Identifiable, Hashable {
+    enum CleanupKind: String, Hashable {
+        case caches
+        case kingfisherImages
+        case webKit
+        case httpStorages
+        case savedApplicationState
+        case logs
+        case temporaryFiles
+    }
+
+    let id: String
+    let name: String
+    let detail: String
+    let sizeBytes: UInt64
+    let isModelStorage: Bool
+    let cleanupKind: CleanupKind?
+
+    var sizeText: String {
+        ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
+    }
+}
+
 // MARK: - Global Summary Types & Service
 struct GlobalSummaryItem: Codable, Identifiable {
     let id = UUID()
@@ -75,6 +117,12 @@ private func resolveOverallSummaryProvider(
             effectiveProvider: .appleCloud,
             localFallbackProviderName: nil
         )
+    case .applePCCGateway:
+        return OverallSummaryProviderResolution(
+            selectedProvider: provider,
+            effectiveProvider: .applePCCGateway,
+            localFallbackProviderName: nil
+        )
     case .webAI:
         return OverallSummaryProviderResolution(
             selectedProvider: provider,
@@ -97,7 +145,13 @@ private func resolveOverallSummaryProvider(
         return OverallSummaryProviderResolution(
             selectedProvider: provider,
             effectiveProvider: .gemini,
-            localFallbackProviderName: "MLX Local"
+            localFallbackProviderName: "LiteRT Local"
+        )
+    case .coreAIMLXLocal:
+        return OverallSummaryProviderResolution(
+            selectedProvider: provider,
+            effectiveProvider: .gemini,
+            localFallbackProviderName: "CoreAI MLX Local"
         )
     }
 }
@@ -138,7 +192,8 @@ final class GlobalSummaryService {
 
     private func reportThroughput(_ metrics: MLXGenerationMetrics) {
         guard metrics.tokensPerSecond > 0 else { return }
-        let label = String(format: "MLX · %.1f tok/s · %d tokens", metrics.tokensPerSecond, metrics.tokenCount)
+        let providerLabel = settingsProvider().selectedSummaryProvider == .coreAIMLXLocal ? "CoreAI MLX" : "LiteRT"
+        let label = String(format: "\(providerLabel) · %.1f tok/s · %d tokens", metrics.tokensPerSecond, metrics.tokenCount)
         throughputReporter?(label)
     }
 
@@ -150,7 +205,11 @@ final class GlobalSummaryService {
         throughputReporter?(label)
     }
     
-    func summarizeArticlesGlobally(articles: [Article], existingBackgroundTaskHandle: Any? = nil) -> AnyPublisher<GlobalSummaryResult, Never> {
+    func summarizeArticlesGlobally(
+        articles: [Article],
+        existingBackgroundTaskHandle: Any? = nil,
+        providerOverride: AppSettings.SummaryProvider? = nil
+    ) -> AnyPublisher<GlobalSummaryResult, Never> {
         let payload = articles.map { (id: $0.id, title: $0.title, excerpt: Self.firstNChars(Self.stripHTML($0.content), 5000)) }
         if payload.isEmpty || payload.allSatisfy({ $0.title.isEmpty && $0.excerpt.isEmpty }) {
             let msg = "No articles or excerpts available for summarization."
@@ -160,17 +219,13 @@ final class GlobalSummaryService {
         print("✅ GlobalSummaryService: Prepared \(payload.count) article items (title + ≤5000-char excerpt)")
 
         let settings = settingsProvider()
-        let providerResolution = resolveOverallSummaryProvider(for: settings.selectedSummaryProvider)
-        if let warning = providerResolution.fallbackNotification {
-            warningReporter?(warning)
-            print("⚠️ GlobalSummaryService: \(warning)")
-        }
+        let selectedProvider = providerOverride ?? settings.selectedSummaryProvider
 
         let prompt = buildArticlesPrompt(items: payload.map { (title: $0.title, excerpt: $0.excerpt) })
         let articleIds = payload.map { $0.id }
 
         #if os(iOS)
-        let usesGeminiBackgroundTask = (providerResolution.effectiveProvider == .gemini)
+        let usesGeminiBackgroundTask = (selectedProvider == .gemini)
         let provided = usesGeminiBackgroundTask ? (existingBackgroundTaskHandle as? GeminiBackgroundTaskHandle) : nil
         let shouldManageHandle = usesGeminiBackgroundTask && (provided == nil)
         let backgroundHandle: GeminiBackgroundTaskHandle? = usesGeminiBackgroundTask
@@ -199,7 +254,7 @@ final class GlobalSummaryService {
                     source: "articles",
                     prompt: prompt,
                     referenceIds: articleIds,
-                    provider: providerResolution.effectiveProvider,
+                    provider: selectedProvider,
                     existingBackgroundTaskHandle: backgroundHandle
                 )
             }
@@ -225,7 +280,7 @@ final class GlobalSummaryService {
             source: "articles",
             prompt: prompt,
             referenceIds: articleIds,
-            provider: providerResolution.effectiveProvider
+            provider: selectedProvider
         )
             .eraseToAnyPublisher()
         #endif
@@ -368,7 +423,12 @@ final class GlobalSummaryService {
             .eraseToAnyPublisher()
     }
 
-    func summarizeRedditGlobally(posts: [RedditPost], topComments: Int = 10, existingBackgroundTaskHandle: Any? = nil) -> AnyPublisher<GlobalSummaryResult, Never> {
+    func summarizeRedditGlobally(
+        posts: [RedditPost],
+        topComments: Int = 10,
+        existingBackgroundTaskHandle: Any? = nil,
+        providerOverride: AppSettings.SummaryProvider? = nil
+    ) -> AnyPublisher<GlobalSummaryResult, Never> {
         guard !posts.isEmpty else {
             let msg = "No Reddit posts available for summarization."
             print("❌ GlobalSummaryService: \(msg)")
@@ -376,14 +436,10 @@ final class GlobalSummaryService {
         }
 
         let settings = settingsProvider()
-        let providerResolution = resolveOverallSummaryProvider(for: settings.selectedSummaryProvider)
-        if let warning = providerResolution.fallbackNotification {
-            warningReporter?(warning)
-            print("⚠️ GlobalSummaryService: \(warning)")
-        }
+        let selectedProvider = providerOverride ?? settings.selectedSummaryProvider
 
         #if os(iOS)
-        let usesGeminiBackgroundTask = (providerResolution.effectiveProvider == .gemini)
+        let usesGeminiBackgroundTask = (selectedProvider == .gemini)
         let provided = usesGeminiBackgroundTask ? (existingBackgroundTaskHandle as? GeminiBackgroundTaskHandle) : nil
         let shouldManageHandle = usesGeminiBackgroundTask && (provided == nil)
         let backgroundHandle: GeminiBackgroundTaskHandle? = usesGeminiBackgroundTask
@@ -556,7 +612,7 @@ final class GlobalSummaryService {
                     source: "reddit",
                     prompt: prompt,
                     referenceIds: postIds,
-                    provider: providerResolution.effectiveProvider,
+                    provider: selectedProvider,
                     existingBackgroundTaskHandle: llmBackgroundHandle
                 )
                     .handleEvents(
@@ -749,6 +805,34 @@ final class GlobalSummaryService {
             }
             .eraseToAnyPublisher()
 
+        case .applePCCGateway:
+            let settings = settingsProvider()
+            print("☁️ GlobalSummaryService: Using Apple PCC Gateway for \(source) overall summary")
+            return Future<GlobalSummaryResult, Never> { promise in
+                Task(priority: .userInitiated) {
+                    do {
+                        let start = Date()
+                        let raw = try await self.summaryService.generateContentWithPCCGateway(prompt: prompt, settings: settings)
+                        let elapsed = max(0.001, Date().timeIntervalSince(start))
+                        let estimatedTokens = max(1, Int(Double(raw.split(separator: " ").count) * 1.3))
+                        let tokPerSec = Double(estimatedTokens) / elapsed
+                        self.throughputReporter?(String(format: "Apple PCC · ~%.1f tok/s · ~%d tokens", tokPerSec, estimatedTokens))
+
+                        print("📊 BATCH DEBUG: Apple PCC Gateway response length: \(raw.count) chars")
+                        print("📊 BATCH DEBUG: Apple PCC Gateway preview: \(String(raw.prefix(500)))...")
+                        let parsed = self.parseAppleCloudResponse(raw: raw, source: source, referenceIds: referenceIds)
+                        print("📊 BATCH DEBUG: Parsed \(parsed.summaries.count) summaries from Apple PCC Gateway response (expected \(expectedCount))")
+                        if parsed.summaries.count < expectedCount {
+                            print("⚠️ BATCH DEBUG: Missing \(expectedCount - parsed.summaries.count) summaries from Apple PCC Gateway output.")
+                        }
+                        promise(.success(parsed))
+                    } catch {
+                        promise(.success(GlobalSummaryResult.errorResult(source: source, message: error.localizedDescription)))
+                    }
+                }
+            }
+            .eraseToAnyPublisher()
+
         case .summarizeDaemon:
             let settings = settingsProvider()
             print("⚡ GlobalSummaryService: Using Codex / Summarize for \(source) overall summary")
@@ -777,15 +861,11 @@ final class GlobalSummaryService {
             }
             .eraseToAnyPublisher()
 
-        case .appleLocal, .mlxLocal:
-            let rerouted = resolveOverallSummaryProvider(for: provider)
-            return callLLMAndDecode(
-                source: source,
-                prompt: prompt,
-                referenceIds: referenceIds,
-                provider: rerouted.effectiveProvider,
-                existingBackgroundTaskHandle: existingBackgroundTaskHandle
-            )
+        case .appleLocal, .mlxLocal, .coreAIMLXLocal:
+            let message = "\(provider.displayName) cannot run this overall-summary batch directly. Choose a remote or cloud provider from the reroute menu."
+            print("⚠️ GlobalSummaryService: \(message)")
+            return Just(GlobalSummaryResult.errorResult(source: source, message: message))
+                .eraseToAnyPublisher()
         }
     }
 
@@ -1183,10 +1263,10 @@ final class GlobalSummaryService {
     // MARK: - MLX Constants & Helpers
 
     private let mlxMaxOutputTokenHardCap    = 512
-    private let mlxMaxContextTokenHardCap   = 8_192
-    private let mlxAutoContextTokenFallback = 4_096
+    private let mlxMaxContextTokenHardCap   = LiteRTLocalService.maxContextTokens
+    private let coreAIMLXMaxContextTokenHardCap = CoreAIMLXLocalService.maxContextTokens
+    private let mlxAutoContextTokenFallback = LiteRTLocalService.defaultContextTokens
     private let mlxInputCharacterLimit      = 12_000
-    private let mlxPromptCharacterLimit     = 10_000
     private let mlxGenerationTimeoutSeconds: TimeInterval = 90
     private let mlxQueryTimeoutSeconds: TimeInterval      = 60
 
@@ -1197,29 +1277,20 @@ final class GlobalSummaryService {
 
     /// Resolve context token count: 0 → fallback, then hard-cap at 8192.
     private func cappedMLXContextTokens(_ configured: Int) -> Int {
-        let resolved = configured > 0 ? configured : mlxAutoContextTokenFallback
-        return min(resolved, mlxMaxContextTokenHardCap)
+        let selectedProvider = settingsProvider().selectedSummaryProvider
+        let fallback = selectedProvider == .coreAIMLXLocal
+            ? CoreAIMLXLocalService.defaultContextTokens
+            : mlxAutoContextTokenFallback
+        let hardCap = selectedProvider == .coreAIMLXLocal
+            ? coreAIMLXMaxContextTokenHardCap
+            : mlxMaxContextTokenHardCap
+        let resolved = configured > 0 ? configured : fallback
+        return min(max(512, resolved), hardCap)
     }
 
-    /// Normalise whitespace and smart-truncate a prompt to fit the MLX context budget.
+    /// Keep local-model prompts unchanged so context-fit routing sees the same prompt the model receives.
     private func optimizedPromptForMLX(_ prompt: String) -> String {
-        // 1. Normalise whitespace
-        var normalized = prompt
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // 2. Smart truncation: preserve a leading and trailing window so key
-        //    context at both ends is not lost.
-        if normalized.count > mlxPromptCharacterLimit {
-            let prefixCount = Int(Double(mlxPromptCharacterLimit) * 0.72)
-            let suffixCount = max(0, mlxPromptCharacterLimit - prefixCount - 80)
-            let prefix = String(normalized.prefix(prefixCount))
-            let suffix = String(normalized.suffix(suffixCount))
-            normalized = "\(prefix)\n\n[...truncated for local model context...]\n\n\(suffix)"
-        }
-
-        return normalized
+        prompt
     }
 
     /// Run an async operation with a timeout. Throws MLXTimeoutError on expiry.
@@ -1267,12 +1338,16 @@ final class GlobalSummaryService {
         items: [(id: String, title: String, excerpt: String)]
     ) -> AnyPublisher<GlobalSummaryResult, Never> {
         let settings = settingsProvider()
-        let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let maxOutputTokens = cappedMLXOutputTokens(settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+        let useCoreAIMLX = settings.selectedSummaryProvider == .coreAIMLXLocal
+        let modelID = useCoreAIMLX
+            ? settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            : settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maxOutputTokens = cappedMLXOutputTokens(useCoreAIMLX ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(useCoreAIMLX ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+        let providerLabel = useCoreAIMLX ? "CoreAI MLX" : "LiteRT"
 
         guard !modelID.isEmpty else {
-            return Just(GlobalSummaryResult.errorResult(source: "articles", message: "MLX model id is missing. Set it in Settings → Summary Provider."))
+            return Just(GlobalSummaryResult.errorResult(source: "articles", message: "\(providerLabel) model id is missing. Set it in Settings -> Summary Provider."))
                 .eraseToAnyPublisher()
         }
 
@@ -1298,14 +1373,26 @@ final class GlobalSummaryService {
 
                     do {
                         let metrics = try await self.withMLXTimeout(seconds: self.mlxGenerationTimeoutSeconds) {
-                            try await MLXLocalService.shared.generateTextWithMetrics(
+                            if useCoreAIMLX {
+                                return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
+                                    prompt: singlePrompt,
+                                    modelID: modelID,
+                                    maxOutputTokens: maxOutputTokens,
+                                    maxContextTokens: maxContextTokens
+                                )
+                            }
+                            return try await LiteRTLocalService.shared.generateTextWithMetrics(
                                 prompt: singlePrompt,
                                 modelID: modelID,
                                 maxOutputTokens: maxOutputTokens,
                                 maxContextTokens: maxContextTokens
                             )
                         }
-                        await MLXLocalService.shared.clearTransientCache()
+                        if useCoreAIMLX {
+                            await CoreAIMLXLocalService.shared.clearTransientCache()
+                        } else {
+                            await LiteRTLocalService.shared.clearTransientCache()
+                        }
                         self.reportThroughput(metrics)
 
                         let (subject, summary) = self.parseMLXSingleResponse(raw: metrics.text, fallbackTitle: item.title)
@@ -1313,7 +1400,11 @@ final class GlobalSummaryService {
                         print("✅ MLX: Processed article \(index + 1)/\(items.count) (\(String(format: "%.1f", metrics.tokensPerSecond)) tok/s): \(item.title.prefix(30))...")
 
                     } catch {
-                        await MLXLocalService.shared.clearTransientCache()
+                        if useCoreAIMLX {
+                            await CoreAIMLXLocalService.shared.clearTransientCache()
+                        } else {
+                            await LiteRTLocalService.shared.clearTransientCache()
+                        }
                         print("❌ MLX: Failed article \(index + 1): \(error.localizedDescription)")
                         summaries.append(GlobalSummaryItem(
                             subject: String(item.title.prefix(50)),
@@ -1336,12 +1427,16 @@ final class GlobalSummaryService {
         postIds: [String]
     ) -> AnyPublisher<GlobalSummaryResult, Never> {
         let settings = settingsProvider()
-        let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let maxOutputTokens = cappedMLXOutputTokens(settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+        let useCoreAIMLX = settings.selectedSummaryProvider == .coreAIMLXLocal
+        let modelID = useCoreAIMLX
+            ? settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            : settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maxOutputTokens = cappedMLXOutputTokens(useCoreAIMLX ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(useCoreAIMLX ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+        let providerLabel = useCoreAIMLX ? "CoreAI MLX" : "LiteRT"
 
         guard !modelID.isEmpty else {
-            return Just(GlobalSummaryResult.errorResult(source: "reddit", message: "MLX model id is missing. Set it in Settings → Summary Provider."))
+            return Just(GlobalSummaryResult.errorResult(source: "reddit", message: "\(providerLabel) model id is missing. Set it in Settings -> Summary Provider."))
                 .eraseToAnyPublisher()
         }
 
@@ -1371,14 +1466,26 @@ final class GlobalSummaryService {
 
                     do {
                         let metrics = try await self.withMLXTimeout(seconds: self.mlxGenerationTimeoutSeconds) {
-                            try await MLXLocalService.shared.generateTextWithMetrics(
+                            if useCoreAIMLX {
+                                return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
+                                    prompt: singlePrompt,
+                                    modelID: modelID,
+                                    maxOutputTokens: maxOutputTokens,
+                                    maxContextTokens: maxContextTokens
+                                )
+                            }
+                            return try await LiteRTLocalService.shared.generateTextWithMetrics(
                                 prompt: singlePrompt,
                                 modelID: modelID,
                                 maxOutputTokens: maxOutputTokens,
                                 maxContextTokens: maxContextTokens
                             )
                         }
-                        await MLXLocalService.shared.clearTransientCache()
+                        if useCoreAIMLX {
+                            await CoreAIMLXLocalService.shared.clearTransientCache()
+                        } else {
+                            await LiteRTLocalService.shared.clearTransientCache()
+                        }
                         self.reportThroughput(metrics)
 
                         let (subject, summary) = self.parseMLXSingleResponse(raw: metrics.text, fallbackTitle: item.title)
@@ -1387,7 +1494,11 @@ final class GlobalSummaryService {
                         print("✅ MLX: Processed post \(index + 1)/\(items.count) (\(String(format: "%.1f", metrics.tokensPerSecond)) tok/s): \(item.title.prefix(30))...")
 
                     } catch {
-                        await MLXLocalService.shared.clearTransientCache()
+                        if useCoreAIMLX {
+                            await CoreAIMLXLocalService.shared.clearTransientCache()
+                        } else {
+                            await LiteRTLocalService.shared.clearTransientCache()
+                        }
                         print("❌ MLX: Failed post \(index + 1): \(error.localizedDescription)")
                         let refId = index < postIds.count ? postIds[index] : nil
                         summaries.append(GlobalSummaryItem(
@@ -1738,6 +1849,46 @@ enum GlobalSummaryContext {
     case feedArticles(url: String)
     case subreddit(name: String, topComments: Int)
     case subredditHot(name: String, topComments: Int)
+    case subredditSorted(name: String, sortOption: RedditService.SortOption, topComments: Int)
+}
+
+@MainActor
+final class LocalRerouteRequest: Identifiable {
+    let id = UUID()
+    let message: String
+    let presentationScope: LocalReroutePresentationScope
+
+    private let routeStartHandler: @MainActor (LocalRerouteProvider) -> Void
+    private let routeHandler: @MainActor (LocalRerouteProvider) -> Void
+    private let cancelHandler: @MainActor () -> Void
+
+    init(
+        message: String,
+        presentationScope: LocalReroutePresentationScope = .global,
+        routeStartHandler: @escaping @MainActor (LocalRerouteProvider) -> Void = { _ in },
+        routeHandler: @escaping @MainActor (LocalRerouteProvider) -> Void,
+        cancelHandler: @escaping @MainActor () -> Void
+    ) {
+        self.message = message
+        self.presentationScope = presentationScope
+        self.routeStartHandler = routeStartHandler
+        self.routeHandler = routeHandler
+        self.cancelHandler = cancelHandler
+    }
+
+    func route(to provider: LocalRerouteProvider) {
+        routeStartHandler(provider)
+        routeHandler(provider)
+    }
+
+    func cancel() {
+        cancelHandler()
+    }
+}
+
+enum LocalReroutePresentationScope {
+    case global
+    case deepAnalysis
 }
 
 @MainActor
@@ -1947,6 +2098,8 @@ class AppState: ObservableObject {
     }
     
     @Published var isLoading: Bool = false
+    @Published var isRefreshingFeeds: Bool = false
+    @Published private var activeArticleSummaryIDs: Set<String> = []
     @Published var settings: AppSettings = AppSettings() {
         didSet {
             // Save settings when changed
@@ -1965,6 +2118,7 @@ class AppState: ObservableObject {
     @Published var commentSummaryWaitProgress: String = "" // Progress message for comment summary
     @Published var fallbackNotification: String = "" // User notification for fallback events
     @Published var showFallbackNotification: Bool = false // Whether to show fallback notification
+    @Published var pendingLocalReroute: LocalRerouteRequest?
     @Published var activeWebAIHandoffRequest: WebAIHandoffRequest?
     @Published var isWebAIHandoffMinimized: Bool = false
     @Published private(set) var isWebAIBatchHandoffInProgress: Bool = false
@@ -1972,6 +2126,24 @@ class AppState: ObservableObject {
     @Published var todaySummaryResult: String?
     @Published var todaySummaryError: String?
     @Published var todaySummaryInfo: String?
+
+    func isSummarizingArticle(_ article: Article) -> Bool {
+        activeArticleSummaryIDs.contains(article.id)
+    }
+
+    private func beginArticleSummary(_ article: Article?) {
+        guard let article else { return }
+        var ids = activeArticleSummaryIDs
+        ids.insert(article.id)
+        activeArticleSummaryIDs = ids
+    }
+
+    private func finishArticleSummary(_ article: Article?) {
+        guard let article else { return }
+        var ids = activeArticleSummaryIDs
+        ids.remove(article.id)
+        activeArticleSummaryIDs = ids
+    }
     @Published var showGlobalSummary: Bool = false
     @Published var globalSummaryJSON: String = ""
     @Published var lastGlobalSummaryError: String? = nil
@@ -1995,6 +2167,34 @@ class AppState: ObservableObject {
     private var cachedRedditCommentsForQA: [(RedditPost, [String])] = []
     @Published var isWaitingForGlobalQA: Bool = false
     @Published var globalQAWaitProgress: String = ""
+
+    func redditPostForGlobalSummaryReference(_ referenceId: String) -> RedditPost? {
+        let normalizedId = referenceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return nil }
+
+        if let post = globalSummaryPosts.first(where: { $0.id == normalizedId }) {
+            return post
+        }
+
+        return redditFeeds
+            .lazy
+            .flatMap { $0.posts }
+            .first { $0.id == normalizedId }
+    }
+
+    func articleForGlobalSummaryReference(_ referenceId: String) -> Article? {
+        let normalizedId = referenceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return nil }
+
+        if let article = globalSummaryArticles.first(where: { $0.id == normalizedId }) {
+            return article
+        }
+
+        return feeds
+            .lazy
+            .flatMap { $0.articles }
+            .first { $0.id == normalizedId }
+    }
 
     private struct ArticleReadProbe {
         let id: String
@@ -2068,9 +2268,14 @@ class AppState: ObservableObject {
 
         // 2. Load settings from storage
         var loadedSettings = self.persistenceManager.loadSettings()
-        let normalizedMLXModelID = MLXLocalService.normalizedModelIdentifier(from: loadedSettings.mlxModelID)
+        let normalizedMLXModelID = LiteRTLocalService.normalizedModelIdentifier(from: loadedSettings.mlxModelID)
         if normalizedMLXModelID != loadedSettings.mlxModelID {
             loadedSettings.mlxModelID = normalizedMLXModelID
+            self.persistenceManager.saveSettings(loadedSettings)
+        }
+        let normalizedCoreAIMLXModelID = CoreAIMLXLocalService.normalizedModelIdentifier(from: loadedSettings.coreAIMLXModelID)
+        if normalizedCoreAIMLXModelID != loadedSettings.coreAIMLXModelID {
+            loadedSettings.coreAIMLXModelID = normalizedCoreAIMLXModelID
             self.persistenceManager.saveSettings(loadedSettings)
         }
         loadedSettings = Self.normalizedSummarizeSettings(loadedSettings)
@@ -2081,6 +2286,8 @@ class AppState: ObservableObject {
 
         // 3. Initialize Reddit OAuth Manager
         self.redditOAuthManager = RedditOAuthManager()
+        loadedSettings = self.persistenceManager.loadSettings()
+        self.settings = loadedSettings
 
         // 4. Initialize summaryService with the user's Gemini key
         let geminiKey = loadedSettings.geminiApiKey
@@ -2542,6 +2749,7 @@ class AppState: ObservableObject {
     // MARK: - Feed Management
     func refreshAllFeeds() {
         isLoading = true
+        isRefreshingFeeds = true
         let group = DispatchGroup()
 
         // Refresh RSS feeds
@@ -2574,6 +2782,7 @@ class AppState: ObservableObject {
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
             self.isLoading = false
+            self.isRefreshingFeeds = false
             self.scheduleLatestNewsSnapshotIfSupported()
 
             // Re-sync Reddit read states after all feeds loaded
@@ -2585,10 +2794,12 @@ class AppState: ObservableObject {
     // Specific function to refresh a single RSS feed (mimics up arrow behavior)
     func refreshSingleRSSFeed(url: String) {
         isLoading = true
+        isRefreshingFeeds = true
         feedService.fetchFeed(url: url)
             .receive(on: RunLoop.main)
             .sink(receiveCompletion: { [weak self] _ in
                 self?.isLoading = false
+                self?.isRefreshingFeeds = false
             }, receiveValue: { [weak self] feed in
                 guard let self = self else { return }
                 var processedFeed = feed
@@ -2964,6 +3175,7 @@ class AppState: ObservableObject {
         }
 
         isLoading = true
+        beginArticleSummary(article)
         
         let articlePrompt = geminiArticleSummaryPrompt(for: article)
 
@@ -2991,6 +3203,7 @@ class AppState: ObservableObject {
                         print("📱 AppState: Updated article summary for article ID: \(article.id)")
                     }
                 }
+                self.finishArticleSummary(article)
                 self.isLoading = false
             }
             .store(in: &cancellables)
@@ -3175,7 +3388,8 @@ class AppState: ObservableObject {
         return normalized.contains("content failed to load") ||
             normalized.contains("could not load content") ||
             normalized.contains("couldn't load content") ||
-            normalized.contains("unable to load content")
+            normalized.contains("unable to load content") ||
+            (normalized.contains("something went wrong") && normalized.contains("1096"))
     }
 
     func handleCapturedWebAIResponse(requestID: UUID, response: String) {
@@ -3319,6 +3533,42 @@ class AppState: ObservableObject {
         }
     }
 
+    func performPCCGatewayRequestAsync(
+        prompt: String,
+        taskName: String = "Apple PCC Gateway",
+        isQA: Bool = false
+    ) async throws -> String {
+        let start = Date()
+        let output = try await summaryService.generateContentWithPCCGateway(prompt: prompt, settings: settings)
+        let elapsed = Date().timeIntervalSince(start)
+        await recordPCCGatewayThroughput(text: output, elapsed: elapsed, isQA: isQA)
+        print("✅ AppState: Apple PCC Gateway succeeded for \(taskName)")
+        return output
+    }
+
+    func performPCCGatewaySummaryPublic(
+        prompt: String,
+        taskName: String = "Apple PCC Gateway",
+        completion: @escaping (String) -> Void
+    ) {
+        isLoading = true
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                let output = try await self.performPCCGatewayRequestAsync(prompt: prompt, taskName: taskName)
+                await MainActor.run {
+                    self.isLoading = false
+                    completion(output)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isLoading = false
+                    completion("Apple PCC Gateway error: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     private func showWebAIStatus(_ message: String) {
         fallbackNotification = message
         showFallbackNotification = true
@@ -3338,12 +3588,18 @@ class AppState: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func redditSummarySourceText(post: RedditPost, comments: [RedditCommentModel]) -> String {
-        let commentTexts = Array(flattenedCommentBodiesForSummary(comments).prefix(18))
-        if commentTexts.isEmpty {
+    private func redditSummarySourceText(post: RedditPost, comments: [RedditCommentModel], maxComments: Int? = nil) -> String {
+        let allCommentLines = flattenedFullCommentLinesForSummary(comments)
+        let commentLines: [String]
+        if let maxComments {
+            commentLines = Array(allCommentLines.prefix(maxComments))
+        } else {
+            commentLines = allCommentLines
+        }
+        if commentLines.isEmpty {
             return normalizedSummarySourceText(post.content, maxCharacters: 6_000)
         }
-        let mergedComments = commentTexts.joined(separator: "\n\n")
+        let mergedComments = commentLines.joined(separator: "\n")
         return """
         Title: \(post.title)
         Post:
@@ -3368,31 +3624,27 @@ class AppState: ObservableObject {
         return normalized
     }
 
-    private func normalizedCommentBodyForSummary(_ text: String, maxCharacters: Int = 280) -> String {
-        normalizedSummarySourceText(
-            text.replacingOccurrences(of: "\n", with: " "),
-            maxCharacters: maxCharacters
-        )
-    }
-
-    private func flattenedCommentBodiesForSummary(
+    private func flattenedFullCommentLinesForSummary(
         _ comments: [RedditCommentModel],
         depth: Int = 0
     ) -> [String] {
-        var bodies: [String] = []
+        var lines: [String] = []
+        let indent = String(repeating: "    ", count: depth)
 
         for comment in comments {
-            let body = normalizedCommentBodyForSummary(comment.body)
+            let body = normalizedSummarySourceText(
+                comment.body.replacingOccurrences(of: "\n", with: " ")
+            )
             if !body.isEmpty {
-                bodies.append(body)
+                lines.append("\(indent)- \(body)")
             }
 
-            if depth < 8, !comment.replies.isEmpty {
-                bodies.append(contentsOf: flattenedCommentBodiesForSummary(comment.replies, depth: depth + 1))
+            if !comment.replies.isEmpty {
+                lines.append(contentsOf: flattenedFullCommentLinesForSummary(comment.replies, depth: depth + 1))
             }
         }
 
-        return bodies
+        return lines
     }
 
     private func strictSummaryPrompt(
@@ -3439,8 +3691,8 @@ class AppState: ObservableObject {
         "Provide a brief 3-4 sentence summary of this article. Include only the main point and most important conclusion. Keep it under 100 words. Return plain text only (no Markdown, no headings, no bullets). Use short readable paragraphs and include a blank line between paragraphs when possible:\n\n\(article.content)"
     }
 
-    func redditPostSummaryPrompt(post: RedditPost, comments: [RedditCommentModel] = []) -> String {
-        let sourceText = redditSummarySourceText(post: post, comments: comments)
+    func redditPostSummaryPrompt(post: RedditPost, comments: [RedditCommentModel] = [], maxComments: Int? = nil) -> String {
+        let sourceText = redditSummarySourceText(post: post, comments: comments, maxComments: maxComments)
         if comments.isEmpty {
             return strictSummaryPrompt(
                 task: "State what the Reddit post is about and the key point being made.",
@@ -3460,9 +3712,14 @@ class AppState: ObservableObject {
     private func strictQAPrompt(
         sourceLabel: String,
         sourceText: String,
-        question: String
+        question: String,
+        preferCompleteAnswer: Bool = false
     ) -> String {
-        """
+        let answerLengthRule = preferCompleteAnswer
+            ? "- Give a complete answer using as much relevant detail as the source supports; use short paragraphs if needed."
+            : "- Keep the answer concise, using short paragraphs if needed."
+
+        return """
         Answer the question using only the source material.
 
         Rules:
@@ -3470,7 +3727,7 @@ class AppState: ObservableObject {
         - If the source does not answer the question, say the information is not available in the source.
         - Return plain text only.
         - Do not use Markdown symbols, headings, bullets, or code fences.
-        - Keep the answer concise, using short paragraphs if needed.
+        \(answerLengthRule)
 
         <source_label>\(sourceLabel)</source_label>
         <source_text>
@@ -3484,7 +3741,7 @@ class AppState: ObservableObject {
         """
     }
 
-    func articleQAPrompt(article: Article, question: String) -> String {
+    func articleQAPrompt(article: Article, question: String, preferCompleteAnswer: Bool = false) -> String {
         let content = cleanedArticleContent(article)
         let sourceText = """
         Title: \(article.title)
@@ -3494,28 +3751,146 @@ class AppState: ObservableObject {
         return strictQAPrompt(
             sourceLabel: "Article",
             sourceText: sourceText,
-            question: question
+            question: question,
+            preferCompleteAnswer: preferCompleteAnswer
         )
     }
 
-    func redditQAPrompt(post: RedditPost, comments: [RedditCommentModel], question: String) -> String {
+    func redditQAPrompt(post: RedditPost, comments: [RedditCommentModel], question: String, maxComments: Int? = nil, preferCompleteAnswer: Bool = false) -> String {
         strictQAPrompt(
             sourceLabel: comments.isEmpty ? "Reddit post" : "Reddit post and comments",
-            sourceText: redditSummarySourceText(post: post, comments: comments),
-            question: question
+            sourceText: redditSummarySourceText(post: post, comments: comments, maxComments: maxComments),
+            question: question,
+            preferCompleteAnswer: preferCompleteAnswer
         )
     }
 
-    func commentSummaryPrompt(comments: [RedditCommentModel]) -> String {
-        let combinedComments = Array(flattenedCommentBodiesForSummary(comments).prefix(24))
+    func articleSelectionSourceContext(for article: Article) -> (label: String, text: String) {
+        let content = cleanedArticleContent(article)
+        let sourceText = """
+        Title: \(article.title)
+        Source: \(article.feedTitle)
+        Link: \(article.url?.absoluteString ?? article.feedURL)
+
+        \(normalizedSummarySourceText(content, maxCharacters: 18_000))
+        """
+        return ("Original article source", sourceText)
+    }
+
+    func redditSelectionSourceContext(
+        post: RedditPost,
+        comments: [RedditCommentModel],
+        maxComments: Int? = nil
+    ) -> (label: String, text: String) {
+        (
+            comments.isEmpty ? "Original Reddit post source" : "Original Reddit post and comments source",
+            redditSummarySourceText(post: post, comments: comments, maxComments: maxComments)
+        )
+    }
+
+    func globalSummarySelectionSourceContext(
+        referenceId: String?,
+        isReddit: Bool
+    ) -> (label: String, text: String)? {
+        let normalizedId = referenceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if !normalizedId.isEmpty {
+            if isReddit, let post = redditPostForGlobalSummaryReference(normalizedId) {
+                let cachedComments = cachedRedditCommentsForQA.first { $0.0.id == post.id }?.1 ?? []
+                return (
+                    cachedComments.isEmpty ? "Original Reddit post source" : "Original Reddit post and comments source",
+                    redditSelectionSourceText(post: post, commentTexts: cachedComments)
+                )
+            }
+
+            if !isReddit, let article = articleForGlobalSummaryReference(normalizedId) {
+                return articleSelectionSourceContext(for: article)
+            }
+        }
+
+        if isReddit {
+            let contexts = !cachedRedditCommentsForQA.isEmpty
+                ? cachedRedditCommentsForQA
+                : globalSummaryPosts.prefix(20).map { ($0, []) }
+            guard !contexts.isEmpty else { return nil }
+            let text = contexts.prefix(20).enumerated().map { index, entry in
+                let post = entry.0
+                let comments = entry.1
+                return """
+                Reddit Item \(index + 1):
+                \(redditSelectionSourceText(post: post, commentTexts: comments))
+                """
+            }.joined(separator: "\n\n")
+            return ("Original Reddit batch source", text)
+        }
+
+        guard !globalSummaryArticles.isEmpty else { return nil }
+        let text = globalSummaryArticles.prefix(20).enumerated().map { index, article in
+            let content = cleanedArticleContent(article)
+            return """
+            Article \(index + 1):
+            Title: \(article.title)
+            Source: \(article.feedTitle)
+            Link: \(article.url?.absoluteString ?? article.feedURL)
+            Content:
+            \(normalizedSummarySourceText(content, maxCharacters: 1_500))
+            """
+        }.joined(separator: "\n\n")
+        return ("Original article batch source", text)
+    }
+
+    private func redditSelectionSourceText(post: RedditPost, commentTexts: [String]) -> String {
+        let commentSection: String
+        if commentTexts.isEmpty {
+            commentSection = "No comments captured."
+        } else {
+            commentSection = commentTexts
+                .prefix(80)
+                .map { "- \(truncateText(normalizedSummarySourceText($0), limit: 500))" }
+                .joined(separator: "\n")
+        }
+
+        return """
+        Title: \(post.title)
+        Subreddit: r/\(post.subreddit)
+        Post:
+        \(normalizedSummarySourceText(post.content, maxCharacters: 3_000))
+
+        Comments:
+        \(commentSection)
+        """
+    }
+
+    func commentSummaryPrompt(comments: [RedditCommentModel], maxComments: Int? = nil) -> String {
+        let allCommentLines = flattenedFullCommentLinesForSummary(comments)
+        let commentLines: [String]
+        if let maxComments {
+            commentLines = Array(allCommentLines.prefix(maxComments))
+        } else {
+            commentLines = allCommentLines
+        }
+        let combinedComments = commentLines
             .joined(separator: "\n\n")
 
-        return strictSummaryPrompt(
-            task: "Summarize the main themes in these comments. Combine duplicate opinions into a single point, mention the dominant mood, and do not quote or repeat the comments verbatim.",
-            sourceLabel: "Comments",
-            sourceText: combinedComments,
-            wordLimit: 100
-        )
+        return """
+        Provide a comprehensive summary of the key themes and main points from ALL the comments provided below. Include:
+        - Major themes discussed
+        - Key points made by commenters
+        - Notable disagreements or different perspectives
+        - Any consensus reached
+        Keep the summary organized and detailed.
+        Return plain text only. Do not use Markdown symbols, headings, or code fences.
+
+        \(combinedComments)
+        """
+    }
+
+    func flattenedCommentCountForSummary(comments: [RedditCommentModel], maxComments: Int? = nil) -> Int {
+        let count = flattenedFullCommentLinesForSummary(comments).count
+        if let maxComments {
+            return min(count, maxComments)
+        }
+        return count
     }
 
     private func formatCommentsForAnalysisPrompt(_ comments: [RedditCommentModel], depth: Int = 0) -> String {
@@ -3925,6 +4300,7 @@ class AppState: ObservableObject {
 
     func requestWebSummary(for article: Article) {
         isLoading = true
+        beginArticleSummary(article)
         let sourceText = cleanedArticleContent(article)
         performWebAIRequest(
             title: "Article Summary",
@@ -3936,6 +4312,7 @@ class AppState: ObservableObject {
                 self.isLoading = false
             },
             onFailure: { [weak self] _ in
+                self?.finishArticleSummary(article)
                 self?.isLoading = false
             }
         )
@@ -4051,6 +4428,7 @@ class AppState: ObservableObject {
         if article != nil || redditPost != nil {
             isLoading = true
         }
+        beginArticleSummary(article)
 
         if settings.selectedSummaryProvider == .webAI {
             if let article = article {
@@ -4065,6 +4443,7 @@ class AppState: ObservableObject {
                         self.isLoading = false
                     },
                     onFailure: { [weak self] _ in
+                        self?.finishArticleSummary(article)
                         self?.isLoading = false
                     }
                 )
@@ -4092,6 +4471,8 @@ class AppState: ObservableObject {
                 summarizeArticle(article)
             } else if let post = redditPost {
                 summarizeRedditPost(post, comments: redditComments)
+            } else {
+                finishArticleSummary(article)
             }
         } else if settings.selectedSummaryProvider == .appleLocal {
             // Use on-device AI with Gemini fallback
@@ -4114,9 +4495,12 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
+                self?.finishArticleSummary(article)
+            }, onCancel: { [weak self] in
+                self?.finishArticleSummary(article)
             })
-        } else if settings.selectedSummaryProvider == .mlxLocal {
-            // Use MLX Local model
+        } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
+            // Use selected local model
             let textToSummarize = article.map(cleanedArticleContent)
                 ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
                 ?? ""
@@ -4131,6 +4515,9 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
+                self?.finishArticleSummary(article)
+            }, onCancel: { [weak self] in
+                self?.finishArticleSummary(article)
             })
         } else if settings.selectedSummaryProvider == .summarizeDaemon {
             let textToSummarize = article.map(cleanedArticleContent)
@@ -4147,9 +4534,27 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
+                self?.finishArticleSummary(article)
+            }
+        } else if settings.selectedSummaryProvider == .applePCCGateway {
+            let textToSummarize = article.map(cleanedArticleContent)
+                ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
+                ?? ""
+            let prompt = article.map(articleSummaryPrompt(for:))
+                ?? redditPost.map { redditPostSummaryPrompt(post: $0, comments: redditComments) }
+                ?? ""
+            let taskName = article != nil ? "Article Summary" : "Reddit Post Summary"
+            performPCCGatewaySummaryPublic(prompt: prompt, taskName: taskName) { [weak self] summary in
+                if let article = article {
+                    let constrained = self?.enforceArticleSummaryLength(summary, sourceText: textToSummarize) ?? summary
+                    self?.updateArticleSummaryFromCloud(article, summary: constrained)
+                } else if let post = redditPost {
+                    self?.updateRedditPostSummaryFromCloud(post, summary: summary)
+                }
+                self?.finishArticleSummary(article)
             }
         } else {
-            // Apple Cloud
+            // Apple Cloud via Private Cloud Compute
             launchCloudSummaryForContent(article: article, redditPost: redditPost)
         }
     }
@@ -4289,6 +4694,8 @@ class AppState: ObservableObject {
             return "subreddit:\(name):\(topComments)"
         case .subredditHot(let name, let topComments):
             return "subredditHot:\(name):\(topComments)"
+        case .subredditSorted(let name, let sortOption, let topComments):
+            return "subredditSorted:\(name):\(sortOption.rawValue):\(topComments)"
         }
     }
 
@@ -4297,9 +4704,9 @@ class AppState: ObservableObject {
     }
 
     #if os(iOS)
-    private func prepareGlobalSummaryBackgroundHandleIfNeeded(title: String) -> Any? {
-        let resolution = overallSummaryProviderResolution()
-        guard resolution.effectiveProvider == .gemini else {
+    private func prepareGlobalSummaryBackgroundHandleIfNeeded(title: String, providerOverride: AppSettings.SummaryProvider? = nil) -> Any? {
+        let provider = providerOverride ?? overallSummaryProviderResolution().effectiveProvider
+        guard provider == .gemini else {
             globalBackgroundHandle = nil
             return nil
         }
@@ -4312,10 +4719,278 @@ class AppState: ObservableObject {
         return handle
     }
     #else
-    private func prepareGlobalSummaryBackgroundHandleIfNeeded(title: String) -> Any? {
+    private func prepareGlobalSummaryBackgroundHandleIfNeeded(title: String, providerOverride: AppSettings.SummaryProvider? = nil) -> Any? {
         nil
     }
     #endif
+
+    private var selectedOverallLocalProviderName: String? {
+        switch settings.selectedSummaryProvider {
+        case .appleLocal:
+            return "Apple Local"
+        case .mlxLocal:
+            return "LiteRT Local"
+        case .coreAIMLXLocal:
+            return "CoreAI MLX Local"
+        case .gemini, .appleCloud, .applePCCGateway, .webAI, .summarizeDaemon:
+            return nil
+        }
+    }
+
+    @MainActor
+    private func presentOverallSummaryReroute(
+        providerName: String,
+        itemCount: Int,
+        sourceName: String,
+        onRoute: @escaping @MainActor (AppSettings.SummaryProvider) -> Void
+    ) {
+        isLoading = false
+        let message = "\(providerName) cannot run this Overall Summary directly for \(itemCount) \(sourceName). Choose a remote or cloud provider to run it."
+        pendingLocalReroute = LocalRerouteRequest(
+            message: message,
+            routeStartHandler: { [weak self] _ in
+                self?.isLoading = true
+                self?.lastGlobalSummaryError = nil
+            },
+            routeHandler: { provider in
+                onRoute(provider.summaryProvider)
+            },
+            cancelHandler: { [weak self] in
+                self?.isLoading = false
+                self?.lastGlobalSummaryError = "Overall Summary routing cancelled."
+            }
+        )
+    }
+
+    private func runArticlesGlobalSummary(
+        articles: [Article],
+        providerOverride: AppSettings.SummaryProvider? = nil
+    ) {
+        let existingHandle = prepareGlobalSummaryBackgroundHandleIfNeeded(
+            title: "Summarizing \(articles.count) Articles",
+            providerOverride: providerOverride
+        )
+
+        globalSummaryService
+            .summarizeArticlesGlobally(
+                articles: articles,
+                existingBackgroundTaskHandle: existingHandle,
+                providerOverride: providerOverride
+            )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] result in
+                guard let self = self else { return }
+                self.processGlobalSummaryResult(result)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func runRedditGlobalSummary(
+        posts: [RedditPost],
+        topComments: Int,
+        providerOverride: AppSettings.SummaryProvider? = nil
+    ) {
+        let existingHandle = prepareGlobalSummaryBackgroundHandleIfNeeded(
+            title: "Summarizing \(posts.count) Reddit Posts",
+            providerOverride: providerOverride
+        )
+
+        globalSummaryService
+            .summarizeRedditGlobally(
+                posts: posts,
+                topComments: topComments,
+                existingBackgroundTaskHandle: existingHandle,
+                providerOverride: providerOverride
+            )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] result in
+                guard let self = self else { return }
+                self.processGlobalSummaryResult(result)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func hydratedRedditFeed(_ redditFeed: RedditFeed, sortOption: RedditService.SortOption) -> RedditFeed {
+        var processedFeed = redditFeed
+        for index in 0..<processedFeed.posts.count {
+            let id = processedFeed.posts[index].id
+            processedFeed.posts[index].isRead = persistenceManager.isRedditPostRead(processedFeed.posts[index])
+            processedFeed.posts[index].isFavorite = persistenceManager.isRedditPostFavorite(id) ?? false
+        }
+
+        if sortOption == .new {
+            let stickied = processedFeed.posts.filter { $0.isStickied }
+            let nonStickied = processedFeed.posts.filter { !$0.isStickied }
+                .sorted { $0.publishDate > $1.publishDate }
+            processedFeed.posts = stickied + nonStickied
+        }
+
+        return processedFeed
+    }
+
+    private func recordRedditFetchMetadata(_ redditFeed: RedditFeed, subreddit: String) {
+        if let message = redditFeed.fetchStatusMessage, !message.isEmpty {
+            redditFeedStatusMessages[subreddit] = message
+        } else {
+            redditFeedStatusMessages.removeValue(forKey: subreddit)
+        }
+
+        if let cooldownUntil = redditFeed.rateLimitCooldownUntil, cooldownUntil > Date() {
+            redditRateLimitCooldowns[subreddit] = cooldownUntil
+        } else {
+            redditRateLimitCooldowns.removeValue(forKey: subreddit)
+        }
+    }
+
+    private func updateVisibleRedditFeedIfNeeded(_ redditFeed: RedditFeed, sortOption: RedditService.SortOption) {
+        guard sortOption == redditSortOption else { return }
+
+        if let index = redditFeeds.firstIndex(where: { $0.subreddit == redditFeed.subreddit }) {
+            var updatedFeeds = redditFeeds
+            updatedFeeds[index] = redditFeed
+            redditFeeds = updatedFeeds
+        } else {
+            redditFeeds.append(redditFeed)
+        }
+    }
+
+    private func subredditSummaryContext(
+        subreddit: String,
+        sortOption: RedditService.SortOption,
+        topComments: Int
+    ) -> GlobalSummaryContext {
+        if sortOption == .hot {
+            return .subredditHot(name: subreddit, topComments: topComments)
+        }
+        return .subredditSorted(name: subreddit, sortOption: sortOption, topComments: topComments)
+    }
+
+    private func beginSubredditGlobalSummary(
+        posts: [RedditPost],
+        subreddit: String,
+        topComments: Int,
+        context: GlobalSummaryContext,
+        emptyLogMessage: String,
+        emptyUserMessage: String
+    ) {
+        globalSummaryPosts = posts
+        globalSummaryArticles = []
+        cachedRedditCommentsForQA = []
+        hasCachedSummary = false
+
+        let subredditCooldowns = activeCooldowns(forSubreddits: Set([subreddit]))
+        if !subredditCooldowns.isEmpty {
+            let affected = "r/\(subreddit)"
+            print("⚠️ AppState.Global: Blocking subreddit summary — API cooldown active for \(affected)")
+            lastGlobalSummaryContext = context
+            handleRedditSummaryCooldown(entries: subredditCooldowns)
+            return
+        }
+
+        guard !posts.isEmpty else {
+            print("❌ AppState.Global: \(emptyLogMessage)")
+            lastGlobalSummaryError = emptyUserMessage
+            let escaped = emptyUserMessage.replacingOccurrences(of: "\"", with: "\\\"")
+            globalSummaryJSON = "{\"source\":\"reddit\",\"summaries\":[],\"error\":\"\(escaped)\"}"
+            hasCachedSummary = false
+            showGlobalSummary = true
+            isLoading = false
+            lastGlobalSummaryContext = context
+            return
+        }
+
+        let preserveExistingAggregateSummary = shouldPreserveAggregateSummary(for: context)
+        resetAggregateSummaryState(preservingCurrentSummary: preserveExistingAggregateSummary)
+        isLoading = true
+        lastGlobalSummaryError = nil
+        if !preserveExistingAggregateSummary {
+            globalSummaryJSON = "{\"source\":\"reddit\",\"summaries\":[],\"error\":null}"
+        }
+        hasCachedSummary = true
+        showGlobalSummary = true
+        lastGlobalSummaryContext = context
+
+        if settings.selectedSummaryProvider == .webAI {
+            summarizeRedditPostsGloballyWithWebAI(posts, topComments: topComments)
+            return
+        }
+
+        if let providerName = selectedOverallLocalProviderName {
+            presentOverallSummaryReroute(
+                providerName: providerName,
+                itemCount: posts.count,
+                sourceName: "Reddit posts"
+            ) { [weak self] provider in
+                self?.runRedditGlobalSummary(posts: posts, topComments: topComments, providerOverride: provider)
+            }
+            return
+        }
+
+        runRedditGlobalSummary(posts: posts, topComments: topComments)
+    }
+
+    private func summarizeSubredditSortedPostsGlobally(
+        subreddit: String,
+        sortOption: RedditService.SortOption,
+        includeReadPosts: Bool = true,
+        topComments: Int = 10
+    ) {
+        let context = subredditSummaryContext(
+            subreddit: subreddit,
+            sortOption: sortOption,
+            topComments: topComments
+        )
+
+        let subredditCooldowns = activeCooldowns(forSubreddits: Set([subreddit]))
+        if !subredditCooldowns.isEmpty {
+            let affected = "r/\(subreddit)"
+            print("⚠️ AppState.Global: Blocking \(sortOption.displayName) subreddit summary — API cooldown active for \(affected)")
+            lastGlobalSummaryContext = context
+            handleRedditSummaryCooldown(entries: subredditCooldowns)
+            return
+        }
+
+        let preserveExistingAggregateSummary = shouldPreserveAggregateSummary(for: context)
+        resetAggregateSummaryState(preservingCurrentSummary: preserveExistingAggregateSummary)
+        isLoading = true
+        lastGlobalSummaryError = nil
+        if !preserveExistingAggregateSummary {
+            globalSummaryJSON = "{\"source\":\"reddit\",\"summaries\":[],\"error\":null}"
+        }
+        hasCachedSummary = true
+        showGlobalSummary = true
+        lastGlobalSummaryContext = context
+
+        redditService.fetchSubreddit(subreddit: subreddit, sortOption: sortOption)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] redditFeed in
+                guard let self else { return }
+
+                self.recordRedditFetchMetadata(redditFeed, subreddit: subreddit)
+                let processedFeed = self.hydratedRedditFeed(redditFeed, sortOption: sortOption)
+                self.updateVisibleRedditFeedIfNeeded(processedFeed, sortOption: sortOption)
+
+                let selectedPosts = includeReadPosts
+                    ? processedFeed.posts
+                    : processedFeed.posts.filter { !$0.isRead }
+                let posts = Array(selectedPosts.prefix(50))
+                let fallbackEmptyMessage = includeReadPosts
+                    ? "No \(sortOption.displayName.lowercased()) posts in this subreddit to summarize."
+                    : "No unread \(sortOption.displayName.lowercased()) posts in this subreddit to summarize."
+                let fetchMessage = processedFeed.fetchStatusMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let emptyUserMessage = fetchMessage.isEmpty ? fallbackEmptyMessage : fetchMessage
+
+                self.beginSubredditGlobalSummary(
+                    posts: posts,
+                    subreddit: subreddit,
+                    topComments: topComments,
+                    context: context,
+                    emptyLogMessage: "No \(sortOption.displayName) posts in subreddit to summarize.",
+                    emptyUserMessage: emptyUserMessage
+                )
+            }
+            .store(in: &cancellables)
+    }
 
     // MARK: - Global Summaries
     func summarizeAllArticlesGlobally() {
@@ -4355,18 +5030,18 @@ class AppState: ObservableObject {
             return
         }
 
-        let existingHandle = prepareGlobalSummaryBackgroundHandleIfNeeded(
-            title: "Summarizing \(articles.count) Articles"
-        )
-
-        globalSummaryService
-            .summarizeArticlesGlobally(articles: articles, existingBackgroundTaskHandle: existingHandle)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] result in
-                guard let self = self else { return }
-                self.processGlobalSummaryResult(result)
+        if let providerName = selectedOverallLocalProviderName {
+            presentOverallSummaryReroute(
+                providerName: providerName,
+                itemCount: articles.count,
+                sourceName: "articles"
+            ) { [weak self] provider in
+                self?.runArticlesGlobalSummary(articles: articles, providerOverride: provider)
             }
-            .store(in: &cancellables)
+            return
+        }
+
+        runArticlesGlobalSummary(articles: articles)
     }
 
     func summarizeAllRedditGlobally(topComments: Int = 3) {
@@ -4415,18 +5090,18 @@ class AppState: ObservableObject {
             return
         }
 
-        let existingHandle = prepareGlobalSummaryBackgroundHandleIfNeeded(
-            title: "Summarizing \(posts.count) Reddit Posts"
-        )
-
-        globalSummaryService
-            .summarizeRedditGlobally(posts: posts, topComments: topComments, existingBackgroundTaskHandle: existingHandle)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] result in
-                guard let self = self else { return }
-                self.processGlobalSummaryResult(result)
+        if let providerName = selectedOverallLocalProviderName {
+            presentOverallSummaryReroute(
+                providerName: providerName,
+                itemCount: posts.count,
+                sourceName: "Reddit posts"
+            ) { [weak self] provider in
+                self?.runRedditGlobalSummary(posts: posts, topComments: topComments, providerOverride: provider)
             }
-            .store(in: &cancellables)
+            return
+        }
+
+        runRedditGlobalSummary(posts: posts, topComments: topComments)
     }
 
     func summarizeFeedArticlesGlobally(feedURL: String) {
@@ -4474,26 +5149,34 @@ class AppState: ObservableObject {
             return
         }
 
-        let existingHandle = prepareGlobalSummaryBackgroundHandleIfNeeded(
-            title: "Summarizing \(articles.count) Articles"
-        )
-
-        globalSummaryService
-            .summarizeArticlesGlobally(articles: articles, existingBackgroundTaskHandle: existingHandle)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] result in
-                guard let self = self else { return }
-                self.processGlobalSummaryResult(result)
+        if let providerName = selectedOverallLocalProviderName {
+            presentOverallSummaryReroute(
+                providerName: providerName,
+                itemCount: articles.count,
+                sourceName: "articles"
+            ) { [weak self] provider in
+                self?.runArticlesGlobalSummary(articles: articles, providerOverride: provider)
             }
-            .store(in: &cancellables)
+            return
+        }
+
+        runArticlesGlobalSummary(articles: articles)
     }
 
     func summarizeSubredditPostsGlobally(subreddit: String, topComments: Int = 10) {
-        summarizeSubredditPostsGloballyInternal(subreddit: subreddit, topComments: topComments, includeReadPosts: false)
+        summarizeSubredditSortedPostsGlobally(subreddit: subreddit, sortOption: .new, includeReadPosts: false, topComments: topComments)
     }
 
     func summarizeSubredditHotPostsGlobally(subreddit: String, topComments: Int = 10) {
-        summarizeSubredditPostsGloballyInternal(subreddit: subreddit, topComments: topComments, includeReadPosts: true)
+        summarizeSubredditSortedPostsGlobally(subreddit: subreddit, sortOption: .hot, topComments: topComments)
+    }
+
+    func summarizeSubredditTopDayPostsGlobally(subreddit: String, topComments: Int = 10) {
+        summarizeSubredditSortedPostsGlobally(subreddit: subreddit, sortOption: .topDay, topComments: topComments)
+    }
+
+    func summarizeSubredditTopWeekPostsGlobally(subreddit: String, topComments: Int = 10) {
+        summarizeSubredditSortedPostsGlobally(subreddit: subreddit, sortOption: .topWeek, topComments: topComments)
     }
 
     private func summarizeSubredditPostsGloballyInternal(subreddit: String, topComments: Int, includeReadPosts: Bool) {
@@ -4518,63 +5201,21 @@ class AppState: ObservableObject {
             context = .subreddit(name: subreddit, topComments: topComments)
         }
 
-        globalSummaryPosts = posts
-        globalSummaryArticles = []
-        cachedRedditCommentsForQA = []  // Clear comment cache when generating new summary
-        hasCachedSummary = false
+        let emptyLogMessage = includeReadPosts
+            ? "No posts in subreddit to summarize."
+            : "No unread posts in subreddit to summarize."
+        let emptyUserMessage = includeReadPosts
+            ? "No posts in this subreddit to summarize."
+            : "No unread posts in this subreddit to summarize."
 
-        guard !posts.isEmpty else {
-            if includeReadPosts {
-                print("❌ AppState.Global: No posts in subreddit to summarize.")
-                lastGlobalSummaryError = "No posts in this subreddit to summarize."
-                globalSummaryJSON = "{\"source\":\"reddit\",\"summaries\":[],\"error\":\"No posts in this subreddit to summarize.\"}"
-            } else {
-                print("❌ AppState.Global: No unread posts in subreddit to summarize.")
-                lastGlobalSummaryError = "No unread posts in this subreddit to summarize."
-                globalSummaryJSON = "{\"source\":\"reddit\",\"summaries\":[],\"error\":\"No unread posts in this subreddit to summarize.\"}"
-            }
-            hasCachedSummary = false
-            showGlobalSummary = true
-            return
-        }
-
-        let subredditCooldowns = activeCooldowns(forSubreddits: Set([subreddit]))
-        if !subredditCooldowns.isEmpty {
-            let affected = "r/\(subreddit)"
-            print("⚠️ AppState.Global: Blocking subreddit summary — API cooldown active for \(affected)")
-            lastGlobalSummaryContext = context
-            handleRedditSummaryCooldown(entries: subredditCooldowns)
-            return
-        }
-
-        let preserveExistingAggregateSummary = shouldPreserveAggregateSummary(for: context)
-        resetAggregateSummaryState(preservingCurrentSummary: preserveExistingAggregateSummary)
-        isLoading = true
-        lastGlobalSummaryError = nil
-        if !preserveExistingAggregateSummary {
-            globalSummaryJSON = "{\"source\":\"reddit\",\"summaries\":[],\"error\":null}"
-        }
-        hasCachedSummary = true  // Enable minimize button immediately
-        showGlobalSummary = true
-        lastGlobalSummaryContext = context
-
-        if settings.selectedSummaryProvider == .webAI {
-            summarizeRedditPostsGloballyWithWebAI(posts, topComments: topComments)
-            return
-        }
-
-        let existingHandle = prepareGlobalSummaryBackgroundHandleIfNeeded(
-            title: "Summarizing \(posts.count) Reddit Posts"
+        beginSubredditGlobalSummary(
+            posts: posts,
+            subreddit: subreddit,
+            topComments: topComments,
+            context: context,
+            emptyLogMessage: emptyLogMessage,
+            emptyUserMessage: emptyUserMessage
         )
-
-        globalSummaryService
-            .summarizeRedditGlobally(posts: posts, topComments: topComments, existingBackgroundTaskHandle: existingHandle)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] result in
-                guard let self = self else { return }
-                self.processGlobalSummaryResult(result)
-            }
-            .store(in: &cancellables)
     }
 
     private func summarizeArticlesGloballyWithWebAI(_ articles: [Article]) {
@@ -4738,6 +5379,8 @@ class AppState: ObservableObject {
             summarizeSubredditPostsGlobally(subreddit: name, topComments: topComments)
         case .subredditHot(let name, let topComments):
             summarizeSubredditHotPostsGlobally(subreddit: name, topComments: topComments)
+        case .subredditSorted(let name, let sortOption, let topComments):
+            summarizeSubredditSortedPostsGlobally(subreddit: name, sortOption: sortOption, topComments: topComments)
         }
     }
 
@@ -4809,6 +5452,48 @@ class AppState: ObservableObject {
         }
 
         let providerResolution = overallSummaryProviderResolution()
+        if providerResolution.localFallbackProviderName != nil {
+            let providerName = providerResolution.localFallbackProviderName ?? settings.selectedSummaryProvider.displayName
+            presentLocalReroute(
+                providerName: providerName,
+                prompt: prompt,
+                taskName: "Overall Summary",
+                appleRequestType: .globalSummary,
+                completion: { [weak self] routedSummary in
+                    guard let self else { return }
+                    let trimmed = routedSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let lowercased = trimmed.lowercased()
+                    self.isGeneratingAggregateSummary = false
+                    self.aggregateSummaryTask = nil
+                    if trimmed.isEmpty {
+                        self.aggregateSummaryError = "Failed to generate combined summary."
+                        self.aggregateSummaryText = nil
+                        self.aggregateSummarySourceFingerprint = nil
+                    } else if lowercased.hasPrefix("error")
+                        || lowercased.contains("api key not configured")
+                        || lowercased.contains("choose a cloud or remote provider") {
+                        self.aggregateSummaryError = trimmed
+                        self.aggregateSummaryText = nil
+                        self.aggregateSummarySourceFingerprint = nil
+                    } else {
+                        self.aggregateSummaryText = trimmed
+                        self.aggregateSummarySourceFingerprint = sourceFingerprint
+                        self.aggregateSummaryError = nil
+                    }
+                },
+                onCancel: { [weak self] in
+                    self?.isGeneratingAggregateSummary = false
+                    self?.aggregateSummaryTask = nil
+                },
+                onRouteStart: { [weak self] _ in
+                    self?.isGeneratingAggregateSummary = true
+                    self?.aggregateSummaryError = nil
+                    self?.aggregateSummaryText = nil
+                    self?.aggregateSummarySourceFingerprint = nil
+                }
+            )
+            return
+        }
 
         #if os(iOS)
         let usesGeminiBackgroundTask = (providerResolution.effectiveProvider == .gemini)
@@ -4924,6 +5609,13 @@ class AppState: ObservableObject {
                         prompt: prompt
                     )
 
+                case .applePCCGateway:
+                    print("☁️ AppState.Aggregate: Using Apple PCC Gateway for overall summary")
+                    summary = try await self.performPCCGatewayRequestAsync(
+                        prompt: prompt,
+                        taskName: result.source == "reddit" ? "Combined Reddit Summary" : "Combined Article Summary"
+                    )
+
                 case .summarizeDaemon:
                     print("⚡ AppState.Aggregate: Using Codex / Summarize for overall summary")
                     summary = try await self.performSummarizeRequestAsync(
@@ -4931,7 +5623,7 @@ class AppState: ObservableObject {
                         taskName: result.source == "reddit" ? "Combined Reddit Summary" : "Combined Article Summary"
                     )
 
-                case .appleLocal, .mlxLocal:
+                case .appleLocal, .mlxLocal, .coreAIMLXLocal:
                     #if os(iOS)
                     let existingHandle: GeminiBackgroundTaskHandle? = aggregateContext.handle
                     #else
@@ -5183,7 +5875,7 @@ class AppState: ObservableObject {
         case .gemini:
             return summaryService.summarizeText("", customPrompt: prompt)
 
-        case .appleLocal, .mlxLocal:
+        case .appleLocal, .mlxLocal, .coreAIMLXLocal:
             // Overall summary combines many articles — too large for local models.
             // Immediately route to Gemini and surface an info banner.
             DispatchQueue.main.async { [weak self] in
@@ -5205,6 +5897,19 @@ class AppState: ObservableObject {
                     onSuccess: { promise(.success($0)) },
                     onFailure: { promise(.success($0)) }
                 )
+            }
+            .eraseToAnyPublisher()
+
+        case .applePCCGateway:
+            return Future<String, Never> { promise in
+                Task(priority: .userInitiated) {
+                    do {
+                        let output = try await self.performPCCGatewayRequestAsync(prompt: prompt, taskName: "Today Summary")
+                        promise(.success(output))
+                    } catch {
+                        promise(.success("Apple PCC Gateway error: \(error.localizedDescription)"))
+                    }
+                }
             }
             .eraseToAnyPublisher()
 
@@ -5246,7 +5951,7 @@ class AppState: ObservableObject {
             content = prompt + truncatedContent
         }
         
-        print("📱 AppState: Launching Shortcuts for \(settings.selectedSummaryProvider.rawValue)")
+        print("📱 AppState: Launching \(settings.selectedSummaryProvider.rawValue) request")
         print("📱 AppState: Content length: \(content.count) characters")
         launchCloudSummary(for: content)
     }
@@ -5256,31 +5961,96 @@ class AppState: ObservableObject {
     }
 
     func launchCloudRequest(for text: String, type: AppleIntelligenceRequestType, useClipboardMonitoring: Bool = true, completion: ((String) -> Void)?) {
-        #if os(macOS)
-        runShortcutViaCLI(name: "RSS Reader Cloud Summary", input: text, type: type, completion: completion)
-        return
-#elseif targetEnvironment(macCatalyst)
-        if ProcessInfo.processInfo.isiOSAppOnMac {
-            runShortcutViaCLI(name: "RSS Reader Cloud Summary", input: text, type: type, completion: completion)
-            return
-        }
-#endif
-
-        if useClipboardMonitoring {
-            self.currentRequestType = type
-            self.currentRequestCompletion = completion
+        #if canImport(FoundationModels)
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) {
+            launchPrivateCloudComputeRequest(for: text, type: type, completion: completion)
         } else {
-            self.currentRequestCompletion = nil
+            handleCloudResult(
+                "Apple Cloud requires iOS 27, macOS 27, visionOS 27, or watchOS 27 with Apple Intelligence enabled.",
+                for: type,
+                completion: completion
+            )
         }
-        clearShortcutOutputFile()
-        writeShortcutInputFile(text)
-        if useClipboardMonitoring {
-            self.startClipboardMonitoring(for: type)
-        }
-        // Match the red sample: send the full prompt via URL input, and also mirror it to ShortcutInput.txt.
-        // (Structured prompts like whiteboard/infographic can be >2k chars; truncation causes missing JSON keys.)
-        launchShortcutViaXCallback(text: text, type: type)
+        #else
+        handleCloudResult(
+            "Apple Cloud is unavailable because FoundationModels is not available in this build.",
+            for: type,
+            completion: completion
+        )
+        #endif
     }
+
+    #if canImport(FoundationModels)
+    @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+    private func launchPrivateCloudComputeRequest(for text: String, type: AppleIntelligenceRequestType, completion: ((String) -> Void)?) {
+        print("☁️ AppState: Using Apple Private Cloud Compute for \(type)")
+        print("☁️ AppState: Prompt length: \(text.count) characters")
+        setWaitingState(for: type)
+
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+
+            do {
+                let response = try await self.performPrivateCloudComputeRequest(text)
+                await MainActor.run {
+                    self.clearWaitingState(for: type)
+                    self.handleCloudResult(response, for: type, completion: completion)
+                }
+            } catch {
+                let message = self.privateCloudComputeErrorMessage(error)
+                await MainActor.run {
+                    self.clearWaitingState(for: type)
+                    self.handleCloudResult(message, for: type, completion: completion)
+                }
+            }
+        }
+    }
+
+    @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+    private func performPrivateCloudComputeRequest(_ prompt: String) async throws -> String {
+        let model = PrivateCloudComputeLanguageModel()
+
+        guard model.isAvailable else {
+            throw NSError(domain: "ApplePrivateCloudCompute", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Apple Private Cloud Compute is unavailable: \(model.availability)"
+            ])
+        }
+
+        let session = LanguageModelSession(model: model)
+        let response = try await session.respond(
+            to: prompt,
+            contextOptions: ContextOptions(reasoningLevel: .moderate)
+        )
+
+        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+    private func privateCloudComputeErrorMessage(_ error: Error) -> String {
+        if let cloudError = error as? PrivateCloudComputeLanguageModel.Error {
+            switch cloudError {
+            case .networkFailure:
+                return "Apple Cloud network error. Check your connection and try again."
+            case .quotaLimitReached(let quota):
+                if let resetDate = quota.resetDate {
+                    return "Apple Cloud quota limit reached. Try again after \(resetDate.formatted())."
+                }
+                return "Apple Cloud quota limit reached."
+            case .serviceUnavailable:
+                return "Apple Cloud service is currently unavailable. Try again later."
+            @unknown default:
+                return "Apple Cloud error: \(cloudError.localizedDescription)"
+            }
+        }
+
+        let description = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if description.contains("private-cloud-compute") || description.contains("entitlement") {
+            return "Apple Cloud requires the managed Private Cloud Compute entitlement: com.apple.developer.private-cloud-compute."
+        }
+
+        return description.isEmpty ? "Apple Cloud request failed." : "Apple Cloud error: \(description)"
+    }
+    #endif
 
     private func launchShortcutViaXCallback(text: String, type: AppleIntelligenceRequestType) {
         let callbackURL = "shortcuts://x-callback-url/run-shortcut"
@@ -5667,6 +6437,8 @@ class AppState: ObservableObject {
     
     // MARK: - Cloud Summary Updates
     func updateArticleSummaryFromCloud(_ article: Article, summary: String) {
+        defer { finishArticleSummary(article) }
+
         if let feedIndex = feeds.firstIndex(where: { $0.url == article.feedURL }),
            let articleIndex = feeds[feedIndex].articles.firstIndex(where: { $0.id == article.id }) {
             
@@ -5902,13 +6674,43 @@ class AppState: ObservableObject {
         normalized.summarizeDaemonModel = AppSettings.normalizedSummarizeDaemonModel(settings.summarizeDaemonModel)
         normalized.summarizeBridgeHost = AppSettings.sanitizedSummarizeHost(settings.summarizeBridgeHost)
         normalized.summarizeBridgePort = AppSettings.sanitizedSummarizePort(settings.summarizeBridgePort, fallback: AppSettings.defaultSummarizeBridgePort)
+        normalized.pccGatewayHost = AppSettings.sanitizedSummarizeHost(settings.pccGatewayHost, fallback: AppSettings.defaultPCCGatewayHost)
+        normalized.pccGatewayPort = AppSettings.sanitizedSummarizePort(settings.pccGatewayPort, fallback: AppSettings.defaultPCCGatewayPort)
+        normalized.pccGatewayToken = AppSettings.sanitizedSummarizeSecret(settings.pccGatewayToken)
+        normalized.pccGatewayModel = AppSettings.normalizedPCCGatewayModel(settings.pccGatewayModel)
+        normalized.mlxMaxContextTokens = AppSettings.normalizedLiteRTContextTokens(settings.mlxMaxContextTokens)
+        normalized.mlxMaxOutputTokens = AppSettings.normalizedLiteRTOutputTokens(
+            settings.mlxMaxOutputTokens,
+            contextTokens: AppSettings.effectiveLiteRTContextTokens(normalized.mlxMaxContextTokens)
+        )
+        normalized.coreAIMLXMaxContextTokens = AppSettings.normalizedCoreAIMLXContextTokens(settings.coreAIMLXMaxContextTokens)
+        normalized.coreAIMLXMaxOutputTokens = AppSettings.normalizedCoreAIMLXOutputTokens(
+            settings.coreAIMLXMaxOutputTokens,
+            contextTokens: AppSettings.effectiveCoreAIMLXContextTokens(normalized.coreAIMLXMaxContextTokens)
+        )
         return normalized
     }
 
     func updateSettings(_ newSettings: AppSettings) {
         var normalizedSettings = newSettings
-        normalizedSettings.mlxModelID = MLXLocalService.normalizedModelIdentifier(from: normalizedSettings.mlxModelID)
+        normalizedSettings.mlxModelID = LiteRTLocalService.normalizedModelIdentifier(from: normalizedSettings.mlxModelID)
+        normalizedSettings.coreAIMLXModelID = CoreAIMLXLocalService.normalizedModelIdentifier(from: normalizedSettings.coreAIMLXModelID)
         normalizedSettings = Self.normalizedSummarizeSettings(normalizedSettings)
+
+        let persistedSettings = persistenceManager.loadSettings()
+        if normalizedSettings.redditClientId == persistedSettings.redditClientId {
+            normalizedSettings.redditAccessToken = persistedSettings.redditAccessToken
+            normalizedSettings.redditRefreshToken = persistedSettings.redditRefreshToken
+            normalizedSettings.redditTokenExpiry = persistedSettings.redditTokenExpiry
+            normalizedSettings.redditUsername = persistedSettings.redditUsername
+            normalizedSettings.redditGrantedScopes = persistedSettings.redditGrantedScopes
+        } else {
+            normalizedSettings.redditAccessToken = ""
+            normalizedSettings.redditRefreshToken = ""
+            normalizedSettings.redditTokenExpiry = nil
+            normalizedSettings.redditUsername = ""
+            normalizedSettings.redditGrantedScopes = ""
+        }
 
         // If Gemini API key changed, update all services that use it
         if normalizedSettings.geminiApiKey != settings.geminiApiKey {
@@ -5985,11 +6787,67 @@ class AppState: ObservableObject {
         updateSettings(newSettings)
     }
 
+    func setPCCGatewayHost(_ host: String) {
+        var newSettings = settings
+        newSettings.pccGatewayHost = AppSettings.sanitizedSummarizeHost(host, fallback: AppSettings.defaultPCCGatewayHost)
+        updateSettings(newSettings)
+    }
+
+    func setPCCGatewayPort(_ port: Int) {
+        var newSettings = settings
+        newSettings.pccGatewayPort = AppSettings.sanitizedSummarizePort(port, fallback: AppSettings.defaultPCCGatewayPort)
+        updateSettings(newSettings)
+    }
+
+    func setPCCGatewayToken(_ token: String) {
+        var newSettings = settings
+        newSettings.pccGatewayToken = AppSettings.sanitizedSummarizeSecret(token)
+        updateSettings(newSettings)
+    }
+
+    func setPCCGatewayModel(_ model: String) {
+        var newSettings = settings
+        newSettings.pccGatewayModel = AppSettings.normalizedPCCGatewayModel(model)
+        updateSettings(newSettings)
+    }
+
     func testSummarizeConnection(completion: @escaping (Result<String, Error>) -> Void) {
         let snapshot = settings
         Task(priority: .userInitiated) {
             do {
                 let response = try await RSSSummarizeProviderClient.ping(settings: snapshot)
+                await MainActor.run { completion(.success(response)) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
+            }
+        }
+    }
+
+    func testPCCGatewayConnection(completion: @escaping (Result<String, Error>) -> Void) {
+        let snapshot = settings
+        Task(priority: .userInitiated) {
+            do {
+                let host = AppSettings.sanitizedSummarizeHost(
+                    snapshot.pccGatewayHost,
+                    fallback: AppSettings.defaultPCCGatewayHost
+                )
+                guard !host.isEmpty else { throw FMPCCGatewayError.missingHost }
+                let port = AppSettings.sanitizedSummarizePort(
+                    snapshot.pccGatewayPort,
+                    fallback: AppSettings.defaultPCCGatewayPort
+                )
+                guard (1...65_535).contains(port) else { throw FMPCCGatewayError.invalidPort(port) }
+                let token = AppSettings.sanitizedSummarizeSecret(snapshot.pccGatewayToken)
+                guard !token.isEmpty else { throw FMPCCGatewayError.missingToken }
+
+                let response = try await FMPCCGatewayClient(
+                    configuration: FMPCCGatewayConfiguration(
+                        host: host,
+                        port: port,
+                        token: token,
+                        model: AppSettings.normalizedPCCGatewayModel(snapshot.pccGatewayModel)
+                    )
+                ).health()
                 await MainActor.run { completion(.success(response)) }
             } catch {
                 await MainActor.run { completion(.failure(error)) }
@@ -6013,6 +6871,9 @@ class AppState: ObservableObject {
         // Clear URLSession cache (images, API responses)
         URLCache.shared.removeAllCachedResponses()
         print("🗑️ AppState: Cleared URLSession cache")
+
+        let removableCacheBytes = cleanStorageBreakdownItem(.caches)
+        print("🗑️ AppState: Cleared removable cache files (\(formattedByteCount(removableCacheBytes))); preserved local model caches")
 
         let group = DispatchGroup()
 
@@ -6041,6 +6902,91 @@ class AppState: ObservableObject {
         }
     }
 
+    func clearFailedModelDownloads(completion: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let freedBytes = self.removeFailedModelDownloadFiles()
+            let message: String
+            if freedBytes > 0 {
+                message = "Removed \(self.formattedByteCount(freedBytes)) of failed model downloads."
+            } else {
+                message = "No failed model downloads found."
+            }
+
+            DispatchQueue.main.async {
+                completion(message)
+            }
+        }
+    }
+
+    func loadLocalModelStorage(completion: @escaping ([LocalModelStorageItem]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let items = self.collectLocalModelStorageItems()
+            DispatchQueue.main.async {
+                completion(items)
+            }
+        }
+    }
+
+    func deleteLocalModelStorageItem(_ item: LocalModelStorageItem, completion: @escaping (String) -> Void) {
+        Task(priority: .utility) {
+            await LiteRTLocalService.shared.unloadAllModels()
+            await CoreAIMLXLocalService.shared.unloadAllModels()
+
+            let message: String
+            do {
+                let size = directorySizeIncludingHidden(at: item.url)
+                try FileManager.default.removeItem(at: item.url)
+                message = "Deleted \(item.name) and freed \(formattedByteCount(size))."
+            } catch {
+                message = "Could not delete \(item.name): \(error.localizedDescription)"
+            }
+
+            await MainActor.run {
+                completion(message)
+            }
+        }
+    }
+
+    func loadAppStorageBreakdown(completion: @escaping ([AppStorageBreakdownItem]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let items = self.collectAppStorageBreakdownItems()
+            DispatchQueue.main.async {
+                completion(items)
+            }
+        }
+    }
+
+    func deleteAppStorageBreakdownItem(_ item: AppStorageBreakdownItem, completion: @escaping (String) -> Void) {
+        Task(priority: .utility) {
+            let message: String
+            if item.isModelStorage {
+                await LiteRTLocalService.shared.unloadAllModels()
+                await CoreAIMLXLocalService.shared.unloadAllModels()
+
+                let url = URL(fileURLWithPath: item.id)
+                let size = self.directorySizeIncludingHidden(at: url)
+                if (try? FileManager.default.removeItem(at: url)) != nil {
+                    message = "Deleted \(item.name) and freed \(self.formattedByteCount(size))."
+                } else {
+                    message = "Could not delete \(item.name)."
+                }
+            } else if let cleanupKind = item.cleanupKind {
+                let freedBytes = self.cleanStorageBreakdownItem(cleanupKind)
+                if freedBytes > 0 {
+                    message = "Deleted \(item.name) and freed \(self.formattedByteCount(freedBytes))."
+                } else {
+                    message = "No removable files found in \(item.name)."
+                }
+            } else {
+                message = "\(item.name) is not safe to delete automatically."
+            }
+
+            await MainActor.run {
+                completion(message)
+            }
+        }
+    }
+
     func getCacheSize() -> String {
         var total: UInt64 = 0
 
@@ -6049,17 +6995,80 @@ class AppState: ObservableObject {
         total += directorySize(at: FileManager.default.temporaryDirectory)
 
         if let cachesURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            let kingfisherURL = cachesURL.appendingPathComponent("com.onevcat.Kingfisher.ImageCache", isDirectory: true)
-            total += directorySize(at: kingfisherURL)
+            total += directorySizeIncludingHidden(at: cachesURL, excluding: modelCacheRoots())
         }
 
         if let libraryURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
             let webKitURL = libraryURL.appendingPathComponent("WebKit", isDirectory: true)
             total += directorySize(at: webKitURL)
+            let httpStoragesURL = libraryURL.appendingPathComponent("HTTPStorages", isDirectory: true)
+            total += directorySize(at: httpStoragesURL)
         }
 
         let totalMB = Double(total) / 1_048_576
         return String(format: "%.1f MB", totalMB)
+    }
+
+    private func collectAppStorageBreakdownItems() -> [AppStorageBreakdownItem] {
+        let fm = FileManager.default
+        var items: [AppStorageBreakdownItem] = []
+        var seenPaths = Set<String>()
+
+        func add(_ name: String, detail: String, url: URL, isModelStorage: Bool = false, cleanupKind: AppStorageBreakdownItem.CleanupKind? = nil, sizeOverride: UInt64? = nil) {
+            guard fm.fileExists(atPath: url.path), !seenPaths.contains(url.path) else { return }
+            let size = sizeOverride ?? directorySizeIncludingHidden(at: url)
+            guard size > 0 else { return }
+            seenPaths.insert(url.path)
+            items.append(AppStorageBreakdownItem(
+                id: url.path,
+                name: name,
+                detail: detail,
+                sizeBytes: size,
+                isModelStorage: isModelStorage,
+                cleanupKind: cleanupKind
+            ))
+        }
+
+        if let documentsURL = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
+            add("Documents", detail: documentsURL.path, url: documentsURL)
+        }
+
+        if let appSupportURL = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let liteRTModelsURL = appSupportURL.appendingPathComponent("LiteRTModels", isDirectory: true)
+            add(
+                "Application Support Data",
+                detail: "App support files excluding LiteRT models",
+                url: appSupportURL,
+                sizeOverride: directorySizeIncludingHidden(at: appSupportURL, excluding: [liteRTModelsURL])
+            )
+            add("LiteRT Models", detail: "Downloaded .litertlm files", url: liteRTModelsURL, isModelStorage: true)
+        }
+
+        if let cachesURL = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            add(
+                "Removable Caches",
+                detail: "Caches excluding MLX / Hugging Face models",
+                url: cachesURL,
+                cleanupKind: .caches,
+                sizeOverride: directorySizeIncludingHidden(at: cachesURL, excluding: modelCacheRoots())
+            )
+            add("Kingfisher Images", detail: "Image cache", url: cachesURL.appendingPathComponent("com.onevcat.Kingfisher.ImageCache", isDirectory: true), cleanupKind: .kingfisherImages)
+        }
+
+        if let libraryURL = fm.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            add("WebKit", detail: "Web AI browser data", url: libraryURL.appendingPathComponent("WebKit", isDirectory: true), cleanupKind: .webKit)
+            add("HTTPStorages", detail: "URLSession and web storage", url: libraryURL.appendingPathComponent("HTTPStorages", isDirectory: true), cleanupKind: .httpStorages)
+            add("Saved Application State", detail: "System window/session state", url: libraryURL.appendingPathComponent("Saved Application State", isDirectory: true), cleanupKind: .savedApplicationState)
+            add("Logs", detail: "App and framework logs", url: libraryURL.appendingPathComponent("Logs", isDirectory: true), cleanupKind: .logs)
+        }
+
+        add("Temporary Files", detail: FileManager.default.temporaryDirectory.path, url: FileManager.default.temporaryDirectory, cleanupKind: .temporaryFiles)
+
+        for root in modelCacheRoots() {
+            add("MLX / Hugging Face Models", detail: root.path, url: root, isModelStorage: true)
+        }
+
+        return items.sorted { $0.sizeBytes > $1.sizeBytes }
     }
 
     private func directorySize(at url: URL) -> UInt64 {
@@ -6080,6 +7089,247 @@ class AppState: ObservableObject {
             }
         }
         return total
+    }
+
+    private func collectLocalModelStorageItems() -> [LocalModelStorageItem] {
+        let fm = FileManager.default
+        var items: [LocalModelStorageItem] = []
+
+        let currentLiteRTFileName = LiteRTLocalService.defaultModelFileName
+        if let appSupportURL = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let liteRTURL = appSupportURL.appendingPathComponent("LiteRTModels", isDirectory: true)
+            if let files = try? fm.contentsOfDirectory(
+                at: liteRTURL,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for file in files where file.pathExtension == "litertlm" {
+                    let size = directorySizeIncludingHidden(at: file)
+                    items.append(LocalModelStorageItem(
+                        id: file.path,
+                        name: file.lastPathComponent,
+                        detail: "LiteRT model file",
+                        kind: .liteRT,
+                        sizeBytes: size,
+                        url: file,
+                        isCurrentSelection: file.lastPathComponent == currentLiteRTFileName
+                    ))
+                }
+            }
+        }
+
+        for root in modelCacheRoots() where fm.fileExists(atPath: root.path) {
+            if let entries = try? fm.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for entry in entries {
+                    let values = try? entry.resourceValues(forKeys: [.isDirectoryKey])
+                    guard values?.isDirectory == true else { continue }
+                    let size = directorySizeIncludingHidden(at: entry)
+                    guard size > 0 else { continue }
+                    items.append(LocalModelStorageItem(
+                        id: entry.path,
+                        name: displayNameForModelCacheDirectory(entry.lastPathComponent),
+                        detail: "MLX / Hugging Face model folder",
+                        kind: .mlx,
+                        sizeBytes: size,
+                        url: entry,
+                        isCurrentSelection: isCurrentMLXModelDirectory(entry.lastPathComponent)
+                    ))
+                }
+            }
+        }
+
+        return items.sorted {
+            if $0.kind.rawValue != $1.kind.rawValue { return $0.kind.rawValue < $1.kind.rawValue }
+            return $0.sizeBytes > $1.sizeBytes
+        }
+    }
+
+    private func modelCacheRoots() -> [URL] {
+        #if os(macOS)
+        return [URL.homeDirectory.appending(path: ".cache/huggingface/hub")]
+        #else
+        return [URL.cachesDirectory.appending(path: "huggingface")]
+        #endif
+    }
+
+    private func displayNameForModelCacheDirectory(_ name: String) -> String {
+        if name.hasPrefix("models--") {
+            return String(name.dropFirst("models--".count)).replacingOccurrences(of: "--", with: "/")
+        }
+        return name
+    }
+
+    private func isCurrentMLXModelDirectory(_ name: String) -> Bool {
+        let current = settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !current.isEmpty else { return false }
+        let safeID = current.replacingOccurrences(of: "/", with: "--")
+        return name == "models--\(safeID)" || name == safeID || displayNameForModelCacheDirectory(name) == current
+    }
+
+    private func removeFailedModelDownloadFiles() -> UInt64 {
+        let fm = FileManager.default
+        var freedBytes: UInt64 = 0
+        var roots = modelCacheRoots()
+        if let appSupportURL = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            roots.append(appSupportURL.appendingPathComponent("LiteRTModels", isDirectory: true))
+        }
+
+        for root in roots where fm.fileExists(atPath: root.path) {
+            guard let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+                options: []
+            ) else { continue }
+
+            for case let fileURL as URL in enumerator {
+                let name = fileURL.lastPathComponent
+                guard name.hasSuffix(".download") || name.hasSuffix(".partial") || name.hasSuffix(".dl-bits") else { continue }
+                let size = directorySizeIncludingHidden(at: fileURL)
+                if (try? fm.removeItem(at: fileURL)) != nil {
+                    freedBytes += size
+                    print("🗑️ AppState: Removed failed model download \(fileURL.lastPathComponent)")
+                }
+            }
+        }
+
+        return freedBytes
+    }
+
+    private func cleanStorageBreakdownItem(_ cleanupKind: AppStorageBreakdownItem.CleanupKind) -> UInt64 {
+        let fm = FileManager.default
+
+        switch cleanupKind {
+        case .caches:
+            URLCache.shared.removeAllCachedResponses()
+            guard let cachesURL = fm.urls(for: .cachesDirectory, in: .userDomainMask).first else { return 0 }
+            return removeDirectoryContents(at: cachesURL, preserving: modelCacheRoots())
+
+        case .kingfisherImages:
+            #if canImport(Kingfisher)
+            ImageCache.default.clearMemoryCache()
+            #endif
+            guard let cachesURL = fm.urls(for: .cachesDirectory, in: .userDomainMask).first else { return 0 }
+            return removeItemIfExists(at: cachesURL.appendingPathComponent("com.onevcat.Kingfisher.ImageCache", isDirectory: true))
+
+        case .webKit:
+            guard let libraryURL = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return 0 }
+            return removeItemIfExists(at: libraryURL.appendingPathComponent("WebKit", isDirectory: true))
+
+        case .httpStorages:
+            guard let libraryURL = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return 0 }
+            return removeItemIfExists(at: libraryURL.appendingPathComponent("HTTPStorages", isDirectory: true))
+
+        case .savedApplicationState:
+            guard let libraryURL = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return 0 }
+            return removeItemIfExists(at: libraryURL.appendingPathComponent("Saved Application State", isDirectory: true))
+
+        case .logs:
+            guard let libraryURL = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return 0 }
+            return removeItemIfExists(at: libraryURL.appendingPathComponent("Logs", isDirectory: true))
+
+        case .temporaryFiles:
+            return removeDirectoryContents(at: fm.temporaryDirectory, preserving: [])
+        }
+    }
+
+    private func removeDirectoryContents(at directory: URL, preserving protectedURLs: [URL]) -> UInt64 {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: []) else { return 0 }
+        var freedBytes: UInt64 = 0
+
+        for item in contents {
+            if shouldPreserveStorageItem(item, protectedURLs: protectedURLs) {
+                continue
+            }
+
+            let size = directorySizeIncludingHidden(at: item)
+            if (try? fm.removeItem(at: item)) != nil {
+                freedBytes += size
+            }
+        }
+
+        return freedBytes
+    }
+
+    private func removeItemIfExists(at url: URL) -> UInt64 {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return 0 }
+        let size = directorySizeIncludingHidden(at: url)
+        if (try? fm.removeItem(at: url)) != nil {
+            return size
+        }
+        return 0
+    }
+
+    private func shouldPreserveStorageItem(_ item: URL, protectedURLs: [URL]) -> Bool {
+        let itemPath = item.standardizedFileURL.path
+        return protectedURLs.contains { protectedURL in
+            let protectedPath = protectedURL.standardizedFileURL.path
+            return itemPath == protectedPath
+                || itemPath.hasPrefix(protectedPath + "/")
+                || protectedPath.hasPrefix(itemPath + "/")
+        }
+    }
+
+    private func directorySizeIncludingHidden(at url: URL) -> UInt64 {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return 0 }
+        if !isDirectory.boolValue {
+            return UInt64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            options: []
+        ) else { return 0 }
+
+        var total: UInt64 = 0
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            if values?.isDirectory == true { continue }
+            total += UInt64(values?.fileSize ?? 0)
+        }
+        return total
+    }
+
+    private func directorySizeIncludingHidden(at url: URL, excluding excludedURLs: [URL]) -> UInt64 {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return 0 }
+        guard isDirectory.boolValue else {
+            return shouldPreserveStorageItem(url, protectedURLs: excludedURLs) ? 0 : directorySizeIncludingHidden(at: url)
+        }
+
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            options: []
+        ) else { return 0 }
+
+        var total: UInt64 = 0
+        for case let fileURL as URL in enumerator {
+            if shouldPreserveStorageItem(fileURL, protectedURLs: excludedURLs) {
+                enumerator.skipDescendants()
+                continue
+            }
+            let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            if values?.isDirectory == true { continue }
+            total += UInt64(values?.fileSize ?? 0)
+        }
+        return total
+    }
+
+    private func formattedByteCount(_ bytes: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 
     private func clearTemporaryDirectory() {
@@ -6300,26 +7550,35 @@ class AppState: ObservableObject {
     // MARK: - Local Model Fallback Helper
     private func isContextError(_ error: Error) -> Bool {
         let errorMessage = error.localizedDescription.lowercased()
-        
-        // Common context/length related errors from Apple Intelligence
-        let contextKeywords = [
-            "context", "token", "length", "limit", "exceeded",
-            "too long", "too large", "maximum", "size",
-            "input too large", "content too long", "text too long",
-            "request too large", "payload too large", "truncated",
-            "buffer", "capacity", "overflow", "quota"
+
+        let contextPhrases = [
+            "context length",
+            "context window",
+            "context limit",
+            "maximum context",
+            "maximum allowed length",
+            "input length",
+            "input too large",
+            "content too long",
+            "text too long",
+            "request too large",
+            "payload too large",
+            "too long",
+            "too large",
+            "exceeded the maximum",
+            "exceeds the maximum",
+            "exceeded context",
+            "exceeds context"
         ]
-        
-        for keyword in contextKeywords {
-            if errorMessage.contains(keyword) {
+
+        for phrase in contextPhrases {
+            if errorMessage.contains(phrase) {
                 return true
             }
         }
-        
-        // Check error codes that typically indicate context limits
+
         if let nsError = error as? NSError {
-            // Common error codes for context/size limits
-            let contextErrorCodes = [413, 422, 400, 431] // Request Entity Too Large, Unprocessable Entity, Bad Request, Request Header Fields Too Large
+            let contextErrorCodes = [413, 431]
             if contextErrorCodes.contains(nsError.code) {
                 return true
             }
@@ -6327,75 +7586,263 @@ class AppState: ObservableObject {
         
         return false
     }
+
+    private func isLocalProviderContextError(_ error: Error) -> Bool {
+        LiteRTLocalService.isContextTooLargeError(error)
+            || CoreAIMLXLocalService.isContextTooLargeError(error)
+            || isContextError(error)
+    }
+
+    @MainActor
+    private func showContextRerouteNotification(from providerName: String, to targetName: String = "Gemini") {
+        fallbackNotification = "Request too long for \(providerName). Routing to \(targetName)."
+        todaySummaryInfo = "\(providerName) exceeded context — using \(targetName)."
+        showFallbackNotification = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
+            self?.showFallbackNotification = false
+        }
+    }
+
+    @MainActor
+    func reroutePendingLocalRequest(to provider: LocalRerouteProvider) {
+        guard let request = pendingLocalReroute else { return }
+        pendingLocalReroute = nil
+        request.route(to: provider)
+    }
+
+    @MainActor
+    func dismissPendingLocalReroute() {
+        guard let request = pendingLocalReroute else { return }
+        pendingLocalReroute = nil
+        request.cancel()
+    }
+
+    private func estimatedTokensForLocalRouting(_ text: String) -> Int {
+        max(1, Int(ceil(Double(text.count) / 4.0)))
+    }
+
+    @MainActor
+    private func presentLocalReroute(
+        providerName: String,
+        prompt: String,
+        taskName: String,
+        appleRequestType: AppleIntelligenceRequestType = .summary,
+        isQA: Bool = false,
+        error: Error? = nil,
+        completion: @escaping (String) -> Void,
+        onCancel: (() -> Void)? = nil,
+        onRouteStart: ((LocalRerouteProvider) -> Void)? = nil,
+        presentationScope: LocalReroutePresentationScope = .global
+    ) {
+        mlxStreamingText = ""
+        isLoading = false
+
+        let estimatedTokens = estimatedTokensForLocalRouting(prompt)
+        let message: String
+        if let error {
+            message = "\(providerName) could not handle this request locally: \(error.localizedDescription) Choose another model to reroute it."
+        } else {
+            message = "\(providerName) needs about \(estimatedTokens) input tokens for this request, which is larger than the available local context. Choose another model to reroute it."
+        }
+
+        pendingLocalReroute = LocalRerouteRequest(
+            message: message,
+            presentationScope: presentationScope,
+            routeStartHandler: { provider in
+                onRouteStart?(provider)
+            },
+            routeHandler: { [weak self] provider in
+                guard let self else { return }
+                self.performReroutedLocalPrompt(
+                    prompt: prompt,
+                    taskName: taskName,
+                    provider: provider,
+                    appleRequestType: appleRequestType,
+                    isQA: isQA,
+                    completion: completion
+                )
+            },
+            cancelHandler: { [weak self] in
+                self?.mlxStreamingText = ""
+                self?.isLoading = false
+                onCancel?()
+            }
+        )
+    }
+
+    @MainActor
+    private func performReroutedLocalPrompt(
+        prompt: String,
+        taskName: String,
+        provider: LocalRerouteProvider,
+        appleRequestType: AppleIntelligenceRequestType,
+        isQA: Bool,
+        completion: @escaping (String) -> Void
+    ) {
+        let target = provider.summaryProvider
+        fallbackNotification = "Routing \(taskName) to \(provider.displayName)."
+        showFallbackNotification = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            self?.showFallbackNotification = false
+        }
+
+        switch target {
+        case .gemini:
+            performGeminiFallback(prompt: prompt, taskName: taskName, completion: completion)
+
+        case .applePCCGateway:
+            isLoading = true
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                do {
+                    let answer = try await self.performPCCGatewayRequestAsync(prompt: prompt, taskName: taskName, isQA: isQA)
+                    await MainActor.run {
+                        self.isLoading = false
+                        completion(answer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.isLoading = false
+                        completion("Apple PCC Gateway error: \(error.localizedDescription)")
+                    }
+                }
+            }
+
+        case .summarizeDaemon:
+            isLoading = true
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                do {
+                    let start = Date()
+                    let answer = try await self.summaryService.generateContentWithSummarize(prompt: prompt, settings: self.settings)
+                    let elapsed = Date().timeIntervalSince(start)
+                    await MainActor.run {
+                        self.recordSummarizeThroughput(text: answer, elapsed: elapsed, isQA: isQA)
+                        self.isLoading = false
+                        completion(answer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.isLoading = false
+                        completion("Codex / Summarize error: \(error.localizedDescription)")
+                    }
+                }
+            }
+
+        case .appleCloud:
+            isLoading = true
+            launchCloudRequest(for: prompt, type: appleRequestType, completion: completion)
+
+        case .webAI:
+            isLoading = true
+            performWebAIRequest(
+                title: taskName,
+                prompt: prompt,
+                onSuccess: { [weak self] answer in
+                    self?.isLoading = false
+                    completion(answer)
+                },
+                onFailure: { [weak self] message in
+                    self?.isLoading = false
+                    completion(message)
+                }
+            )
+
+        case .appleLocal, .mlxLocal, .coreAIMLXLocal:
+            completion("Choose a cloud or remote provider to reroute this request.")
+        }
+    }
+
+    private func appleLocalUnavailableError() -> NSError {
+        NSError(
+            domain: "AppleLocal.Unavailable",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Apple Local AI is not available on this device."]
+        )
+    }
+
+    @available(iOS 26.0, macOS 26.0, visionOS 26.0, watchOS 27.0, *)
+    private func generateAppleLocalStreaming(prompt: String) async throws -> String {
+        await MainActor.run { self.mlxStreamingText = "" }
+        let session = LanguageModelSession()
+        var output = ""
+
+        for try await snapshot in session.streamResponse(to: prompt) {
+            if Task.isCancelled { throw CancellationError() }
+            output = snapshot.content
+            await MainActor.run {
+                self.mlxStreamingText = output
+            }
+        }
+
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     
     private func performLocalWithGeminiFallback(
         prompt: String,
         taskName: String,
-        completion: @escaping (String) -> Void
+        appleRequestType: AppleIntelligenceRequestType = .summary,
+        isQA: Bool = false,
+        completion: @escaping (String) -> Void,
+        onCancel: (() -> Void)? = nil,
+        onRouteStart: ((LocalRerouteProvider) -> Void)? = nil
     ) {
-        if #available(iOS 18.2, *), LocalSummaryService.isAvailable() {
+        if settings.selectedSummaryProvider == .appleLocal,
+           estimateTokens(for: prompt) > appStateAppleLocalMaxTokens {
+            presentLocalReroute(
+                providerName: "Apple Local",
+                prompt: prompt,
+                taskName: taskName,
+                appleRequestType: appleRequestType,
+                isQA: isQA,
+                completion: completion,
+                onCancel: onCancel,
+                onRouteStart: onRouteStart
+            )
+            return
+        }
+
+        if #available(iOS 26.0, *), LocalSummaryService.isAvailable() {
             print("📱 AppState: Trying local model for \(taskName)")
-            LocalSummaryService.summarizeText(prompt) { [weak self] result in
-                guard let self = self else { return }
-                
-                switch result {
-                case .success(let response):
-                    print("✅ AppState: Local model succeeded for \(taskName)")
-                    completion(response)
-                case .failure(let error):
-                    print("⚠️ AppState: Local model failed for \(taskName): \(error.localizedDescription)")
-                    print("🔍 AppState: Error type: \(type(of: error))")
-                    
-                    // For debugging - always show notification temporarily 
-                    // This will help us see if the notification system is working
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self = self else { return }
-                        if self.isContextError(error) {
-                            self.fallbackNotification = "Request too long for Local AI. Using Gemini (change provider in Settings)."
-                            self.todaySummaryInfo = "Local model exceeded context — using Gemini."
-                        } else {
-                            self.fallbackNotification = "Local AI failed. Switching to Gemini for \(taskName.lowercased())..."
-                            self.todaySummaryInfo = "Local model declined/failed — using Gemini."
-                        }
-                        self.showFallbackNotification = true
-                        print("🔔 AppState: Showing fallback notification - \(self.fallbackNotification)")
-                        
-                        // Auto-hide notification after 6 seconds (longer for debugging)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
-                            self?.showFallbackNotification = false
-                            print("🔔 AppState: Hiding fallback notification")
-                        }
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                do {
+                    let response = try await self.generateAppleLocalStreaming(prompt: prompt)
+                    await MainActor.run {
+                        self.mlxStreamingText = ""
+                        print("✅ AppState: Local model succeeded for \(taskName)")
+                        completion(response)
                     }
-                    
-                    // Check if it's a context-related error
-                    if self.isContextError(error) {
-                        print("🔄 AppState: Context error detected, falling back to Gemini for \(taskName)")
-                        self.performGeminiFallback(prompt: prompt, taskName: taskName, completion: completion)
-                    } else {
-                        print("❌ AppState: Non-context error, still falling back: \(error.localizedDescription)")
-                        // Always fallback for now to help with debugging
-                        self.performGeminiFallback(prompt: prompt, taskName: taskName, completion: completion)
+                } catch {
+                    await MainActor.run {
+                        self.mlxStreamingText = ""
+                        print("⚠️ AppState: Local model failed for \(taskName): \(error.localizedDescription)")
+                        print("🔍 AppState: Error type: \(type(of: error))")
+                        self.presentLocalReroute(
+                            providerName: "Apple Local",
+                            prompt: prompt,
+                            taskName: taskName,
+                            appleRequestType: appleRequestType,
+                            isQA: isQA,
+                            error: error,
+                            completion: completion,
+                            onCancel: onCancel
+                        )
                     }
                 }
             }
         } else {
-            print("⚠️ AppState: Local model not available, using Gemini for \(taskName)")
-            
-            // Show notification when local AI isn't available
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.fallbackNotification = "Local AI unavailable. Using Gemini for \(taskName.lowercased())..."
-                self.showFallbackNotification = true
-                print("🔔 AppState: Showing unavailable notification - \(self.fallbackNotification)")
-                
-                // Auto-hide notification after 6 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) { [weak self] in
-                    self?.showFallbackNotification = false
-                    print("🔔 AppState: Hiding unavailable notification")
-                }
-            }
-            
-            performGeminiFallback(prompt: prompt, taskName: taskName, completion: completion)
+            print("⚠️ AppState: Local model not available, asking for reroute for \(taskName)")
+            presentLocalReroute(
+                providerName: "Apple Local",
+                prompt: prompt,
+                taskName: taskName,
+                appleRequestType: appleRequestType,
+                isQA: isQA,
+                error: appleLocalUnavailableError(),
+                completion: completion,
+                onCancel: onCancel
+            )
         }
     }
     
@@ -6427,31 +7874,98 @@ class AppState: ObservableObject {
     /// Pre-load + prime Metal shader cache for the configured MLX model.
     /// Safe to call at any time; silently does nothing when MLX is not the active provider.
     func warmUpMLXIfNeeded() {
-        guard settings.selectedSummaryProvider == .mlxLocal else { return }
-        guard MLXLocalService.isAvailable() else { return }
-        let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal else { return }
+        let useCoreAIMLX = settings.selectedSummaryProvider == .coreAIMLXLocal
+        let modelID = useCoreAIMLX
+            ? settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            : settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelID.isEmpty else { return }
-        let maxCtx = settings.mlxMaxContextTokens > 0 ? settings.mlxMaxContextTokens : 4_096
-        Task.detached(priority: .utility) { [modelID, maxCtx] in
+        let maxCtx = useCoreAIMLX
+            ? (settings.coreAIMLXMaxContextTokens > 0 ? settings.coreAIMLXMaxContextTokens : CoreAIMLXLocalService.defaultContextTokens)
+            : (settings.mlxMaxContextTokens > 0 ? settings.mlxMaxContextTokens : LiteRTLocalService.defaultContextTokens)
+        Task.detached(priority: .utility) { [modelID, maxCtx, useCoreAIMLX] in
             do {
-                try await MLXLocalService.shared.preloadConfiguredModel(modelID: modelID)
-                try await MLXLocalService.shared.warmUpConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
-                await MLXLocalService.shared.clearTransientCache()
-                print("🔥 [MLX] Warm-up complete for '\(modelID)'")
+                if useCoreAIMLX {
+                    try await CoreAIMLXLocalService.shared.preloadConfiguredModel(modelID: modelID)
+                    try await CoreAIMLXLocalService.shared.warmUpConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
+                    await CoreAIMLXLocalService.shared.clearTransientCache()
+                    print("🔥 [CoreAI MLX] Warm-up complete for '\(modelID)'")
+                } else {
+                    try await LiteRTLocalService.shared.preloadConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
+                    try await LiteRTLocalService.shared.warmUpConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
+                    await LiteRTLocalService.shared.clearTransientCache()
+                    print("🔥 [LiteRT] Warm-up complete for '\(modelID)'")
+                }
             } catch {
-                print("⚠️ [MLX] Warm-up failed: \(error.localizedDescription)")
+                print("⚠️ [\(useCoreAIMLX ? "CoreAI MLX" : "LiteRT")] Warm-up failed: \(error.localizedDescription)")
             }
         }
     }
 
     // MARK: - MLX Throughput helper
 
+    private var selectedLocalModelLabel: String {
+        settings.selectedSummaryProvider == .coreAIMLXLocal ? "CoreAI MLX" : "LiteRT"
+    }
+
+    private var selectedLocalModelID: String {
+        if settings.selectedSummaryProvider == .coreAIMLXLocal {
+            return settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func generateLocalTextWithMetrics(
+        prompt: String,
+        systemPrompt: String? = nil,
+        maxOutputTokens: Int,
+        maxContextTokens: Int?,
+        onToken: (@Sendable (String) async -> Void)? = nil
+    ) async throws -> MLXGenerationMetrics {
+        let modelID = selectedLocalModelID
+        guard !modelID.isEmpty else {
+            throw NSError(
+                domain: "SummaryService.LocalModel",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "\(selectedLocalModelLabel) model id is missing. Set it in Settings -> Summary Provider."]
+            )
+        }
+
+        if settings.selectedSummaryProvider == .coreAIMLXLocal {
+            return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
+                prompt: prompt,
+                systemPrompt: systemPrompt,
+                modelID: modelID,
+                maxOutputTokens: maxOutputTokens,
+                maxContextTokens: maxContextTokens,
+                onToken: onToken
+            )
+        }
+
+        return try await LiteRTLocalService.shared.generateTextWithMetrics(
+            prompt: prompt,
+            systemPrompt: systemPrompt,
+            modelID: modelID,
+            maxOutputTokens: maxOutputTokens,
+            maxContextTokens: maxContextTokens,
+            onToken: onToken
+        )
+    }
+
+    private func clearLocalModelTransientCache() async {
+        if settings.selectedSummaryProvider == .coreAIMLXLocal {
+            await CoreAIMLXLocalService.shared.clearTransientCache()
+        } else {
+            await LiteRTLocalService.shared.clearTransientCache()
+        }
+    }
+
     /// Format and publish throughput after a successful MLX generation.
     @MainActor
     private func recordMLXThroughput(_ metrics: MLXGenerationMetrics) {
         guard metrics.tokensPerSecond > 0 else { return }
         mlxLastThroughput = String(
-            format: "MLX · %.1f tok/s · %d tokens",
+            format: "\(selectedLocalModelLabel) · %.1f tok/s · %d tokens",
             metrics.tokensPerSecond,
             metrics.tokenCount
         )
@@ -6479,31 +7993,93 @@ class AppState: ObservableObject {
         }
     }
 
+    @MainActor
+    private func recordPCCGatewayThroughput(text: String, elapsed: TimeInterval, isQA: Bool = false) {
+        guard elapsed > 0 else { return }
+        let estimatedTokens = max(1, Int(Double(text.split(separator: " ").count) * 1.3))
+        let tokPerSec = Double(estimatedTokens) / elapsed
+        let label = String(format: "Apple PCC · ~%.1f tok/s · ~%d tokens", tokPerSec, estimatedTokens)
+        if isQA {
+            mlxLastQAThroughput = label
+        } else {
+            mlxLastThroughput = label
+        }
+    }
+
     /// Public version for use in Views (e.g. RedditDetailView thematic analysis).
     @MainActor
     func recordAppleLocalThroughputPublic(text: String, elapsed: TimeInterval) {
         recordAppleLocalThroughput(text: text, elapsed: elapsed)
     }
 
-    /// Apple Local only — no Gemini fallback. On failure calls completion with an error string.
+    /// Apple Local only. On context overflow, failure, or unavailable model, asks the user where to reroute.
     func performAppleLocalOnlyPublic(
         prompt: String,
         taskName: String,
-        completion: @escaping (String) -> Void
+        appleRequestType: AppleIntelligenceRequestType = .summary,
+        isQA: Bool = false,
+        completion: @escaping (String) -> Void,
+        onCancel: (() -> Void)? = nil,
+        onRouteStart: ((LocalRerouteProvider) -> Void)? = nil,
+        presentationScope: LocalReroutePresentationScope = .global
     ) {
-        guard #available(iOS 18.2, *), LocalSummaryService.isAvailable() else {
-            completion("Apple Local AI is not available on this device.")
+        if estimateTokens(for: prompt) > appStateAppleLocalMaxTokens {
+            presentLocalReroute(
+                providerName: "Apple Local",
+                prompt: prompt,
+                taskName: taskName,
+                appleRequestType: appleRequestType,
+                isQA: isQA,
+                completion: completion,
+                onCancel: onCancel,
+                onRouteStart: onRouteStart,
+                presentationScope: presentationScope
+            )
+            return
+        }
+
+        guard #available(iOS 26.0, *), LocalSummaryService.isAvailable() else {
+            presentLocalReroute(
+                providerName: "Apple Local",
+                prompt: prompt,
+                taskName: taskName,
+                appleRequestType: appleRequestType,
+                isQA: isQA,
+                error: appleLocalUnavailableError(),
+                completion: completion,
+                onCancel: onCancel,
+                onRouteStart: onRouteStart,
+                presentationScope: presentationScope
+            )
             return
         }
         print("📱 AppState: Trying Apple Local (no fallback) for \(taskName)")
-        LocalSummaryService.summarizeText(prompt) { result in
-            switch result {
-            case .success(let response):
-                print("✅ AppState: Apple Local succeeded for \(taskName)")
-                completion(response)
-            case .failure(let error):
-                print("❌ AppState: Apple Local failed for \(taskName): \(error.localizedDescription)")
-                completion("Apple Local AI failed: \(error.localizedDescription)")
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                let response = try await self.generateAppleLocalStreaming(prompt: prompt)
+                await MainActor.run {
+                    self.mlxStreamingText = ""
+                    print("✅ AppState: Apple Local succeeded for \(taskName)")
+                    completion(response)
+                }
+            } catch {
+                await MainActor.run {
+                    self.mlxStreamingText = ""
+                    print("❌ AppState: Apple Local failed for \(taskName): \(error.localizedDescription)")
+                    self.presentLocalReroute(
+                        providerName: "Apple Local",
+                        prompt: prompt,
+                        taskName: taskName,
+                        appleRequestType: appleRequestType,
+                        isQA: isQA,
+                        error: error,
+                        completion: completion,
+                        onCancel: onCancel,
+                        onRouteStart: onRouteStart,
+                        presentationScope: presentationScope
+                    )
+                }
             }
         }
     }
@@ -6513,7 +8089,7 @@ class AppState: ObservableObject {
     private func recordMLXQAThroughput(_ metrics: MLXGenerationMetrics) {
         guard metrics.tokensPerSecond > 0 else { return }
         mlxLastQAThroughput = String(
-            format: "MLX · %.1f tok/s · %d tokens",
+            format: "\(selectedLocalModelLabel) · %.1f tok/s · %d tokens",
             metrics.tokensPerSecond,
             metrics.tokenCount
         )
@@ -6533,9 +8109,10 @@ class AppState: ObservableObject {
     // without cross-class private access.
 
     private let appStateMLXMaxOutputHardCap    = 512
-    private let appStateMLXMaxContextHardCap   = 8_192
-    private let appStateMLXContextFallback     = 4_096
-    private let appStateMLXPromptCharLimit     = 10_000
+    private let appStateMLXMaxContextHardCap   = LiteRTLocalService.maxContextTokens
+    private let appStateCoreAIMLXMaxContextHardCap = CoreAIMLXLocalService.maxContextTokens
+    private let appStateMLXContextFallback     = LiteRTLocalService.defaultContextTokens
+    private let appStateAppleLocalMaxTokens    = 4096
     private let appStateMLXGenTimeout: TimeInterval   = 90
     private let appStateMLXQueryTimeout: TimeInterval = 60
 
@@ -6544,23 +8121,57 @@ class AppState: ObservableObject {
     }
 
     private func cappedMLXContextTokens(_ configured: Int) -> Int {
-        let resolved = configured > 0 ? configured : appStateMLXContextFallback
-        return min(resolved, appStateMLXMaxContextHardCap)
+        let fallback = settings.selectedSummaryProvider == .coreAIMLXLocal
+            ? CoreAIMLXLocalService.defaultContextTokens
+            : appStateMLXContextFallback
+        let hardCap = settings.selectedSummaryProvider == .coreAIMLXLocal
+            ? appStateCoreAIMLXMaxContextHardCap
+            : appStateMLXMaxContextHardCap
+        let resolved = configured > 0 ? configured : fallback
+        return min(max(512, resolved), hardCap)
     }
 
     private func optimizedPromptForMLX(_ prompt: String) -> String {
-        var normalized = prompt
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.count > appStateMLXPromptCharLimit {
-            let prefixCount = Int(Double(appStateMLXPromptCharLimit) * 0.72)
-            let suffixCount = max(0, appStateMLXPromptCharLimit - prefixCount - 80)
-            let prefix = String(normalized.prefix(prefixCount))
-            let suffix = String(normalized.suffix(suffixCount))
-            normalized = "\(prefix)\n\n[...truncated for local model context...]\n\n\(suffix)"
+        prompt
+    }
+
+    private func estimateTokens(for text: String) -> Int {
+        max(1, Int(ceil(Double(text.count) / 4.0)))
+    }
+
+    private func mlxLocalPromptFits(_ prompt: String, outputTokens: Int? = nil) async -> Bool {
+        let optimizedPrompt = optimizedPromptForMLX(prompt)
+        let maxOutputTokens = outputTokens.map { max(1, $0) } ?? cappedMLXOutputTokens(settings.mlxMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+        return await LiteRTLocalService.shared.promptFits(
+            optimizedPrompt,
+            maxOutputTokens: maxOutputTokens,
+            maxContextTokens: maxContextTokens
+        )
+    }
+
+    private func coreAIMLXLocalPromptFits(_ prompt: String, outputTokens: Int? = nil) async -> Bool {
+        let optimizedPrompt = optimizedPromptForMLX(prompt)
+        let maxOutputTokens = outputTokens.map { max(1, $0) } ?? cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
+        return await CoreAIMLXLocalService.shared.promptFits(
+            optimizedPrompt,
+            maxOutputTokens: maxOutputTokens,
+            maxContextTokens: maxContextTokens
+        )
+    }
+
+    private func shouldRerouteLocalPrompt(_ prompt: String, outputTokens: Int? = nil) async -> Bool {
+        switch settings.selectedSummaryProvider {
+        case .mlxLocal:
+            return !(await mlxLocalPromptFits(prompt, outputTokens: outputTokens))
+        case .coreAIMLXLocal:
+            return !(await coreAIMLXLocalPromptFits(prompt, outputTokens: outputTokens))
+        case .appleLocal:
+            return estimateTokens(for: prompt) > appStateAppleLocalMaxTokens
+        default:
+            return false
         }
-        return normalized
     }
 
     private func isGemma4ModelID(_ modelID: String) -> Bool {
@@ -6705,49 +8316,92 @@ class AppState: ObservableObject {
         let provider = settings.selectedSummaryProvider
 
         switch provider {
-        case .mlxLocal:
+        case .mlxLocal, .coreAIMLXLocal:
             let systemPrompt = "You answer questions about an article. Use ONLY the provided text. If the answer is not in the text, say you cannot find it."
-            let contextCapped = String(context.prefix(8_000))
             var parts: [String] = []
-            if !contextCapped.isEmpty { parts.append("Text from article:\n\(contextCapped)") }
+            if !context.isEmpty { parts.append("Text from article:\n\(context)") }
             parts.append("Based on the text above, answer the following question.\n\nQuestion: \(question)")
             let prompt = parts.joined(separator: "\n\n")
 
-            let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let modelID = selectedLocalModelID
             guard !modelID.isEmpty else {
-                Task { await completion("MLX model id is not configured. Set it in Settings → Summary Provider.") }
+                Task { await completion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.") }
                 return
             }
-            let maxOutput = cappedMLXOutputTokens(settings.mlxMaxOutputTokens)
-            let maxCtx = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+            let maxOutput = cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
+            let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
 
             Task {
                 await MainActor.run { self.mlxStreamingText = "" }
+                let queryOutput = maxOutput
+                if await self.shouldRerouteLocalPrompt(prompt, outputTokens: queryOutput) {
+                    await MainActor.run {
+                        self.presentLocalReroute(
+                            providerName: self.selectedLocalModelLabel,
+                            prompt: prompt,
+                            taskName: "Ask AI",
+                            appleRequestType: .articleQA,
+                            isQA: true,
+                            completion: completion
+                        )
+                    }
+                    return
+                }
+
                 do {
                     let metrics = try await withMLXTimeout(seconds: mlxQueryTimeoutSeconds) {
-                        try await MLXLocalService.shared.generateTextWithMetrics(
+                        try await self.generateLocalTextWithMetrics(
                             prompt: prompt,
                             systemPrompt: systemPrompt,
-                            modelID: modelID,
-                            maxOutputTokens: min(maxOutput, 192),
+                            maxOutputTokens: queryOutput,
                             maxContextTokens: maxCtx,
                             onToken: { [weak self] chunk in
                                 Task { @MainActor [weak self] in self?.mlxStreamingText += chunk }
                             }
                         )
                     }
-                    await MLXLocalService.shared.clearTransientCache()
+                    await self.clearLocalModelTransientCache()
                     await recordMLXQAThroughput(metrics)
                     await MainActor.run { self.mlxStreamingText = "" }
                     await completion(metrics.text)
                 } catch {
-                    await MLXLocalService.shared.clearTransientCache()
+                    await self.clearLocalModelTransientCache()
+                    if self.isLocalProviderContextError(error) {
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.presentLocalReroute(
+                                providerName: self.selectedLocalModelLabel,
+                                prompt: prompt,
+                                taskName: "Ask AI",
+                                appleRequestType: .articleQA,
+                                isQA: true,
+                                error: error,
+                                completion: completion
+                            )
+                        }
+                        return
+                    }
                     await MainActor.run { self.mlxStreamingText = "" }
-                    await completion("MLX error: \(error.localizedDescription)")
+                    await completion("\(self.selectedLocalModelLabel) error: \(error.localizedDescription)")
                 }
             }
 
         case .appleLocal:
+            let fallbackPrompt = context.isEmpty
+                ? question
+                : "Based on the following article, answer this question: \(question)\n\nArticle:\n\(context)"
+            if estimateTokens(for: fallbackPrompt) > appStateAppleLocalMaxTokens {
+                presentLocalReroute(
+                    providerName: "Apple Local",
+                    prompt: fallbackPrompt,
+                    taskName: "Ask AI",
+                    appleRequestType: .articleQA,
+                    isQA: true,
+                    completion: completion
+                )
+                return
+            }
+
             if #available(iOS 18.2, macOS 15.2, *), LocalSummaryService.isAvailable() {
                 let t0 = Date()
                 LocalSummaryService.askQuestion(about: context, question: question) { result in
@@ -6757,7 +8411,20 @@ class AppState: ObservableObject {
                         case .success(let text):
                             await self.recordAppleLocalQAThroughput(text: text, elapsed: elapsed)
                             await completion(text)
-                        case .failure(let error): await completion("Apple Local error: \(error.localizedDescription)")
+                        case .failure(let error):
+                            if self.isLocalProviderContextError(error) {
+                                await self.presentLocalReroute(
+                                    providerName: "Apple Local",
+                                    prompt: fallbackPrompt,
+                                    taskName: "Ask AI",
+                                    appleRequestType: .articleQA,
+                                    isQA: true,
+                                    error: error,
+                                    completion: completion
+                                )
+                            } else {
+                                await completion("Apple Local error: \(error.localizedDescription)")
+                            }
                         }
                     }
                 }
@@ -6771,6 +8438,9 @@ class AppState: ObservableObject {
 
         case .summarizeDaemon:
             answerQuestion(question, context: context, provider: .summarizeDaemon, completion: completion)
+
+        case .applePCCGateway:
+            answerQuestion(question, context: context, provider: .applePCCGateway, completion: completion)
 
         default:
             answerQuestion(question, context: context, provider: provider, completion: completion)
@@ -6787,7 +8457,7 @@ class AppState: ObservableObject {
         if context.isEmpty {
             prompt = question
         } else {
-            prompt = "Based on the following article, answer this question: \(question)\n\nArticle:\n\(String(context.prefix(8_000)))"
+            prompt = "Based on the following article, answer this question: \(question)\n\nArticle:\n\(context)"
         }
 
         if provider == .webAI {
@@ -6823,6 +8493,32 @@ class AppState: ObservableObject {
             return
         }
 
+        if provider == .applePCCGateway {
+            Task(priority: .userInitiated) {
+                do {
+                    let pccPrompt = """
+                    \(prompt)
+
+                    Answer style:
+                    Give a complete answer using as much relevant detail as the source supports. Do not make the answer one sentence unless the question explicitly asks for a one-sentence or very brief answer.
+                    """
+                    let answer = try await self.performPCCGatewayRequestAsync(
+                        prompt: pccPrompt,
+                        taskName: "Ask AI",
+                        isQA: true
+                    )
+                    await MainActor.run {
+                        completion(answer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        completion("Apple PCC Gateway error: \(error.localizedDescription)")
+                    }
+                }
+            }
+            return
+        }
+
         guard !settings.geminiApiKey.isEmpty else {
             Task { await completion("No AI provider is configured. Please set an API key in Settings.") }
             return
@@ -6839,28 +8535,61 @@ class AppState: ObservableObject {
     // MARK: - MLX Local Summary
     private func performMLXLocalSummary(
         prompt: String,
-        completion: @escaping (String) -> Void
+        appleRequestType: AppleIntelligenceRequestType = .summary,
+        completion: @escaping (String) -> Void,
+        onCancel: (() -> Void)? = nil
     ) {
-        print("🧠 AppState: Using MLX Local model for summary")
+        print("🧠 AppState: Using \(selectedLocalModelLabel) model for summary")
         isLoading = true
 
         Task {
             await MainActor.run { self.mlxStreamingText = "" }
+            if await self.shouldRerouteLocalPrompt(prompt) {
+                await MainActor.run {
+                    self.presentLocalReroute(
+                        providerName: self.selectedLocalModelLabel,
+                        prompt: prompt,
+                        taskName: "Local Summary",
+                        appleRequestType: appleRequestType,
+                        completion: completion,
+                        onCancel: onCancel
+                    )
+                }
+                return
+            }
+
             do {
                 let result = try await summarizeWithMLXLocal(prompt: prompt)
 
                 await MainActor.run {
                     self.mlxStreamingText = ""
                     self.isLoading = false
-                    print("✅ AppState: MLX Local model succeeded")
+                    print("✅ AppState: \(self.selectedLocalModelLabel) model succeeded")
                     completion(result)
                 }
             } catch {
+                if isLocalProviderContextError(error) {
+                    await clearLocalModelTransientCache()
+                    await MainActor.run {
+                        self.mlxStreamingText = ""
+                        self.presentLocalReroute(
+                            providerName: self.selectedLocalModelLabel,
+                            prompt: prompt,
+                            taskName: "Local Summary",
+                            appleRequestType: appleRequestType,
+                            error: error,
+                            completion: completion,
+                            onCancel: onCancel
+                        )
+                    }
+                    return
+                }
+
                 await MainActor.run {
                     self.mlxStreamingText = ""
                     self.isLoading = false
-                    print("❌ AppState: MLX Local model failed: \(error.localizedDescription)")
-                    completion("MLX Local model error: \(error.localizedDescription)")
+                    print("❌ AppState: \(self.selectedLocalModelLabel) model failed: \(error.localizedDescription)")
+                    completion("\(self.selectedLocalModelLabel) model error: \(error.localizedDescription)")
                 }
             }
         }
@@ -6868,21 +8597,26 @@ class AppState: ObservableObject {
 
     /// Core MLX Local summarization with validation (matches red folder implementation)
     private func summarizeWithMLXLocal(prompt: String) async throws -> String {
-        let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelID = selectedLocalModelID
         guard !modelID.isEmpty else {
             throw NSError(
                 domain: "SummaryService.MLXLocal",
                 code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "MLX model id is missing. Set it in Settings → Summary Provider."]
+                userInfo: [NSLocalizedDescriptionKey: "\(selectedLocalModelLabel) model id is missing. Set it in Settings -> Summary Provider."]
             )
         }
 
-        let isGemma4External = await MLXLocalService.shared.isGemma4ExternalModel(modelID: modelID)
-        let isGemma4 = isGemma4ModelID(modelID) || isGemma4External
+        let isGemma4External: Bool
+        if settings.selectedSummaryProvider == .coreAIMLXLocal {
+            isGemma4External = await MLXLocalService.shared.isGemma4ExternalModel(modelID: modelID)
+        } else {
+            isGemma4External = false
+        }
+        let isGemma4 = settings.selectedSummaryProvider == .coreAIMLXLocal && (isGemma4ModelID(modelID) || isGemma4External)
         let maxOutputTokens = isGemma4
-            ? min(cappedMLXOutputTokens(settings.mlxMaxOutputTokens), 160)
-            : cappedMLXOutputTokens(settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+            ? min(cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens), 160)
+            : cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
         let preparedPrompt = optimizedPromptForMLX(
             isGemma4 ? adaptedPromptForGemma4Summary(prompt) : prompt
         )
@@ -6891,10 +8625,9 @@ class AppState: ObservableObject {
 
         func generateMetrics(for prompt: String) async throws -> MLXGenerationMetrics {
             try await withMLXTimeout(seconds: mlxGenerationTimeoutSeconds) {
-                try await MLXLocalService.shared.generateTextWithMetrics(
+                try await self.generateLocalTextWithMetrics(
                     prompt: prompt,
                     systemPrompt: systemPrompt,
-                    modelID: modelID,
                     maxOutputTokens: maxOutputTokens,
                     maxContextTokens: maxContextTokens,
                     onToken: { [weak self] chunk in
@@ -6908,12 +8641,12 @@ class AppState: ObservableObject {
 
         if isGemma4 && isLikelyExtractiveSummary(metrics.text, sourcePrompt: preparedPrompt) {
             print("⚠️ AppState: Gemma 4 returned an extractive summary, retrying with stricter grounding prompt")
-            await MLXLocalService.shared.clearTransientCache()
+            await clearLocalModelTransientCache()
             await MainActor.run { self.mlxStreamingText = "" }
             metrics = try await generateMetrics(for: gemma4RetryPrompt(for: preparedPrompt))
         }
 
-        await MLXLocalService.shared.clearTransientCache()
+        await clearLocalModelTransientCache()
         await recordMLXThroughput(metrics)
         return metrics.text
     }
@@ -7010,26 +8743,53 @@ class AppState: ObservableObject {
         performMLXLocalSummary(prompt: prompt, completion: completion)
     }
 
-    /// MLX analysis with a higher output token limit for deep/thematic analysis (not capped at 512).
+    private func cappedMLXAnalysisOutputTokens(configured: Int, maxContextTokens: Int) -> Int {
+        let hardCap = settings.selectedSummaryProvider == .coreAIMLXLocal ? 512 : 2_048
+        let contextReservedCap = max(128, maxContextTokens / 4)
+        let minimumForAnalysis = settings.selectedSummaryProvider == .coreAIMLXLocal ? 512 : 1_024
+        let requested = max(minimumForAnalysis, configured)
+        return min(requested, hardCap, contextReservedCap)
+    }
+
+    /// Local analysis with a larger but context-aware output budget for deep/thematic analysis.
     func performMLXLocalAnalysisPublic(
         prompt: String,
-        completion: @escaping (String) -> Void
+        completion: @escaping (String) -> Void,
+        onCancel: (() -> Void)? = nil,
+        onRouteStart: ((LocalRerouteProvider) -> Void)? = nil,
+        presentationScope: LocalReroutePresentationScope = .global
     ) {
-        let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelID = selectedLocalModelID
         guard !modelID.isEmpty else {
-            completion("MLX model id is not configured. Set it in Settings → Summary Provider.")
+            completion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.")
             return
         }
-        let maxOutput = cappedMLXContextTokens(2048)   // allow up to 2048 output tokens for analysis
-        let maxCtx = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+        let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+        let configuredOutput = settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens
+        let maxOutput = cappedMLXAnalysisOutputTokens(configured: configuredOutput, maxContextTokens: maxCtx)
         isLoading = true
         Task { [self] in
             await MainActor.run { self.mlxStreamingText = "" }
+            if await self.shouldRerouteLocalPrompt(prompt, outputTokens: maxOutput) {
+                await MainActor.run {
+                    self.presentLocalReroute(
+                        providerName: self.selectedLocalModelLabel,
+                        prompt: prompt,
+                        taskName: "Local Analysis",
+                        appleRequestType: .commentSummary,
+                        completion: completion,
+                        onCancel: onCancel,
+                        onRouteStart: onRouteStart,
+                        presentationScope: presentationScope
+                    )
+                }
+                return
+            }
+
             do {
                 let metrics = try await withMLXTimeout(seconds: mlxGenerationTimeoutSeconds) {
-                    try await MLXLocalService.shared.generateTextWithMetrics(
+                    try await self.generateLocalTextWithMetrics(
                         prompt: optimizedPromptForMLX(prompt),
-                        modelID: modelID,
                         maxOutputTokens: maxOutput,
                         maxContextTokens: maxCtx,
                         onToken: { [weak self] chunk in
@@ -7037,7 +8797,7 @@ class AppState: ObservableObject {
                         }
                     )
                 }
-                await MLXLocalService.shared.clearTransientCache()
+                await self.clearLocalModelTransientCache()
                 await recordMLXThroughput(metrics)
                 await MainActor.run {
                     self.mlxStreamingText = ""
@@ -7045,11 +8805,28 @@ class AppState: ObservableObject {
                     completion(metrics.text)
                 }
             } catch {
-                await MLXLocalService.shared.clearTransientCache()
+                await self.clearLocalModelTransientCache()
+                if self.isLocalProviderContextError(error) {
+                    await MainActor.run {
+                        self.mlxStreamingText = ""
+                        self.presentLocalReroute(
+                            providerName: self.selectedLocalModelLabel,
+                            prompt: prompt,
+                            taskName: "Local Analysis",
+                            appleRequestType: .commentSummary,
+                            error: error,
+                            completion: completion,
+                            onCancel: onCancel,
+                            onRouteStart: onRouteStart,
+                            presentationScope: presentationScope
+                        )
+                    }
+                    return
+                }
                 await MainActor.run {
                     self.mlxStreamingText = ""
                     self.isLoading = false
-                    completion("MLX error: \(error.localizedDescription)")
+                    completion("\(self.selectedLocalModelLabel) error: \(error.localizedDescription)")
                 }
             }
         }
@@ -7117,33 +8894,89 @@ class AppState: ObservableObject {
             return
         }
 
+        if settings.selectedSummaryProvider == .applePCCGateway {
+            isLoading = true
+            let prompt = articleQAPrompt(article: article, question: question, preferCompleteAnswer: true)
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                do {
+                    let answer = try await self.performPCCGatewayRequestAsync(
+                        prompt: prompt,
+                        taskName: "Article Q&A",
+                        isQA: true
+                    )
+                    await MainActor.run {
+                        self.isLoading = false
+                        cleanedCompletion(answer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.isLoading = false
+                        cleanedCompletion("Apple PCC Gateway error: \(error.localizedDescription)")
+                    }
+                }
+            }
+            return
+        }
+
         // Check if we should use Apple Intelligence instead
         if settings.selectedSummaryProvider == .appleLocal {
             // Use LocalSummaryService.askQuestion directly to avoid the summarizeText wrapper
             // which prepends "Provide a one-paragraph summary..." and conflicts with Q&A instructions
             // Strip HTML first — raw HTML causes LanguageModelSession to exceed context and throw
-            let content = cleanedArticleContent(article)
             let fallbackPrompt = articleQAPrompt(article: article, question: question)
-            let context = "Article Title: \(article.title)\nArticle Content:\n\(content)"
-            if #available(iOS 18.2, *), LocalSummaryService.isAvailable() {
+            if estimateTokens(for: fallbackPrompt) > appStateAppleLocalMaxTokens {
+                presentLocalReroute(
+                    providerName: "Apple Local",
+                    prompt: fallbackPrompt,
+                    taskName: "Article Q&A",
+                    appleRequestType: .articleQA,
+                    isQA: true,
+                    completion: cleanedCompletion
+                )
+                return
+            }
+            if #available(iOS 26.0, *), LocalSummaryService.isAvailable() {
                 let t0 = Date()
-                LocalSummaryService.askQuestion(about: context, question: question) { [weak self] result in
-                    guard let self = self else { return }
-                    let elapsed = Date().timeIntervalSince(t0)
-                    switch result {
-                    case .success(let text):
-                        Task { @MainActor [weak self] in self?.recordAppleLocalQAThroughput(text: text, elapsed: elapsed) }
-                        cleanedCompletion(text)
-                    case .failure:
-                        self.performGeminiFallback(prompt: fallbackPrompt, taskName: "Article Q&A", completion: cleanedCompletion)
+                Task(priority: .userInitiated) { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let text = try await self.generateAppleLocalStreaming(prompt: fallbackPrompt)
+                        let elapsed = Date().timeIntervalSince(t0)
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.recordAppleLocalQAThroughput(text: text, elapsed: elapsed)
+                            cleanedCompletion(text)
+                        }
+                    } catch {
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.presentLocalReroute(
+                                providerName: "Apple Local",
+                                prompt: fallbackPrompt,
+                                taskName: "Article Q&A",
+                                appleRequestType: .articleQA,
+                                isQA: true,
+                                error: error,
+                                completion: cleanedCompletion
+                            )
+                        }
                     }
                 }
             } else {
-                performGeminiFallback(prompt: fallbackPrompt, taskName: "Article Q&A", completion: cleanedCompletion)
+                presentLocalReroute(
+                    providerName: "Apple Local",
+                    prompt: fallbackPrompt,
+                    taskName: "Article Q&A",
+                    appleRequestType: .articleQA,
+                    isQA: true,
+                    error: appleLocalUnavailableError(),
+                    completion: cleanedCompletion
+                )
             }
             return
         } else if settings.selectedSummaryProvider == .appleCloud {
-            // Use Apple Cloud via Shortcuts
+            // Use Apple Cloud via Private Cloud Compute
             let prompt = """
             Article Title: \(article.title)
             Article Content:
@@ -7160,8 +8993,8 @@ class AppState: ObservableObject {
             print("📱 AppState: Using Apple Cloud for Article Q&A")
             launchCloudRequest(for: prompt, type: .articleQA, completion: cleanedCompletion)
             return
-        } else if settings.selectedSummaryProvider == .mlxLocal {
-            // Use MLX Local model for Q&A with Q&A-appropriate parameters
+        } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
+            // Use local model for Q&A with Q&A-appropriate parameters
             // Strip HTML first — raw HTML is 3-5× longer than clean text and inflates prefill time
             let rawContent = article.content ?? article.title
             let content = rawContent
@@ -7185,22 +9018,35 @@ class AppState: ObservableObject {
             For longer answers, use short paragraphs separated by a blank line.
             """
 
-            let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let modelID = selectedLocalModelID
             guard !modelID.isEmpty else {
-                cleanedCompletion("MLX model id is not configured. Set it in Settings → Summary Provider.")
+                cleanedCompletion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.")
                 return
             }
-            let maxOutput = min(cappedMLXOutputTokens(settings.mlxMaxOutputTokens), 192)
-            let maxCtx = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+            let maxOutput = cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
+            let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
             isLoading = true
             Task { [self] in
                 await MainActor.run { self.mlxStreamingText = "" }
+                if await self.shouldRerouteLocalPrompt(prompt, outputTokens: maxOutput) {
+                    await MainActor.run {
+                        self.presentLocalReroute(
+                            providerName: self.selectedLocalModelLabel,
+                            prompt: prompt,
+                            taskName: "Article Q&A",
+                            appleRequestType: .articleQA,
+                            isQA: true,
+                            completion: cleanedCompletion
+                        )
+                    }
+                    return
+                }
+
                 do {
                     let metrics = try await withMLXTimeout(seconds: mlxQueryTimeoutSeconds) {
-                        try await MLXLocalService.shared.generateTextWithMetrics(
+                        try await self.generateLocalTextWithMetrics(
                             prompt: optimizedPromptForMLX(prompt),
                             systemPrompt: systemPrompt,
-                            modelID: modelID,
                             maxOutputTokens: maxOutput,
                             maxContextTokens: maxCtx,
                             onToken: { [weak self] chunk in
@@ -7208,7 +9054,7 @@ class AppState: ObservableObject {
                             }
                         )
                     }
-                    await MLXLocalService.shared.clearTransientCache()
+                    await self.clearLocalModelTransientCache()
                     await recordMLXQAThroughput(metrics)
                     await MainActor.run {
                         self.mlxStreamingText = ""
@@ -7216,11 +9062,26 @@ class AppState: ObservableObject {
                         cleanedCompletion(metrics.text)
                     }
                 } catch {
-                    await MLXLocalService.shared.clearTransientCache()
+                    await self.clearLocalModelTransientCache()
+                    if self.isLocalProviderContextError(error) {
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.presentLocalReroute(
+                                providerName: self.selectedLocalModelLabel,
+                                prompt: prompt,
+                                taskName: "Article Q&A",
+                                appleRequestType: .articleQA,
+                                isQA: true,
+                                error: error,
+                                completion: cleanedCompletion
+                            )
+                        }
+                        return
+                    }
                     await MainActor.run {
                         self.mlxStreamingText = ""
                         self.isLoading = false
-                        cleanedCompletion("MLX error: \(error.localizedDescription)")
+                        cleanedCompletion("\(self.selectedLocalModelLabel) error: \(error.localizedDescription)")
                     }
                 }
             }
@@ -7298,31 +9159,88 @@ class AppState: ObservableObject {
             return
         }
 
+        if settings.selectedSummaryProvider == .applePCCGateway {
+            isLoading = true
+            let prompt = redditQAPrompt(post: post, comments: comments, question: question, preferCompleteAnswer: true)
+            Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                do {
+                    let answer = try await self.performPCCGatewayRequestAsync(
+                        prompt: prompt,
+                        taskName: "Reddit Q&A",
+                        isQA: true
+                    )
+                    await MainActor.run {
+                        self.isLoading = false
+                        cleanedCompletion(answer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.isLoading = false
+                        cleanedCompletion("Apple PCC Gateway error: \(error.localizedDescription)")
+                    }
+                }
+            }
+            return
+        }
+
         // Check if we should use Apple Intelligence instead
         if settings.selectedSummaryProvider == .appleLocal {
             // Use LocalSummaryService.askQuestion directly (like article Q&A) to avoid
             // the summarizeText wrapper which prepends "Provide a summary..." and confuses Apple Intelligence
             let fallbackPrompt = redditQAPrompt(post: post, comments: comments, question: question)
-            if #available(iOS 18.2, *), LocalSummaryService.isAvailable() {
-                let context = "Reddit Post Title: \(post.title)\nPost Content:\n\(post.content)\n\nComments:\n\(combinedComments)"
+            if estimateTokens(for: fallbackPrompt) > appStateAppleLocalMaxTokens {
+                presentLocalReroute(
+                    providerName: "Apple Local",
+                    prompt: fallbackPrompt,
+                    taskName: "Reddit Q&A",
+                    appleRequestType: .redditQA,
+                    isQA: true,
+                    completion: cleanedCompletion
+                )
+                return
+            }
+            if #available(iOS 26.0, *), LocalSummaryService.isAvailable() {
                 let t0 = Date()
-                LocalSummaryService.askQuestion(about: context, question: question) { [weak self] result in
-                    guard let self = self else { return }
-                    let elapsed = Date().timeIntervalSince(t0)
-                    switch result {
-                    case .success(let text):
-                        Task { @MainActor [weak self] in self?.recordAppleLocalQAThroughput(text: text, elapsed: elapsed) }
-                        cleanedCompletion(text)
-                    case .failure:
-                        self.performGeminiFallback(prompt: fallbackPrompt, taskName: "Reddit Q&A", completion: cleanedCompletion)
+                Task(priority: .userInitiated) { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let text = try await self.generateAppleLocalStreaming(prompt: fallbackPrompt)
+                        let elapsed = Date().timeIntervalSince(t0)
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.recordAppleLocalQAThroughput(text: text, elapsed: elapsed)
+                            cleanedCompletion(text)
+                        }
+                    } catch {
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.presentLocalReroute(
+                                providerName: "Apple Local",
+                                prompt: fallbackPrompt,
+                                taskName: "Reddit Q&A",
+                                appleRequestType: .redditQA,
+                                isQA: true,
+                                error: error,
+                                completion: cleanedCompletion
+                            )
+                        }
                     }
                 }
             } else {
-                performGeminiFallback(prompt: fallbackPrompt, taskName: "Reddit Q&A", completion: cleanedCompletion)
+                presentLocalReroute(
+                    providerName: "Apple Local",
+                    prompt: fallbackPrompt,
+                    taskName: "Reddit Q&A",
+                    appleRequestType: .redditQA,
+                    isQA: true,
+                    error: appleLocalUnavailableError(),
+                    completion: cleanedCompletion
+                )
             }
             return
         } else if settings.selectedSummaryProvider == .appleCloud {
-            // Use Apple Cloud via Shortcuts
+            // Use Apple Cloud via Private Cloud Compute
             let prompt = """
             Reddit Post Title: \(post.title)
             Post Content:
@@ -7342,8 +9260,8 @@ class AppState: ObservableObject {
             print("📱 AppState: Using Apple Cloud for Reddit Q&A")
             launchCloudRequest(for: prompt, type: .redditQA, completion: cleanedCompletion)
             return
-        } else if settings.selectedSummaryProvider == .mlxLocal {
-            // Use MLX Local model for Q&A with Q&A-appropriate parameters
+        } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
+            // Use local model for Q&A with Q&A-appropriate parameters
             let systemPrompt = "You answer questions about a Reddit post and its comments. Use ONLY the provided text. If the answer is not in the text, say you cannot find it."
             let prompt = """
             Reddit Post Title: \(post.title)
@@ -7361,22 +9279,35 @@ class AppState: ObservableObject {
             For longer answers, use short paragraphs separated by a blank line.
             """
 
-            let modelID = settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let modelID = selectedLocalModelID
             guard !modelID.isEmpty else {
-                cleanedCompletion("MLX model id is not configured. Set it in Settings → Summary Provider.")
+                cleanedCompletion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.")
                 return
             }
-            let maxOutput = min(cappedMLXOutputTokens(settings.mlxMaxOutputTokens), 192)
-            let maxCtx = cappedMLXContextTokens(settings.mlxMaxContextTokens)
+            let maxOutput = cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
+            let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
             isLoading = true
             Task { [self] in
                 await MainActor.run { self.mlxStreamingText = "" }
+                if await self.shouldRerouteLocalPrompt(prompt, outputTokens: maxOutput) {
+                    await MainActor.run {
+                        self.presentLocalReroute(
+                            providerName: self.selectedLocalModelLabel,
+                            prompt: prompt,
+                            taskName: "Reddit Q&A",
+                            appleRequestType: .redditQA,
+                            isQA: true,
+                            completion: cleanedCompletion
+                        )
+                    }
+                    return
+                }
+
                 do {
                     let metrics = try await withMLXTimeout(seconds: mlxQueryTimeoutSeconds) {
-                        try await MLXLocalService.shared.generateTextWithMetrics(
+                        try await self.generateLocalTextWithMetrics(
                             prompt: optimizedPromptForMLX(prompt),
                             systemPrompt: systemPrompt,
-                            modelID: modelID,
                             maxOutputTokens: maxOutput,
                             maxContextTokens: maxCtx,
                             onToken: { [weak self] chunk in
@@ -7384,7 +9315,7 @@ class AppState: ObservableObject {
                             }
                         )
                     }
-                    await MLXLocalService.shared.clearTransientCache()
+                    await self.clearLocalModelTransientCache()
                     await recordMLXQAThroughput(metrics)
                     await MainActor.run {
                         self.mlxStreamingText = ""
@@ -7392,11 +9323,26 @@ class AppState: ObservableObject {
                         cleanedCompletion(metrics.text)
                     }
                 } catch {
-                    await MLXLocalService.shared.clearTransientCache()
+                    await self.clearLocalModelTransientCache()
+                    if self.isLocalProviderContextError(error) {
+                        await MainActor.run {
+                            self.mlxStreamingText = ""
+                            self.presentLocalReroute(
+                                providerName: self.selectedLocalModelLabel,
+                                prompt: prompt,
+                                taskName: "Reddit Q&A",
+                                appleRequestType: .redditQA,
+                                isQA: true,
+                                error: error,
+                                completion: cleanedCompletion
+                            )
+                        }
+                        return
+                    }
                     await MainActor.run {
                         self.mlxStreamingText = ""
                         self.isLoading = false
-                        cleanedCompletion("MLX error: \(error.localizedDescription)")
+                        cleanedCompletion("\(self.selectedLocalModelLabel) error: \(error.localizedDescription)")
                     }
                 }
             }
@@ -7406,7 +9352,7 @@ class AppState: ObservableObject {
         // Original Gemini code
         isLoading = true
 
-        let prompt = redditQAPrompt(post: post, comments: comments, question: question)
+        let prompt = redditQAPrompt(post: post, comments: comments, question: question, maxComments: 800)
 
         summaryService.summarizeText("", customPrompt: prompt)
             .receive(on: RunLoop.main)
@@ -7502,7 +9448,24 @@ class AppState: ObservableObject {
             performLocalWithGeminiFallback(prompt: prompt, taskName: "Global Summary Q&A", completion: cleanedCompletion)
         case .appleCloud:
             launchCloudRequest(for: prompt, type: .globalSummaryQA, completion: cleanedCompletion)
-        case .mlxLocal:
+        case .applePCCGateway:
+            Task(priority: .userInitiated) {
+                do {
+                    let answer = try await self.performPCCGatewayRequestAsync(
+                        prompt: prompt,
+                        taskName: "Global Summary Q&A",
+                        isQA: true
+                    )
+                    await MainActor.run {
+                        cleanedCompletion(answer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        cleanedCompletion("Apple PCC Gateway error: \(error.localizedDescription)")
+                    }
+                }
+            }
+        case .mlxLocal, .coreAIMLXLocal:
             performMLXLocalSummary(prompt: prompt, completion: cleanedCompletion)
         case .webAI:
             performWebAIRequest(
@@ -7666,7 +9629,8 @@ class AppState: ObservableObject {
         case .allReddit(let count),
              .todayReddit(let count),
              .subreddit(_, let count),
-             .subredditHot(_, let count):
+             .subredditHot(_, let count),
+             .subredditSorted(_, _, let count):
             return count
         default:
             return nil
