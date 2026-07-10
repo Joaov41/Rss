@@ -1262,7 +1262,8 @@ final class GlobalSummaryService {
     
     // MARK: - MLX Constants & Helpers
 
-    private let mlxMaxOutputTokenHardCap    = 512
+    private let mlxMaxOutputTokenHardCap    = 1_024
+    private let coreAIMLXMaxOutputTokenHardCap = 512
     private let mlxMaxContextTokenHardCap   = LiteRTLocalService.maxContextTokens
     private let coreAIMLXMaxContextTokenHardCap = CoreAIMLXLocalService.maxContextTokens
     private let mlxAutoContextTokenFallback = LiteRTLocalService.defaultContextTokens
@@ -1270,9 +1271,12 @@ final class GlobalSummaryService {
     private let mlxGenerationTimeoutSeconds: TimeInterval = 90
     private let mlxQueryTimeoutSeconds: TimeInterval      = 60
 
-    /// Cap output tokens at the hard limit to prevent runaway generation.
+    /// Cap output tokens at the provider-specific hard limit to prevent runaway generation.
     private func cappedMLXOutputTokens(_ configured: Int) -> Int {
-        min(max(1, configured), mlxMaxOutputTokenHardCap)
+        let hardCap = settingsProvider().selectedSummaryProvider == .coreAIMLXLocal
+            ? coreAIMLXMaxOutputTokenHardCap
+            : mlxMaxOutputTokenHardCap
+        return min(max(1, configured), hardCap)
     }
 
     /// Resolve context token count: 0 → fallback, then hard-cap at 8192.
@@ -2100,6 +2104,7 @@ class AppState: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var isRefreshingFeeds: Bool = false
     @Published private var activeArticleSummaryIDs: Set<String> = []
+    @Published private var activeRedditSummaryIDs: Set<String> = []
     @Published var settings: AppSettings = AppSettings() {
         didSet {
             // Save settings when changed
@@ -2131,6 +2136,11 @@ class AppState: ObservableObject {
         activeArticleSummaryIDs.contains(article.id)
     }
 
+    func isSummarizingRedditPost(_ post: RedditPost?) -> Bool {
+        guard let post else { return false }
+        return activeRedditSummaryIDs.contains(post.id)
+    }
+
     private func beginArticleSummary(_ article: Article?) {
         guard let article else { return }
         var ids = activeArticleSummaryIDs
@@ -2143,6 +2153,30 @@ class AppState: ObservableObject {
         var ids = activeArticleSummaryIDs
         ids.remove(article.id)
         activeArticleSummaryIDs = ids
+    }
+
+    private func beginRedditSummary(_ post: RedditPost?) {
+        guard let post else { return }
+        var ids = activeRedditSummaryIDs
+        ids.insert(post.id)
+        activeRedditSummaryIDs = ids
+    }
+
+    private func finishRedditSummary(_ post: RedditPost?) {
+        guard let post else { return }
+        var ids = activeRedditSummaryIDs
+        ids.remove(post.id)
+        activeRedditSummaryIDs = ids
+    }
+
+    private func beginSummary(article: Article?, redditPost: RedditPost?) {
+        beginArticleSummary(article)
+        beginRedditSummary(redditPost)
+    }
+
+    private func finishSummary(article: Article?, redditPost: RedditPost?) {
+        finishArticleSummary(article)
+        finishRedditSummary(redditPost)
     }
     @Published var showGlobalSummary: Bool = false
     @Published var globalSummaryJSON: String = ""
@@ -2762,9 +2796,20 @@ class AppState: ObservableObject {
                 }, receiveValue: { [weak self] feed in
                     // Apply read and favorite status from persistence
                     var processedFeed = feed
+                    let existingSummaries = self?.feeds
+                        .first(where: { $0.url == feed.url })?
+                        .articles
+                        .reduce(into: [String: String]()) { result, article in
+                            if let summary = article.summary, !summary.isEmpty {
+                                result[article.id] = summary
+                            }
+                        } ?? [:]
                     for i in 0..<processedFeed.articles.count {
                         processedFeed.articles[i].isRead = self?.persistenceManager.isArticleRead(processedFeed.articles[i]) ?? false
                         processedFeed.articles[i].isFavorite = self?.persistenceManager.isArticleFavorite(processedFeed.articles[i].id) ?? false
+                        if processedFeed.articles[i].summary == nil {
+                            processedFeed.articles[i].summary = existingSummaries[processedFeed.articles[i].id]
+                        }
                     }
                     
                     if let index = self?.feeds.firstIndex(where: { $0.url == subscription.url }) {
@@ -2803,10 +2848,21 @@ class AppState: ObservableObject {
             }, receiveValue: { [weak self] feed in
                 guard let self = self else { return }
                 var processedFeed = feed
+                let existingSummaries = self.feeds
+                    .first(where: { $0.url == url })?
+                    .articles
+                    .reduce(into: [String: String]()) { result, article in
+                        if let summary = article.summary, !summary.isEmpty {
+                            result[article.id] = summary
+                        }
+                    } ?? [:]
                 for i in 0..<processedFeed.articles.count {
                     let id = processedFeed.articles[i].id
                     processedFeed.articles[i].isRead = self.persistenceManager.isArticleRead(processedFeed.articles[i])
                     processedFeed.articles[i].isFavorite = self.persistenceManager.isArticleFavorite(id) ?? false
+                    if processedFeed.articles[i].summary == nil {
+                        processedFeed.articles[i].summary = existingSummaries[id]
+                    }
                 }
                 if let index = self.feeds.firstIndex(where: { $0.url == url }) {
                     self.feeds[index] = processedFeed
@@ -2879,6 +2935,14 @@ class AppState: ObservableObject {
                     }
                     
                     // Apply read and favorite status from persistence
+                    let existingSummaries = self.redditFeeds
+                        .first(where: { $0.subreddit == redditFeed.subreddit })?
+                        .posts
+                        .reduce(into: [String: String]()) { result, post in
+                            if let summary = post.summary, !summary.isEmpty {
+                                result[post.id] = summary
+                            }
+                        } ?? [:]
                     #if DEBUG
                     var restoredReadIds: [String] = []
                     var stillUnreadIds: [String] = []
@@ -2895,6 +2959,9 @@ class AppState: ObservableObject {
                         }
                         #endif
                         processedFeed.posts[i].isFavorite = self.persistenceManager.isRedditPostFavorite(id) ?? false
+                        if processedFeed.posts[i].summary == nil {
+                            processedFeed.posts[i].summary = existingSummaries[id]
+                        }
                     }
                     
                     #if DEBUG
@@ -2945,7 +3012,10 @@ class AppState: ObservableObject {
                     
                     // Force UI update by re-publishing the current selected Reddit post if it's from this feed
                     if let selectedPost = self.selectedRedditPost, selectedPost.subreddit == subscription.url {
-                        if let updatedPost = processedFeed.posts.first(where: { $0.id == selectedPost.id }) {
+                        if var updatedPost = processedFeed.posts.first(where: { $0.id == selectedPost.id }) {
+                            if updatedPost.summary == nil {
+                                updatedPost.summary = selectedPost.summary
+                            }
                             print("📱 AppState: Re-publishing selected post")
                             self.selectedRedditPost = updatedPost
                         } else {
@@ -3253,6 +3323,7 @@ class AppState: ObservableObject {
         }
 
         isLoading = true
+        beginRedditSummary(post)
 
         let commentTexts = comments.flatMap { extractAllCommentTexts(from: $0) }
         let combinedComments = commentTexts.joined(separator: "\n\n")
@@ -3293,6 +3364,7 @@ class AppState: ObservableObject {
                         print("📱 AppState: Updated Reddit post summary for post ID: \(post.id)")
                     }
                 }
+                self.finishRedditSummary(post)
                 self.isLoading = false
             }
             .store(in: &cancellables)
@@ -4320,6 +4392,7 @@ class AppState: ObservableObject {
 
     func requestWebSummary(for post: RedditPost, comments: [RedditCommentModel] = []) {
         isLoading = true
+        beginRedditSummary(post)
         performWebAIRequest(
             title: "Reddit Summary",
             prompt: redditPostSummaryPrompt(post: post, comments: comments),
@@ -4328,6 +4401,7 @@ class AppState: ObservableObject {
                 self?.isLoading = false
             },
             onFailure: { [weak self] _ in
+                self?.finishRedditSummary(post)
                 self?.isLoading = false
             }
         )
@@ -4428,7 +4502,7 @@ class AppState: ObservableObject {
         if article != nil || redditPost != nil {
             isLoading = true
         }
-        beginArticleSummary(article)
+        beginSummary(article: article, redditPost: redditPost)
 
         if settings.selectedSummaryProvider == .webAI {
             if let article = article {
@@ -4443,7 +4517,7 @@ class AppState: ObservableObject {
                         self.isLoading = false
                     },
                     onFailure: { [weak self] _ in
-                        self?.finishArticleSummary(article)
+                        self?.finishSummary(article: article, redditPost: redditPost)
                         self?.isLoading = false
                     }
                 )
@@ -4456,10 +4530,12 @@ class AppState: ObservableObject {
                         self?.isLoading = false
                     },
                     onFailure: { [weak self] _ in
+                        self?.finishSummary(article: article, redditPost: redditPost)
                         self?.isLoading = false
                     }
                 )
             } else {
+                finishSummary(article: article, redditPost: redditPost)
                 isLoading = false
             }
             return
@@ -4472,7 +4548,7 @@ class AppState: ObservableObject {
             } else if let post = redditPost {
                 summarizeRedditPost(post, comments: redditComments)
             } else {
-                finishArticleSummary(article)
+                finishSummary(article: article, redditPost: redditPost)
             }
         } else if settings.selectedSummaryProvider == .appleLocal {
             // Use on-device AI with Gemini fallback
@@ -4495,9 +4571,9 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
-                self?.finishArticleSummary(article)
+                self?.finishSummary(article: article, redditPost: redditPost)
             }, onCancel: { [weak self] in
-                self?.finishArticleSummary(article)
+                self?.finishSummary(article: article, redditPost: redditPost)
             })
         } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
             // Use selected local model
@@ -4515,9 +4591,9 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
-                self?.finishArticleSummary(article)
+                self?.finishSummary(article: article, redditPost: redditPost)
             }, onCancel: { [weak self] in
-                self?.finishArticleSummary(article)
+                self?.finishSummary(article: article, redditPost: redditPost)
             })
         } else if settings.selectedSummaryProvider == .summarizeDaemon {
             let textToSummarize = article.map(cleanedArticleContent)
@@ -4534,7 +4610,7 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
-                self?.finishArticleSummary(article)
+                self?.finishSummary(article: article, redditPost: redditPost)
             }
         } else if settings.selectedSummaryProvider == .applePCCGateway {
             let textToSummarize = article.map(cleanedArticleContent)
@@ -4551,7 +4627,7 @@ class AppState: ObservableObject {
                 } else if let post = redditPost {
                     self?.updateRedditPostSummaryFromCloud(post, summary: summary)
                 }
-                self?.finishArticleSummary(article)
+                self?.finishSummary(article: article, redditPost: redditPost)
             }
         } else {
             // Apple Cloud via Private Cloud Compute
@@ -4812,10 +4888,21 @@ class AppState: ObservableObject {
 
     private func hydratedRedditFeed(_ redditFeed: RedditFeed, sortOption: RedditService.SortOption) -> RedditFeed {
         var processedFeed = redditFeed
+        let existingSummaries = redditFeeds
+            .first(where: { $0.subreddit == redditFeed.subreddit })?
+            .posts
+            .reduce(into: [String: String]()) { result, post in
+                if let summary = post.summary, !summary.isEmpty {
+                    result[post.id] = summary
+                }
+            } ?? [:]
         for index in 0..<processedFeed.posts.count {
             let id = processedFeed.posts[index].id
             processedFeed.posts[index].isRead = persistenceManager.isRedditPostRead(processedFeed.posts[index])
             processedFeed.posts[index].isFavorite = persistenceManager.isRedditPostFavorite(id) ?? false
+            if processedFeed.posts[index].summary == nil {
+                processedFeed.posts[index].summary = existingSummaries[id]
+            }
         }
 
         if sortOption == .new {
@@ -5953,7 +6040,16 @@ class AppState: ObservableObject {
         
         print("📱 AppState: Launching \(settings.selectedSummaryProvider.rawValue) request")
         print("📱 AppState: Content length: \(content.count) characters")
-        launchCloudSummary(for: content)
+        launchCloudRequest(for: content, type: .summary, completion: { [weak self] result in
+            guard let self else { return }
+            if let article {
+                self.updateArticleSummaryFromCloud(article, summary: result)
+            } else if let redditPost {
+                self.updateRedditPostSummaryFromCloud(redditPost, summary: result)
+            } else {
+                self.finishSummary(article: article, redditPost: redditPost)
+            }
+        })
     }
     
     func launchCloudSummary(for text: String) {
@@ -6461,6 +6557,8 @@ class AppState: ObservableObject {
     }
     
     func updateRedditPostSummaryFromCloud(_ post: RedditPost, summary: String) {
+        defer { finishRedditSummary(post) }
+
         if let feedIndex = redditFeeds.firstIndex(where: { $0.subreddit == post.subreddit }),
            let postIndex = redditFeeds[feedIndex].posts.firstIndex(where: { $0.id == post.id }) {
             
@@ -8108,7 +8206,8 @@ class AppState: ObservableObject {
     // These mirror the same helpers in GlobalSummaryService so both classes can use them
     // without cross-class private access.
 
-    private let appStateMLXMaxOutputHardCap    = 512
+    private let appStateMLXMaxOutputHardCap    = 1_024
+    private let appStateCoreAIMLXMaxOutputHardCap = 512
     private let appStateMLXMaxContextHardCap   = LiteRTLocalService.maxContextTokens
     private let appStateCoreAIMLXMaxContextHardCap = CoreAIMLXLocalService.maxContextTokens
     private let appStateMLXContextFallback     = LiteRTLocalService.defaultContextTokens
@@ -8117,7 +8216,10 @@ class AppState: ObservableObject {
     private let appStateMLXQueryTimeout: TimeInterval = 60
 
     private func cappedMLXOutputTokens(_ configured: Int) -> Int {
-        min(max(1, configured), appStateMLXMaxOutputHardCap)
+        let hardCap = settings.selectedSummaryProvider == .coreAIMLXLocal
+            ? appStateCoreAIMLXMaxOutputHardCap
+            : appStateMLXMaxOutputHardCap
+        return min(max(1, configured), hardCap)
     }
 
     private func cappedMLXContextTokens(_ configured: Int) -> Int {

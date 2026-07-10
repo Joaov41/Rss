@@ -533,7 +533,7 @@ class FeedService {
     }
     
     /// Special handler for 9to5Mac articles which have a specific structure
-    private func handle9to5Mac(doc: Document, article: Article) -> Article {
+    private func handle9to5Mac(doc: SwiftSoup.Document, article: Article) -> Article {
         do {
             // Remove sponsor blocks, newsletter forms, and other clutter
             try doc.select(".sponsor-block, .newsletter-block, .comments-link, .st-related-posts, script, style, form").remove()

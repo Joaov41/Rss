@@ -360,7 +360,7 @@ struct RedditDetailView: View {
                 
                 Divider()
                 
-                if appState.isLoading && post.summary == nil {
+                if appState.isSummarizingRedditPost(post) && post.summary == nil {
                     VStack(spacing: 16) {
                         HStack {
                             Text("Summary")
@@ -392,7 +392,9 @@ struct RedditDetailView: View {
                         } else {
                             VStack(spacing: 8) {
                                 ProgressView()
-                                Text("Summarizing post...")
+                                Text(appState.isWaitingForAppleIntelligence
+                                     ? appState.appleIntelligenceWaitProgress
+                                     : "Summarizing post...")
                                     .foregroundColor(.secondary)
                                     .font(.caption)
                             }
@@ -403,37 +405,7 @@ struct RedditDetailView: View {
                         }
                     }
                     Divider()
-                } else if appState.isWaitingForAppleIntelligence && post.summary == nil {
-                    VStack(spacing: 16) {
-                        HStack {
-                            Text("Summary")
-                                .font(.headline)
-                            activeSummaryProviderBadge
-                            Spacer()
-                            if shouldShowExplicitWebAIControls {
-                                Button {
-                                    appState.requestWebSummary(for: post, comments: comments)
-                                } label: {
-                                    Image(systemName: "globe")
-                                        .font(.subheadline)
-                                }
-                                .buttonStyle(LiquidGlassButtonStyle())
-                                .help("Generate Reddit summary with \(appState.settings.selectedWebAIProvider.displayName)")
-                            }
-                        }
-                        VStack(spacing: 8) {
-                            ProgressView()
-                            Text(appState.appleIntelligenceWaitProgress)
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(AppColors.systemGray6)
-                        .cornerRadius(10)
-                    }
-                    Divider()
-	                } else if let summary = post.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                } else if let summary = post.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
 	                    VStack(alignment: .leading, spacing: 8) {
 	                        HStack {
 	                            Text("Summary")
@@ -858,13 +830,15 @@ struct RedditDetailView: View {
             if UIDevice.current.userInterfaceIdiom == .phone {
                 ZStack {
                     // Show spinner for POST summary
-                    if appState.isLoading && post.summary == nil {
+                    if appState.isSummarizingRedditPost(post) && post.summary == nil {
                         VStack {
                             Spacer()
                             HStack(spacing: 12) {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("Summarizing post...")
+                                Text(appState.isWaitingForAppleIntelligence
+                                     ? appState.appleIntelligenceWaitProgress
+                                     : "Summarizing post...")
                                     .foregroundColor(.white)
                                     .font(.subheadline)
                             }

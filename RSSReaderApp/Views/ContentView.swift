@@ -3,6 +3,183 @@ import SwiftUI
 import Combine
 import Kingfisher
 import SwiftSoup // <-- Add SwiftSoup import
+
+private let articleAntiBlockPhrases = [
+    "ad or script blocking software",
+    "ad blocking software is interfering",
+    "script blocking software is interfering",
+    "disable any ad or script blocking software",
+    "disable any ad blocking software",
+    "disable any script blocking software"
+]
+
+private let articleAntiBlockAdSelectors = [
+    "script",
+    "style",
+    "iframe",
+    "frame",
+    "ins",
+    "noscript",
+    "object",
+    "embed",
+    "form",
+    "amp-ad",
+    "amp-embed",
+    "[role=\"advertisement\"]",
+    "[data-ad]",
+    "[data-ads]",
+    "[data-ad-client]",
+    "[data-ad-slot]",
+    "[data-ad-unit]",
+    "[data-dfp]",
+    "[data-gpt]",
+    "[data-google-query-id]",
+    ".adsbygoogle",
+    ".ad-container",
+    ".author_ad",
+    ".inlinead",
+    ".google-auto-placed",
+    ".googlepublisherpluginad"
+]
+
+private let articleAntiBlockAdSelectorString = articleAntiBlockAdSelectors.joined(separator: ", ")
+private let articleReaderMobileSafariUserAgent = "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+private func containsArticleAntiBlockMessage(_ text: String) -> Bool {
+    let normalized = text
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+
+    guard !normalized.isEmpty else { return false }
+    return articleAntiBlockPhrases.contains { normalized.contains($0) }
+}
+
+private func javaScriptStringLiteral(_ value: String) -> String {
+    var escaped = value
+    escaped = escaped.replacingOccurrences(of: "\\", with: "\\\\")
+    escaped = escaped.replacingOccurrences(of: "\"", with: "\\\"")
+    escaped = escaped.replacingOccurrences(of: "\n", with: "\\n")
+    escaped = escaped.replacingOccurrences(of: "\r", with: "\\r")
+    escaped = escaped.replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+    escaped = escaped.replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    return "\"\(escaped)\""
+}
+
+private func javaScriptArrayLiteral(_ values: [String]) -> String {
+    "[" + values.map(javaScriptStringLiteral).joined(separator: ",") + "]"
+}
+
+private func articleAntiBlockCheckJavaScript() -> String {
+    let phrases = javaScriptArrayLiteral(articleAntiBlockPhrases)
+    return """
+    (function() {
+      var phrases = \(phrases);
+      function normalizeText(text) {
+        return (text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      }
+      var text = normalizeText(document.body ? document.body.innerText : '');
+      return phrases.some(function(phrase) { return text.indexOf(phrase) !== -1; });
+    })();
+    """
+}
+
+private func is9to5MacArticleURL(_ url: URL?) -> Bool {
+    guard let host = url?.host?.lowercased() else { return false }
+    return host == "9to5mac.com" || host.hasSuffix(".9to5mac.com")
+}
+
+private func articleAntiBlockCleanupJavaScript() -> String {
+    let phrases = javaScriptArrayLiteral(articleAntiBlockPhrases)
+    let selectors = javaScriptStringLiteral(articleAntiBlockAdSelectorString)
+    return """
+    (function() {
+      var phrases = \(phrases);
+      var selectors = \(selectors);
+
+      function normalizeText(text) {
+        return (text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      }
+
+      function hasAntiBlockText(text) {
+        var normalized = normalizeText(text);
+        if (!normalized) { return false; }
+        return phrases.some(function(phrase) { return normalized.indexOf(phrase) !== -1; });
+      }
+
+      function removeNode(node) {
+        if (!node || !node.parentNode || node === document.body || node === document.documentElement) { return; }
+        node.parentNode.removeChild(node);
+      }
+
+      function injectCSS() {
+        if (!document.head || document.getElementById('__rssArticleAntiBlockCSS')) { return; }
+        var style = document.createElement('style');
+        style.id = '__rssArticleAntiBlockCSS';
+        style.textContent = selectors + ' { display: none !important; visibility: hidden !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; height: 0 !important; min-height: 0 !important; max-height: 0 !important; margin: 0 !important; padding: 0 !important; border: 0 !important; overflow: hidden !important; }';
+        document.head.appendChild(style);
+      }
+
+      function cleanup(root) {
+        var scope = root || document;
+        injectCSS();
+
+        try {
+          scope.querySelectorAll(selectors).forEach(function(node) {
+            if ((node.tagName || '').toLowerCase() === 'style') { return; }
+            removeNode(node);
+          });
+        } catch (_) {}
+
+        var containers = Array.prototype.slice.call(scope.querySelectorAll('p, div, section, aside, figure, span, strong, b'));
+        if (scope.matches && scope.matches('p, div, section, aside, figure, span, strong, b')) {
+          containers.unshift(scope);
+        }
+
+        containers.forEach(function(element) {
+          var text = normalizeText(element.innerText || element.textContent || '');
+          if (text && text.length < 900 && hasAntiBlockText(text)) {
+            removeNode(element.closest('section, aside, figure, div, p') || element);
+          }
+        });
+      }
+
+      cleanup(document);
+
+      if (window.__rssArticleAntiBlockObserver) {
+        window.__rssArticleAntiBlockObserver.disconnect();
+      }
+
+      if (document.documentElement && window.MutationObserver) {
+        window.__rssArticleAntiBlockObserver = new MutationObserver(function() {
+          cleanup(document);
+        });
+        window.__rssArticleAntiBlockObserver.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+      }
+
+      if (window.__rssArticleAntiBlockInterval) {
+        clearInterval(window.__rssArticleAntiBlockInterval);
+      }
+
+      var ticks = 0;
+      window.__rssArticleAntiBlockInterval = setInterval(function() {
+        cleanup(document);
+        ticks += 1;
+        if (ticks >= 80) {
+          clearInterval(window.__rssArticleAntiBlockInterval);
+          window.__rssArticleAntiBlockInterval = null;
+        }
+      }, 125);
+
+      return hasAntiBlockText(document.body ? (document.body.innerText || document.body.textContent || '') : '');
+    })();
+    """
+}
+
 #if os(iOS)
 import AVFoundation
 import UIKit
@@ -18,17 +195,136 @@ enum ReaderModeService {
     /// JavaScript that loads Readability.js and extracts the article content.
     /// Returns a clean HTML document with just the article content.
     static func toggleScript(useCompactTitle: Bool) -> String {
-        let readability = loadReadabilitySource()
+        useCompactTitle ? compactToggleScript : regularToggleScript
+    }
+
+    private static let compactToggleScript = makeToggleScript(useCompactTitle: true)
+    private static let regularToggleScript = makeToggleScript(useCompactTitle: false)
+    private static let readabilitySource = loadReadabilitySource()
+
+    private static func makeToggleScript(useCompactTitle: Bool) -> String {
+        let readability = readabilitySource
         let titleFontSize = useCompactTitle ? 28 : 30
+        let antiBlockPhrasesJS = javaScriptArrayLiteral(articleAntiBlockPhrases)
+        let antiBlockSelectorsJS = javaScriptStringLiteral(articleAntiBlockAdSelectorString)
         let readerScript = """
         (function() {
           try {
+            var antiBlockPhrases = \(antiBlockPhrasesJS);
+            var antiBlockSelectors = \(antiBlockSelectorsJS);
+
+            function normalizeAntiBlockText(text) {
+              return (text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            }
+
+            function containsAntiBlockMessage(text) {
+              var normalized = normalizeAntiBlockText(text);
+              if (!normalized) { return false; }
+              return antiBlockPhrases.some(function(phrase) {
+                return normalized.indexOf(phrase) !== -1;
+              });
+            }
+
+            function removeElement(el) {
+              if (el && el.parentElement) {
+                el.parentElement.removeChild(el);
+              }
+            }
+
+            function shouldCleanAntiBlockDocument() {
+              var host = (location.hostname || '').toLowerCase();
+              return host === '9to5mac.com' || host.slice(-12) === '.9to5mac.com';
+            }
+
+            function removeAntiBlockNodes(root, preserveStyleElements) {
+              var scope = root || document;
+              if (!scope.querySelectorAll) { return; }
+
+              try {
+                var matchingNodes = scope.querySelectorAll(antiBlockSelectors);
+                matchingNodes.forEach(function(el) {
+                  if (preserveStyleElements && (el.tagName || '').toLowerCase() === 'style') { return; }
+                  removeElement(el);
+                });
+              } catch (e) {}
+
+              var containers = Array.prototype.slice.call(scope.querySelectorAll('p, div, section, aside, figure, span, strong, b'));
+              if (scope.matches && scope.matches('p, div, section, aside, figure, span, strong, b')) {
+                containers.unshift(scope);
+              }
+
+              containers.forEach(function(el) {
+                var text = normalizeAntiBlockText(el.textContent || '');
+                if (text.length > 0 && text.length < 900 && containsAntiBlockMessage(text)) {
+                  removeElement(el);
+                }
+              });
+            }
+
+            function injectAntiBlockCSS() {
+              if (!document.head || document.getElementById('__rssArticleAntiBlockCSS')) { return; }
+              var style = document.createElement('style');
+              style.id = '__rssArticleAntiBlockCSS';
+              style.textContent = antiBlockSelectors + ' { display: none !important; visibility: hidden !important; }';
+              document.head.appendChild(style);
+            }
+
+            function cleanupAntiBlockDocument() {
+              injectAntiBlockCSS();
+              removeAntiBlockNodes(document, true);
+            }
+
+            function installAntiBlockCleanup() {
+              cleanupAntiBlockDocument();
+
+              if (window.__rssArticleAntiBlockObserver) {
+                window.__rssArticleAntiBlockObserver.disconnect();
+              }
+
+              if (document.documentElement && window.MutationObserver) {
+                window.__rssArticleAntiBlockObserver = new MutationObserver(function() {
+                  cleanupAntiBlockDocument();
+                });
+                window.__rssArticleAntiBlockObserver.observe(document.documentElement, {
+                  childList: true,
+                  subtree: true
+                });
+              }
+
+              if (window.__rssArticleAntiBlockInterval) {
+                clearInterval(window.__rssArticleAntiBlockInterval);
+              }
+
+              var ticks = 0;
+              window.__rssArticleAntiBlockInterval = setInterval(function() {
+                cleanupAntiBlockDocument();
+                ticks += 1;
+                if (ticks >= 80) {
+                  clearInterval(window.__rssArticleAntiBlockInterval);
+                  window.__rssArticleAntiBlockInterval = null;
+                }
+              }, 125);
+            }
+
+            function articleHTMLIsDominantlyAntiBlock(html) {
+              if (!containsAntiBlockMessage(html)) { return false; }
+              var probe = document.createElement('div');
+              probe.innerHTML = html || '';
+              removeAntiBlockNodes(probe, false);
+              var text = normalizeAntiBlockText(probe.textContent || '');
+              return text.length < 180;
+            }
+
             // If reader mode is already active, reload the original page
             if (window.__rssReaderModeActive) {
               window.__rssReaderModeActive = false;
               var url = window.__rssReaderOriginalURL || location.href;
               if (url) { location.href = url; }
               return false;
+            }
+
+            if (shouldCleanAntiBlockDocument()) {
+              cleanupAntiBlockDocument();
             }
 
             // Check if Readability is available
@@ -38,6 +334,7 @@ enum ReaderModeService {
             var clone = document.cloneNode(true);
             var article = new Readability(clone).parse();
             if (!article || !article.content) { return false; }
+            if (articleHTMLIsDominantlyAntiBlock(article.content)) { return false; }
 
             // Escape HTML for safe display
             function escapeHtml(text) {
@@ -48,6 +345,9 @@ enum ReaderModeService {
             function cleanContent(html) {
               var div = document.createElement('div');
               div.innerHTML = html;
+              if (shouldCleanAntiBlockDocument() || containsAntiBlockMessage(html)) {
+                removeAntiBlockNodes(div, false);
+              }
 
               // Affiliate link URL patterns
               var affiliateURLPatterns = [
@@ -265,6 +565,7 @@ enum ReaderModeService {
             }
 
             var cleanedContent = cleanContent(article.content);
+            if (articleHTMLIsDominantlyAntiBlock(cleanedContent)) { return false; }
             var title = article.title || document.title || '';
             var byline = article.byline || '';
             var bylineHtml = byline ? '<div class="reader-byline">' + escapeHtml(byline) + '</div>' : '';
@@ -305,6 +606,9 @@ enum ReaderModeService {
             document.open();
             document.write(html);
             document.close();
+            if (shouldCleanAntiBlockDocument()) {
+              installAntiBlockCleanup();
+            }
             window.__rssReaderModeActive = true;
             return true;
           } catch (e) {
@@ -367,9 +671,116 @@ enum ReaderModeService {
     /// JavaScript that loads Readability.js and extracts the article content.
     static func toggleScript(useCompactTitle: Bool) -> String {
         let readability = loadReadabilitySource()
+        let antiBlockPhrasesJS = javaScriptArrayLiteral(articleAntiBlockPhrases)
+        let antiBlockSelectorsJS = javaScriptStringLiteral(articleAntiBlockAdSelectorString)
         let readerScript = """
         (function() {
           try {
+            var antiBlockPhrases = \(antiBlockPhrasesJS);
+            var antiBlockSelectors = \(antiBlockSelectorsJS);
+
+            function normalizeAntiBlockText(text) {
+              return (text || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            }
+
+            function containsAntiBlockMessage(text) {
+              var normalized = normalizeAntiBlockText(text);
+              if (!normalized) { return false; }
+              return antiBlockPhrases.some(function(phrase) {
+                return normalized.indexOf(phrase) !== -1;
+              });
+            }
+
+            function removeElement(el) {
+              if (el && el.parentElement) {
+                el.parentElement.removeChild(el);
+              }
+            }
+
+            function shouldCleanAntiBlockDocument() {
+              var host = (location.hostname || '').toLowerCase();
+              return host === '9to5mac.com' || host.slice(-12) === '.9to5mac.com';
+            }
+
+            function removeAntiBlockNodes(root, preserveStyleElements) {
+              var scope = root || document;
+              if (!scope.querySelectorAll) { return; }
+
+              try {
+                var matchingNodes = scope.querySelectorAll(antiBlockSelectors);
+                matchingNodes.forEach(function(el) {
+                  if (preserveStyleElements && (el.tagName || '').toLowerCase() === 'style') { return; }
+                  removeElement(el);
+                });
+              } catch (e) {}
+
+              var containers = Array.prototype.slice.call(scope.querySelectorAll('p, div, section, aside, figure, span, strong, b'));
+              if (scope.matches && scope.matches('p, div, section, aside, figure, span, strong, b')) {
+                containers.unshift(scope);
+              }
+
+              containers.forEach(function(el) {
+                var text = normalizeAntiBlockText(el.textContent || '');
+                if (text.length > 0 && text.length < 900 && containsAntiBlockMessage(text)) {
+                  removeElement(el);
+                }
+              });
+            }
+
+            function injectAntiBlockCSS() {
+              if (!document.head || document.getElementById('__rssArticleAntiBlockCSS')) { return; }
+              var style = document.createElement('style');
+              style.id = '__rssArticleAntiBlockCSS';
+              style.textContent = antiBlockSelectors + ' { display: none !important; visibility: hidden !important; }';
+              document.head.appendChild(style);
+            }
+
+            function cleanupAntiBlockDocument() {
+              injectAntiBlockCSS();
+              removeAntiBlockNodes(document, true);
+            }
+
+            function installAntiBlockCleanup() {
+              cleanupAntiBlockDocument();
+
+              if (window.__rssArticleAntiBlockObserver) {
+                window.__rssArticleAntiBlockObserver.disconnect();
+              }
+
+              if (document.documentElement && window.MutationObserver) {
+                window.__rssArticleAntiBlockObserver = new MutationObserver(function() {
+                  cleanupAntiBlockDocument();
+                });
+                window.__rssArticleAntiBlockObserver.observe(document.documentElement, {
+                  childList: true,
+                  subtree: true
+                });
+              }
+
+              if (window.__rssArticleAntiBlockInterval) {
+                clearInterval(window.__rssArticleAntiBlockInterval);
+              }
+
+              var ticks = 0;
+              window.__rssArticleAntiBlockInterval = setInterval(function() {
+                cleanupAntiBlockDocument();
+                ticks += 1;
+                if (ticks >= 80) {
+                  clearInterval(window.__rssArticleAntiBlockInterval);
+                  window.__rssArticleAntiBlockInterval = null;
+                }
+              }, 125);
+            }
+
+            function articleHTMLIsDominantlyAntiBlock(html) {
+              if (!containsAntiBlockMessage(html)) { return false; }
+              var probe = document.createElement('div');
+              probe.innerHTML = html || '';
+              removeAntiBlockNodes(probe, false);
+              var text = normalizeAntiBlockText(probe.textContent || '');
+              return text.length < 180;
+            }
+
             if (window.__rssReaderModeActive) {
               window.__rssReaderModeActive = false;
               var url = window.__rssReaderOriginalURL || location.href;
@@ -377,11 +788,16 @@ enum ReaderModeService {
               return false;
             }
 
+            if (shouldCleanAntiBlockDocument()) {
+              cleanupAntiBlockDocument();
+            }
+
             if (typeof Readability === 'undefined') { return false; }
 
             var clone = document.cloneNode(true);
             var article = new Readability(clone).parse();
             if (!article || !article.content) { return false; }
+            if (articleHTMLIsDominantlyAntiBlock(article.content)) { return false; }
 
             function escapeHtml(text) {
               return (text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -391,6 +807,9 @@ enum ReaderModeService {
             function cleanContent(html) {
               var div = document.createElement('div');
               div.innerHTML = html;
+              if (shouldCleanAntiBlockDocument() || containsAntiBlockMessage(html)) {
+                removeAntiBlockNodes(div, false);
+              }
 
               // Affiliate link URL patterns
               var affiliateURLPatterns = [
@@ -608,6 +1027,7 @@ enum ReaderModeService {
             }
 
             var cleanedContent = cleanContent(article.content);
+            if (articleHTMLIsDominantlyAntiBlock(cleanedContent)) { return false; }
             var title = article.title || document.title || '';
             var byline = article.byline || '';
             var bylineHtml = byline ? '<div class="reader-byline">' + escapeHtml(byline) + '</div>' : '';
@@ -646,6 +1066,9 @@ enum ReaderModeService {
             document.open();
             document.write(html);
             document.close();
+            if (shouldCleanAntiBlockDocument()) {
+              installAntiBlockCleanup();
+            }
             window.__rssReaderModeActive = true;
             return true;
           } catch (e) {
@@ -1094,6 +1517,22 @@ private struct ArticleDetailScrollOffsetPreferenceKey: PreferenceKey {
 }
 #endif
 
+private struct SubscriptionRowOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct SubscriptionTopOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // Extension to enable enhanced swipe back navigation
 extension View {
     func onSwipeGesture(perform action: @escaping () -> Void) -> some View {
@@ -1360,6 +1799,10 @@ private extension View {
     func feedListColumnStyle(
         colorScheme: ColorScheme,
         scrollOffset: CGFloat,
+        onRawScrollActivity: (() -> Void)? = nil,
+        restoreOffset: CGPoint? = nil,
+        onContentOffsetChange: ((CGPoint) -> Void)? = nil,
+        onRestoreComplete: (() -> Void)? = nil,
         onScrollOffsetChange: @escaping (CGFloat) -> Void
     ) -> some View {
         #if os(iOS)
@@ -1370,7 +1813,13 @@ private extension View {
                     .ignoresSafeArea()
             }
             .background(
-                FeedListScrollOffsetObserver(onOffsetChange: onScrollOffsetChange)
+                FeedListScrollOffsetObserver(
+                    onRawScrollActivity: onRawScrollActivity,
+                    restoreOffset: restoreOffset,
+                    onContentOffsetChange: onContentOffsetChange,
+                    onRestoreComplete: onRestoreComplete,
+                    onOffsetChange: onScrollOffsetChange
+                )
                     .frame(width: 0, height: 0)
             )
         #else
@@ -1395,6 +1844,10 @@ private final class FeedListScrollOffsetHostView: UIView {
 }
 
 private struct FeedListScrollOffsetObserver: UIViewRepresentable {
+    let onRawScrollActivity: (() -> Void)?
+    let restoreOffset: CGPoint?
+    let onContentOffsetChange: ((CGPoint) -> Void)?
+    let onRestoreComplete: (() -> Void)?
     let onOffsetChange: (CGFloat) -> Void
 
     func makeUIView(context: Context) -> FeedListScrollOffsetHostView {
@@ -1411,31 +1864,60 @@ private struct FeedListScrollOffsetObserver: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: FeedListScrollOffsetHostView, context: Context) {
+        context.coordinator.onRawScrollActivity = onRawScrollActivity
+        context.coordinator.restoreOffset = restoreOffset
+        context.coordinator.onContentOffsetChange = onContentOffsetChange
+        context.coordinator.onRestoreComplete = onRestoreComplete
         context.coordinator.onOffsetChange = onOffsetChange
         uiView.onWindowChange = { [weak uiView] in
             guard let uiView else { return }
             MainActor.assumeIsolated {
                 context.coordinator.tryAttach(from: uiView)
+                context.coordinator.applyRestoreIfNeeded()
             }
         }
         MainActor.assumeIsolated {
             context.coordinator.tryAttach(from: uiView)
+            context.coordinator.applyRestoreIfNeeded()
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onOffsetChange: onOffsetChange)
+        Coordinator(
+            onRawScrollActivity: onRawScrollActivity,
+            restoreOffset: restoreOffset,
+            onContentOffsetChange: onContentOffsetChange,
+            onRestoreComplete: onRestoreComplete,
+            onOffsetChange: onOffsetChange
+        )
     }
 
     @MainActor
     final class Coordinator {
+        var onRawScrollActivity: (() -> Void)?
+        var restoreOffset: CGPoint?
+        var onContentOffsetChange: ((CGPoint) -> Void)?
+        var onRestoreComplete: (() -> Void)?
         var onOffsetChange: (CGFloat) -> Void
         private weak var scrollView: UIScrollView?
         private var observation: NSKeyValueObservation?
         private var didScheduleRetry = false
+        private var isApplyingRestore = false
+        private let maxRestoreAttempts = 3
+        private var lastRawOffset: CGFloat?
         private var lastReportedOffset: CGFloat = -1
 
-        init(onOffsetChange: @escaping (CGFloat) -> Void) {
+        init(
+            onRawScrollActivity: (() -> Void)?,
+            restoreOffset: CGPoint?,
+            onContentOffsetChange: ((CGPoint) -> Void)?,
+            onRestoreComplete: (() -> Void)?,
+            onOffsetChange: @escaping (CGFloat) -> Void
+        ) {
+            self.onRawScrollActivity = onRawScrollActivity
+            self.restoreOffset = restoreOffset
+            self.onContentOffsetChange = onContentOffsetChange
+            self.onRestoreComplete = onRestoreComplete
             self.onOffsetChange = onOffsetChange
         }
 
@@ -1463,11 +1945,68 @@ private struct FeedListScrollOffsetObserver: UIViewRepresentable {
 
             observation?.invalidate()
             self.scrollView = scrollView
+            lastRawOffset = nil
+            lastReportedOffset = -1
 
             observation = scrollView.observe(\.contentOffset, options: [.initial, .new]) { [weak self] scrollView, _ in
                 guard let self else { return }
                 MainActor.assumeIsolated {
-                    self.reportOffset(from: scrollView)
+                    self.handleScrollActivity(from: scrollView)
+                }
+            }
+        }
+
+        private func handleScrollActivity(from scrollView: UIScrollView) {
+            let rawOffset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+            if !isApplyingRestore, let lastRawOffset, abs(rawOffset - lastRawOffset) > 0.25 {
+                onRawScrollActivity?()
+            }
+            lastRawOffset = rawOffset
+
+            if !isApplyingRestore {
+                onContentOffsetChange?(scrollView.contentOffset)
+            }
+            reportOffset(from: scrollView)
+        }
+
+        func applyRestoreIfNeeded() {
+            guard let scrollView, let restoreOffset else { return }
+            guard scrollView.bounds.height > 0 else {
+                if !didScheduleRetry {
+                    didScheduleRetry = true
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        MainActor.assumeIsolated {
+                            self.didScheduleRetry = false
+                            self.applyRestoreIfNeeded()
+                        }
+                    }
+                }
+                return
+            }
+
+            isApplyingRestore = true
+            applyRestorePass(targetOffset: restoreOffset, attempt: 0, scrollView: scrollView)
+        }
+
+        private func applyRestorePass(targetOffset: CGPoint, attempt: Int, scrollView: UIScrollView) {
+            scrollView.layoutIfNeeded()
+            scrollView.setContentOffset(targetOffset, animated: false)
+
+            DispatchQueue.main.async { [weak self, weak scrollView] in
+                guard let self, let scrollView else { return }
+                MainActor.assumeIsolated {
+                    let offsetDeltaX = abs(scrollView.contentOffset.x - targetOffset.x)
+                    let offsetDeltaY = abs(scrollView.contentOffset.y - targetOffset.y)
+                    let needsRetry = (offsetDeltaX > 0.5 || offsetDeltaY > 0.5) && attempt < self.maxRestoreAttempts
+
+                    if needsRetry {
+                        self.applyRestorePass(targetOffset: targetOffset, attempt: attempt + 1, scrollView: scrollView)
+                    } else {
+                        self.isApplyingRestore = false
+                        self.restoreOffset = nil
+                        self.onRestoreComplete?()
+                    }
                 }
             }
         }
@@ -2116,20 +2655,131 @@ struct RedditDetailViewWrapper: View {
 
 private struct RedditSortPicker: View {
     @Binding var selection: RedditService.SortOption
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var controlFill: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.34, green: 0.47, blue: 0.62).opacity(0.46),
+                Color(red: 0.24, green: 0.34, blue: 0.48).opacity(0.58)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private var selectedFill: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color.white.opacity(0.24),
+                Color.white.opacity(0.10),
+                Color.black.opacity(0.04)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
 
     var body: some View {
-        Picker("Sort", selection: $selection) {
+        HStack(spacing: 0) {
             ForEach(RedditService.SortOption.allCases) { option in
-                Text(option.displayName)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .tag(option)
+                Button {
+                    selection = option
+                } label: {
+                    Text(option.displayName)
+                        .font(.system(size: 16, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background {
+                            if selection == option {
+                                Capsule()
+                                    .fill(selectedFill)
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                                    )
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.white)
             }
         }
-        .pickerStyle(.segmented)
-        .controlSize(.small)
-        .frame(height: 34)
+        .frame(maxWidth: .infinity)
+        .background(controlFill, in: Capsule())
+        .overlay(
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.30),
+                            Color.clear,
+                            Color.black.opacity(0.05)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .blendMode(.overlay)
+                )
+                .allowsHitTesting(false)
+        )
+        .overlay(
+            Capsule()
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.32),
+                            Color.white.opacity(0.10),
+                            Color.black.opacity(0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.1
+                )
+        )
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.24), radius: 10, x: 0, y: 6)
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct RedditFloatingSubscriptionChrome: View {
+    let statusMessage: String?
+    let hidesSortBar: Bool
+    @Binding var sortOption: RedditService.SortOption
+    let onSortChange: (RedditService.SortOption) -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Color.clear
+                .frame(height: 48)
+
+            RedditSortPicker(selection: $sortOption)
+                .opacity(hidesSortBar ? 0 : 1)
+                .allowsHitTesting(!hidesSortBar)
+                .onChange(of: sortOption) { newOption in
+                    onSortChange(newOption)
+                }
+
+            if let statusMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(statusMessage)
+                        .font(.footnote)
+                        .foregroundColor(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.16), value: hidesSortBar)
     }
 }
 
@@ -2160,6 +2810,13 @@ struct ContentView: View {
     @State private var redditSummaryScopeSubreddit: String?
     @State private var isRestoringScrollPosition = false
     @State private var feedListScrollOffset: CGFloat = 0
+    @State private var redditSubscriptionRowOffsets: [String: CGFloat] = [:]
+    @State private var redditSubscriptionContentOffsets: [String: CGPoint] = [:]
+    @State private var redditSubscriptionPendingRestoreOffset: CGPoint?
+    @State private var redditSubscriptionScrollOffset: CGFloat = 0
+    @State private var redditSubscriptionTopOffset: CGFloat = 0
+    @State private var isRedditSubscriptionSortBarHidden = false
+    @State private var redditSubscriptionScrollIdleTask: Task<Void, Never>? = nil
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -2197,6 +2854,51 @@ struct ContentView: View {
 
     private func redditPostListID(for post: RedditPost) -> String {
         post.id
+    }
+
+    private func noteRedditSubscriptionScrollActivity() {
+        redditSubscriptionScrollIdleTask?.cancel()
+
+        if !isRedditSubscriptionSortBarHidden {
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isRedditSubscriptionSortBarHidden = true
+            }
+        }
+
+        let task = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 360_000_000)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isRedditSubscriptionSortBarHidden = false
+            }
+            redditSubscriptionScrollIdleTask = nil
+        }
+
+        redditSubscriptionScrollIdleTask = task
+    }
+
+    private func restoreRedditSubscriptionPosition(for subscription: Subscription, using scrollProxy: ScrollViewProxy) {
+        if let savedOffset = redditSubscriptionContentOffsets[subscription.url] {
+            isRestoringScrollPosition = true
+            redditSubscriptionPendingRestoreOffset = savedOffset
+            return
+        }
+
+        guard let savedPosition = appState.getSavedScrollPosition(for: subscription.url) else {
+            return
+        }
+
+        isRestoringScrollPosition = true
+        DispatchQueue.main.async {
+            scrollProxy.scrollTo(savedPosition, anchor: .center)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                scrollProxy.scrollTo(savedPosition, anchor: .center)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                isRestoringScrollPosition = false
+            }
+        }
     }
 
     private func restoreSidebarPosition(using scrollProxy: ScrollViewProxy) {
@@ -3833,7 +4535,7 @@ struct ContentView: View {
             .padding()
         }
     }
-    
+
     var redditView: some View {
         VStack {
             RedditSortPicker(selection: $appState.redditSortOption)
@@ -4080,107 +4782,185 @@ struct ContentView: View {
     @ViewBuilder
     private func redditSubscriptionView(feed: RedditFeed, subscription: Subscription) -> some View {
         ScrollViewReader { scrollProxy in
-            VStack(spacing: 0) {
-                RedditSortPicker(selection: $appState.redditSortOption)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .onChange(of: appState.redditSortOption) { newOption in
+            ZStack(alignment: .top) {
+                let statusMessage = appState.redditFeedStatusMessages[subscription.url]
+                let showsSubscriptionTitle = redditSubscriptionScrollOffset < 1 && redditSubscriptionTopOffset >= -0.5
+
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Color.clear
+                            .frame(height: 1)
+                            .background(
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: SubscriptionTopOffsetPreferenceKey.self,
+                                        value: proxy.frame(in: .named("subscriptionRedditList-\(subscription.id.uuidString)")).minY
+                                    )
+                                }
+                            )
+
+                        Text("r/\(feed.subreddit)")
+                            .font(.title2.bold())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.55)
+                            .allowsTightening(true)
+                            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                            .padding(.horizontal, 24)
+                            .opacity(showsSubscriptionTitle ? 1 : 0)
+                            .clipped()
+
+                        LazyVStack(spacing: 12) {
+                            ForEach(feed.posts) { post in
+                                Button(action: {
+                                    #if os(iOS)
+                                    if isPhoneStyleLayout && isBackSwipeInProgress {
+                                        return
+                                    }
+                                    #endif
+                                    appState.rememberCurrentSubscription(url: subscription.url)
+                                    appState.saveScrollPosition(for: subscription.url, itemID: post.id)
+                                    appState.setSelectedRedditPost(post)
+                                    appState.lastSelectedCategory = .reddit
+                                    if !post.isRead {
+                                        appState.markRedditPostAsRead(post)
+                                    }
+                                }) {
+                                    RedditPostRow(post: post, showsSubredditLabel: false)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .id(redditPostListID(for: post))
+                                .background(
+                                    GeometryReader { proxy in
+                                        Color.clear.preference(
+                                            key: SubscriptionRowOffsetPreferenceKey.self,
+                                            value: [post.id: proxy.frame(in: .named("subscriptionRedditList-\(subscription.id.uuidString)")).minY]
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                        .padding(.top, statusMessage == nil ? 75 : 115)
+                        .padding(.bottom, 8)
+                        .padding(.horizontal, 4)
+                    }
+                }
+                .coordinateSpace(name: "subscriptionRedditList-\(subscription.id.uuidString)")
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { _ in
+                            noteRedditSubscriptionScrollActivity()
+                        }
+                )
+                .feedListColumnStyle(
+                    colorScheme: colorScheme,
+                    scrollOffset: feedListScrollOffset,
+                    onRawScrollActivity: {
+                        noteRedditSubscriptionScrollActivity()
+                    },
+                    restoreOffset: redditSubscriptionPendingRestoreOffset,
+                    onContentOffsetChange: { offset in
+                        guard !isRestoringScrollPosition,
+                              appState.selectedRedditPost == nil else { return }
+                        redditSubscriptionContentOffsets[subscription.url] = offset
+                    },
+                    onRestoreComplete: {
+                        redditSubscriptionPendingRestoreOffset = nil
+                        isRestoringScrollPosition = false
+                    }
+                ) { offset in
+                    let previousOffset = redditSubscriptionScrollOffset
+                    feedListScrollOffset = offset
+                    redditSubscriptionScrollOffset = offset
+                    if abs(offset - previousOffset) >= 1 {
+                        noteRedditSubscriptionScrollActivity()
+                    }
+                }
+
+                RedditFloatingSubscriptionChrome(
+                    statusMessage: statusMessage,
+                    hidesSortBar: isRedditSubscriptionSortBarHidden,
+                    sortOption: $appState.redditSortOption,
+                    onSortChange: { newOption in
                         print("📱 ContentView: Reddit sort option changed to \(newOption.rawValue) for r/\(subscription.url)")
                         appState.isLoading = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                             appState.refreshRedditFeeds(specificSubreddit: subscription.url)
                         }
                     }
-
-                if let statusMessage = appState.redditFeedStatusMessages[subscription.url] {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text(statusMessage)
-                            .font(.footnote)
-                            .foregroundColor(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                }
-
-                List {
-                    ForEach(feed.posts) { post in
-                        Button(action: {
-                            #if os(iOS)
-                            if isPhoneStyleLayout && isBackSwipeInProgress {
-                                return
-                            }
-                            #endif
-                            appState.rememberCurrentSubscription(url: subscription.url)
-                            appState.saveScrollPosition(for: subscription.url, itemID: post.id)
-                            appState.selectedRedditPost = post
-                            appState.lastSelectedCategory = .reddit
-                            if !post.isRead {
-                                appState.markRedditPostAsRead(post)
-                            }
-                        }) {
-                            RedditPostRow(post: post)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .id(redditPostListID(for: post))
-                    }
-                }
-                .listStyle(.plain)
-                .feedListColumnStyle(
-                    colorScheme: colorScheme,
-                    scrollOffset: feedListScrollOffset
-                ) { offset in
-                    feedListScrollOffset = offset
-                }
-                .onAppear {
-                    appState.activeSubscriptionURL = subscription.url
-                    appState.saveScrollPosition(for: "sidebar_subscriptions", itemID: subscription.url)
-                    if let savedPosition = appState.getSavedScrollPosition(for: subscription.url) {
-                        withAnimation {
-                            scrollProxy.scrollTo(savedPosition, anchor: .center)
-                        }
-                    }
-                    if feed.posts.isEmpty {
-                        appState.refreshRedditFeeds(specificSubreddit: subscription.url)
-                    }
-                }
-                .onChange(of: appState.selectedRedditPostId) { newValue in
-                    guard newValue == nil else { return }
-                    if let savedPosition = appState.getSavedScrollPosition(for: subscription.url) {
-                        withAnimation {
-                            scrollProxy.scrollTo(savedPosition, anchor: .center)
-                        }
-                    }
-                }
-        #if os(iOS)
-        .anywhereSwipeBack(enabled: isPhoneStyleLayout, isTracking: $isBackSwipeInProgress) {
-            if isPhoneStyleLayout && appState.activeSubscriptionURL == subscription.url {
-                appState.exitActiveSubscriptionView()
-            }
-        }
-        #endif
+                )
             }
             .background {
                 AppColors.feedListBackground(for: colorScheme, scrollOffset: feedListScrollOffset)
                     .ignoresSafeArea()
             }
-            .navigationTitle("r/\(feed.subreddit)")
+            .onPreferenceChange(SubscriptionRowOffsetPreferenceKey.self) { offsets in
+                guard !isRestoringScrollPosition,
+                      appState.selectedRedditPost == nil,
+                      !offsets.isEmpty else { return }
+                let didMoveVisibleRows = !redditSubscriptionRowOffsets.isEmpty && offsets.contains { entry in
+                    guard let previousOffset = redditSubscriptionRowOffsets[entry.key] else { return false }
+                    return abs(entry.value - previousOffset) > 0.5
+                }
+                redditSubscriptionRowOffsets = offsets
+                if didMoveVisibleRows {
+                    noteRedditSubscriptionScrollActivity()
+                }
+                if let nearestToTop = offsets.min(by: { abs($0.value) < abs($1.value) })?.key {
+                    appState.saveScrollPosition(for: subscription.url, itemID: nearestToTop)
+                }
+            }
+            .onPreferenceChange(SubscriptionTopOffsetPreferenceKey.self) { offset in
+                let previousOffset = redditSubscriptionTopOffset
+                redditSubscriptionTopOffset = offset
+                if abs(offset - previousOffset) > 0.5 {
+                    noteRedditSubscriptionScrollActivity()
+                }
+            }
+            .onAppear {
+                redditSubscriptionScrollIdleTask?.cancel()
+                redditSubscriptionScrollIdleTask = nil
+                isRedditSubscriptionSortBarHidden = false
+                redditSubscriptionRowOffsets = [:]
+                redditSubscriptionScrollOffset = 0
+                redditSubscriptionTopOffset = 0
+                appState.activeSubscriptionURL = subscription.url
+                appState.saveScrollPosition(for: "sidebar_subscriptions", itemID: subscription.url)
+                restoreRedditSubscriptionPosition(for: subscription, using: scrollProxy)
+                if feed.posts.isEmpty {
+                    appState.refreshRedditFeeds(specificSubreddit: subscription.url)
+                }
+            }
+            .onDisappear {
+                redditSubscriptionScrollIdleTask?.cancel()
+                redditSubscriptionScrollIdleTask = nil
+                isRedditSubscriptionSortBarHidden = false
+            }
+            .onChange(of: appState.selectedRedditPostId) { newValue in
+                guard newValue == nil else { return }
+                restoreRedditSubscriptionPosition(for: subscription, using: scrollProxy)
+            }
+            .navigationTitle("")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(isPhoneStyleLayout)
+            .anywhereSwipeBack(enabled: isPhoneStyleLayout, isTracking: $isBackSwipeInProgress) {
+                if isPhoneStyleLayout && appState.activeSubscriptionURL == subscription.url {
+                    appState.exitActiveSubscriptionView()
+                }
+            }
             #endif
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
+                    Button(action: {
                         redditSummaryScopeSubreddit = subscription.url
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                             showRedditSummaryScopePicker = true
                         }
-                    } label: {
+                    }) {
                         #if os(iOS)
                         if UIDevice.current.userInterfaceIdiom == .phone {
                             Image(systemName: "text.bubble")
@@ -4193,9 +4973,9 @@ struct ContentView: View {
                     }
                     .buttonStyle(LiquidGlassButtonStyle(isTranslucent: true, showsBorder: false, showsBackground: false))
 
-                    let postScrollTarget = feed.posts.first?.id
+                    let redditScrollTarget = feed.posts.first?.id
                     Button(action: {
-                        if let target = postScrollTarget {
+                        if let target = redditScrollTarget {
                             withAnimation(.easeInOut) {
                                 scrollProxy.scrollTo(target, anchor: .top)
                             }
@@ -4209,9 +4989,9 @@ struct ContentView: View {
                             .font(.system(size: 18, weight: .semibold))
                     }
                     .buttonStyle(LiquidGlassButtonStyle(isTranslucent: true, showsBorder: false, showsBackground: false))
-                    .disabled(postScrollTarget == nil)
+                    .disabled(redditScrollTarget == nil)
 
-                    let hasUnreadPosts = feed.posts.contains { !$0.isRead }
+                    let hasUnread = feed.posts.contains { !$0.isRead }
                     Button(action: {
                         appState.markAllRedditPostsAsRead(for: subscription.url)
                         appState.navigateToNextSubscription(after: subscription.url)
@@ -4227,7 +5007,7 @@ struct ContentView: View {
                         #endif
                     }
                     .buttonStyle(LiquidGlassButtonStyle(isTranslucent: true, showsBorder: false, showsBackground: false))
-                    .disabled(!hasUnreadPosts)
+                    .disabled(!hasUnread)
                 }
             }
             .overlay {
@@ -8943,6 +9723,7 @@ struct ArticleRow: View {
 // MARK: - Reddit Post Row
 struct RedditPostRow: View {
     let post: RedditPost
+    var showsSubredditLabel = true
     @Environment(\.colorScheme) private var colorScheme
 
     private var cardBackground: Color {
@@ -8984,17 +9765,19 @@ struct RedditPostRow: View {
                             .padding(.trailing, 8)
                         }
                         
-                        // Subreddit info
-                        HStack(spacing: 4) {
-                            Image("RedditLogo")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 16, height: 16)
-                                .foregroundColor(.orange)
-                            
-                            Text("r/\(post.subreddit)")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(.secondary)
+                        if showsSubredditLabel {
+                            // Subreddit info
+                            HStack(spacing: 4) {
+                                Image("RedditLogo")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 16, height: 16)
+                                    .foregroundColor(.orange)
+
+                                Text("r/\(post.subreddit)")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         
                         Spacer()
@@ -9114,6 +9897,7 @@ struct ArticleDetailView: View {
     @State private var showSelectionAskAISheet = false
     @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
     @State private var isArticleMetadataChromeHidden: Bool = false
+    @State private var isArticleReaderLoading: Bool = true
 #if os(iOS)
     @State private var audioPlayerQA: AVAudioPlayer?
     @State private var localSpeechSynthQA: AVSpeechSynthesizer?
@@ -9251,7 +10035,13 @@ struct ArticleDetailView: View {
                     configureArticleDetailAppearance(for: article)
                 }
                 .onChange(of: article.id) { _ in
+                    isArticleReaderLoading = true
                     resetArticleReadingChrome()
+                }
+                .onChange(of: articleViewMode) { mode in
+                    if mode == .reader {
+                        isArticleReaderLoading = true
+                    }
                 }
                 .onDisappear {
                     resetArticleReadingChrome()
@@ -9260,21 +10050,24 @@ struct ArticleDetailView: View {
     }
 
     private func articleScene(article: Article, proxy: ScrollViewProxy) -> some View {
-        ZStack {
-            articleDetailBackground
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                articleDetailBackground
+                    .ignoresSafeArea()
 
-            articleScrollContent(article: article)
-                .edgesIgnoringSafeArea(.all)
-                #if !os(iOS)
-                .enhancedSwipeBack {
-                    appState.navigateBack()
+                articleScrollContent(article: article, viewportHeight: geometry.size.height)
+                    .edgesIgnoringSafeArea(.all)
+                    #if !os(iOS)
+                    .enhancedSwipeBack {
+                        appState.navigateBack()
+                    }
+                    #endif
+
+                VStack {
+                    Spacer()
                 }
-                #endif
-
-            VStack {
-                Spacer()
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         #if os(iOS)
         .safeAreaInset(edge: .bottom) {
@@ -9562,6 +10355,7 @@ struct ArticleDetailView: View {
 
     private func configureArticleDetailAppearance(for article: Article) {
         resetArticleReadingChrome()
+        isArticleReaderLoading = true
         articleViewMode = .reader
         if appState.selectedArticleId != article.id || appState.selectedArticle?.id != article.id {
             appState.setSelectedArticle(article)
@@ -9588,7 +10382,7 @@ struct ArticleDetailView: View {
         }
     }
 
-    private func articleScrollContent(article: Article) -> some View {
+    private func articleScrollContent(article: Article, viewportHeight: CGFloat) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear
@@ -9614,15 +10408,18 @@ struct ArticleDetailView: View {
                     baseURL: article.url,
                     prefersCompactTitleSizing: usesCompactTitleSizing,
                     viewMode: $articleViewMode,
+                    isLoadingReader: $isArticleReaderLoading,
                     isReadingChromeHidden: isReadingChromeHidden,
                     scrollToTopTrigger: articleReaderScrollToTopTrigger,
                     readerTopContentInset: readerTopContentInset,
+                    readerViewportHeight: articleReaderViewportHeight(for: viewportHeight),
                     onPhoneScrollActivity: { isAtTop in
                         noteArticleReaderScrollActivity(isAtTop: isAtTop)
                     },
                     onArticleTextScroll: noteArticleTextScrollActivity,
                     onArticleTextTap: revealArticleReadingChrome
                 )
+                .id(article.id)
                 .padding(.top, 8)
                 .padding(.horizontal, articleContentHorizontalPadding)
 
@@ -9651,6 +10448,16 @@ struct ArticleDetailView: View {
         #endif
     }
 
+    private func articleReaderViewportHeight(for viewportHeight: CGFloat) -> CGFloat {
+        #if os(iOS)
+        if usesPhoneArticleLayout && !isReadingChromeHidden {
+            return max(viewportHeight - 200, 320)
+        }
+        #endif
+
+        return max(viewportHeight, 320)
+    }
+
     private var shouldReserveOuterArticleTopSpace: Bool {
         #if os(iOS)
         return usesPhoneArticleLayout || articleViewMode != .reader
@@ -9677,7 +10484,9 @@ struct ArticleDetailView: View {
                 articleViewMode: $articleViewMode
             )
 
-            if !isArticleMetadataChromeHidden {
+            if articleViewMode == .reader,
+               !isArticleReaderLoading,
+               !isArticleMetadataChromeHidden {
                 articleMetadataCard(article: article)
                     .padding(.horizontal, articleCardOuterHorizontalPadding + articleHeaderHorizontalPadding)
                     .padding(.top, 94)
@@ -9691,7 +10500,9 @@ struct ArticleDetailView: View {
         Group {
             if usesPhoneArticleLayout {
                 VStack(alignment: .leading, spacing: 18) {
-                    articleMetadataCard(article: article)
+                    if articleViewMode == .reader && !isArticleReaderLoading {
+                        articleMetadataCard(article: article)
+                    }
                     if articleViewMode == .rss {
                         articleTitlePanel(article: article)
                     }
@@ -9927,7 +10738,9 @@ struct ArticleDetailView: View {
                 } else {
                     VStack(spacing: 8) {
                         ProgressView()
-                        Text("Summarizing article...")
+                        Text(appState.isWaitingForAppleIntelligence
+                             ? appState.appleIntelligenceWaitProgress
+                             : "Summarizing article...")
                             .foregroundColor(.secondary)
                             .font(.caption)
                     }
@@ -9936,25 +10749,6 @@ struct ArticleDetailView: View {
                     .background(AppColors.systemGray6)
                     .cornerRadius(10)
                 }
-            }
-            .padding(.bottom, 16)
-        } else if appState.isWaitingForAppleIntelligence && article.summary == nil {
-            VStack(spacing: 16) {
-                HStack {
-                    Text("Summary")
-                        .font(.headline)
-                    Spacer()
-                }
-                VStack(spacing: 8) {
-                    ProgressView()
-                    Text(appState.appleIntelligenceWaitProgress)
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(AppColors.systemGray6)
-                .cornerRadius(10)
             }
             .padding(.bottom, 16)
         } else if let summary = article.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -10598,7 +11392,7 @@ struct ArticleDetailView: View {
         print("🔍 REMOVE FIRST IMAGE - Input HTML contains images: \(html.contains("<img"))")
         
         do {
-            let document: Document = try SwiftSoup.parseBodyFragment(html)
+            let document: SwiftSoup.Document = try SwiftSoup.parseBodyFragment(html)
                 let allImages = try document.select("img")
             print("🔍 SwiftSoup found \(allImages.count) images")
             
@@ -11105,9 +11899,11 @@ struct ArticleContentRenderer: View {
     let baseURL: URL?
     let prefersCompactTitleSizing: Bool
     @Binding var viewMode: ViewMode
+    @Binding var isLoadingReader: Bool
     let isReadingChromeHidden: Bool
     let scrollToTopTrigger: Int
     let readerTopContentInset: CGFloat
+    let readerViewportHeight: CGFloat
     let onPhoneScrollActivity: (Bool) -> Void
     let onArticleTextScroll: () -> Void
     let onArticleTextTap: () -> Void
@@ -11118,7 +11914,6 @@ struct ArticleContentRenderer: View {
     }
 
     @State private var contentHeight: CGFloat = 100
-    @State private var isLoadingReader: Bool = false
     @State private var readerModeAvailable: Bool = true
     @Environment(\.colorScheme) private var colorScheme
 
@@ -11136,8 +11931,27 @@ struct ArticleContentRenderer: View {
         .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: content) { _ in
+            isLoadingReader = true
             if viewMode == .rss {
                 contentHeight = 100
+            }
+        }
+        .onChange(of: baseURL) { _ in
+            isLoadingReader = true
+            readerModeAvailable = true
+            if viewMode == .rss {
+                contentHeight = 100
+            }
+        }
+        .onChange(of: viewMode) { newMode in
+            if newMode == .reader {
+                isLoadingReader = true
+                readerModeAvailable = true
+            }
+        }
+        .onChange(of: readerModeAvailable) { isAvailable in
+            if !isAvailable && viewMode == .reader {
+                viewMode = .rss
             }
         }
         .onAppear {
@@ -11150,19 +11964,34 @@ struct ArticleContentRenderer: View {
 
     @ViewBuilder
     private var articleContentPanel: some View {
-        if viewMode == .reader && hasArticleURL {
-            ArticleReaderWebView(
-                articleURL: baseURL!,
-                isLoading: $isLoadingReader,
-                readerModeAvailable: $readerModeAvailable,
-                useCompactTitleSizing: prefersCompactTitleSizing,
-                scrollToTopTrigger: scrollToTopTrigger,
-                topContentInset: readerTopContentInset,
-                onScrollActivity: onPhoneScrollActivity
-            )
+        if viewMode == .reader && hasArticleURL && readerModeAvailable {
+            ZStack(alignment: .top) {
+                readerLoadingFallback
+                    .opacity(isLoadingReader ? 1 : 0)
+                    .allowsHitTesting(isLoadingReader)
+                    .accessibilityHidden(!isLoadingReader)
+                    .zIndex(1)
+
+                ArticleReaderWebView(
+                    articleURL: baseURL!,
+                    isLoading: $isLoadingReader,
+                    readerModeAvailable: $readerModeAvailable,
+                    useCompactTitleSizing: prefersCompactTitleSizing,
+                    scrollToTopTrigger: scrollToTopTrigger,
+                    topContentInset: readerTopContentInset,
+                    onScrollActivity: onPhoneScrollActivity
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: readerViewportHeight)
+                .opacity(isLoadingReader ? 0 : 1)
+                .allowsHitTesting(!isLoadingReader)
+                .accessibilityHidden(isLoadingReader)
+                .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
+                .zIndex(2)
+            }
             .frame(maxWidth: .infinity)
-            .frame(height: isReadingChromeHidden ? currentPlatformScreenHeight() : currentPlatformScreenHeight() - 200)
-            .animation(articleChromeContinuityAnimation, value: isReadingChromeHidden)
+            .frame(height: readerViewportHeight)
+            .animation(.easeOut(duration: 0.18), value: isLoadingReader)
         } else {
             HTMLWebView(htmlContent: enhanceHTML(content), baseURL: baseURL, contentHeight: $contentHeight)
                 .frame(maxWidth: .infinity)
@@ -11179,6 +12008,29 @@ struct ArticleContentRenderer: View {
                         onArticleTextTap()
                     }
                 )
+        }
+    }
+
+    @ViewBuilder
+    private var readerLoadingFallback: some View {
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Opening article…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: readerViewportHeight)
+            .articleReaderPanel(colorScheme: colorScheme)
+        } else {
+            HTMLWebView(
+                htmlContent: enhanceHTML(content),
+                baseURL: baseURL,
+                contentHeight: .constant(readerViewportHeight)
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: readerViewportHeight)
+            .articleReaderPanel(colorScheme: colorScheme)
         }
     }
 
@@ -11546,6 +12398,14 @@ struct ArticleContentRenderer: View {
             }
         }
 
+        let antiBlockContainers = try document.select("p, div, section, aside, figure, span, strong, b")
+        for container in antiBlockContainers {
+            let text = (try? container.text().trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+            if text.count < 900 && containsArticleAntiBlockMessage(text) {
+                try container.remove()
+            }
+        }
+
         let wrappers = try document.select("div, section, aside")
         for wrapper in wrappers {
             let text = (try? wrapper.text().trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
@@ -11629,7 +12489,7 @@ struct ArticleContentRenderer: View {
 
         if ["p", "span", "div", "section", "aside", "figure", "small", "strong"].contains(tag) {
             let text = (try? element.text().trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
-            if isLikelyAdLabel(text) {
+            if isLikelyAdLabel(text) || (text.count < 900 && containsArticleAntiBlockMessage(text)) {
                 return true
             }
         }
@@ -11854,6 +12714,10 @@ struct ArticleContentRenderer: View {
 
         guard !normalized.isEmpty else { return false }
 
+        if normalized.count < 900 && containsArticleAntiBlockMessage(normalized) {
+            return true
+        }
+
         let exactMatches: Set<String> = [
             "advertisement",
             "advertisements",
@@ -11960,6 +12824,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
     let onScrollActivity: (Bool) -> Void
 
     private static func conceal(_ webView: WKWebView) {
+        webView.isHidden = false
         webView.alphaValue = 1
     }
 
@@ -11969,6 +12834,10 @@ struct ArticleReaderWebView: NSViewRepresentable {
             context.duration = 0.15
             webView.animator().alphaValue = 1
         }
+    }
+
+    private static func hideForRSSFallback(_ webView: WKWebView) {
+        webView.isHidden = true
     }
 
     private static func scrollToTop(_ webView: WKWebView) {
@@ -11985,7 +12854,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
         Self.conceal(webView)
 
         // Set User-Agent to avoid being blocked
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        webView.customUserAgent = articleReaderMobileSafariUserAgent
 
         print("📖 ArticleReaderWebView: Created WebView for \(articleURL)")
         return webView
@@ -12086,9 +12955,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
             DispatchQueue.main.async {
                 self.pendingReaderModeRetry?.cancel()
                 self.pendingReaderModeRetry = nil
-                self.parent.isLoading = false
-                self.parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                self.fallbackToRSS(on: webView, reason: "navigation failed")
             }
         }
 
@@ -12097,9 +12964,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
             DispatchQueue.main.async {
                 self.pendingReaderModeRetry?.cancel()
                 self.pendingReaderModeRetry = nil
-                self.parent.isLoading = false
-                self.parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                self.fallbackToRSS(on: webView, reason: "provisional navigation failed")
             }
         }
 
@@ -12110,6 +12975,20 @@ struct ArticleReaderWebView: NSViewRepresentable {
             pendingReaderModeRetry = nil
             readerModeAttempt += 1
 
+            guard is9to5MacArticleURL(parent.articleURL) else {
+                evaluateReaderMode(on: webView)
+                return
+            }
+
+            webView.evaluateJavaScript(articleAntiBlockCleanupJavaScript()) { [weak self] _, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.evaluateReaderMode(on: webView)
+                }
+            }
+        }
+
+        private func evaluateReaderMode(on webView: WKWebView) {
             let script = ReaderModeService.toggleScript(useCompactTitle: parent.useCompactTitleSizing)
             print("📖 ArticleReaderWebView: Applying Readability.js immediately (attempt \(readerModeAttempt), script length: \(script.count) chars)")
 
@@ -12125,10 +13004,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
                 print("📖 ArticleReaderWebView: JavaScript error on attempt \(readerModeAttempt): \(error.localizedDescription)")
                 if scheduleReaderModeRetry(on: webView) { return }
 
-                hasAppliedReaderMode = true
-                parent.isLoading = false
-                parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                fallbackToRSS(on: webView, reason: "readability javascript error")
                 return
             }
 
@@ -12136,28 +13012,51 @@ struct ArticleReaderWebView: NSViewRepresentable {
                 print("📖 ArticleReaderWebView: Readability.js result on attempt \(readerModeAttempt): \(success)")
                 if success {
                     hasAppliedReaderMode = true
-                    parent.isLoading = false
-                    parent.readerModeAvailable = true
-                    ArticleReaderWebView.reveal(webView)
+                    verifyAntiBlockAfterReader(on: webView)
                     return
                 }
 
                 if scheduleReaderModeRetry(on: webView) { return }
 
-                hasAppliedReaderMode = true
-                parent.isLoading = false
-                parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                fallbackToRSS(on: webView, reason: "readability failed")
                 return
             }
 
             print("📖 ArticleReaderWebView: Unexpected result type on attempt \(readerModeAttempt): \(String(describing: result))")
             if scheduleReaderModeRetry(on: webView) { return }
 
+            fallbackToRSS(on: webView, reason: "unexpected readability result")
+        }
+
+        private func verifyAntiBlockAfterReader(on webView: WKWebView) {
+            guard is9to5MacArticleURL(parent.articleURL) else {
+                finishReaderModeSuccess(on: webView)
+                return
+            }
+
+            webView.evaluateJavaScript(articleAntiBlockCleanupJavaScript()) { [weak self] _, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.finishReaderModeSuccess(on: webView)
+                }
+            }
+        }
+
+        private func finishReaderModeSuccess(on webView: WKWebView) {
+            hasAppliedReaderMode = true
+            parent.isLoading = false
+            parent.readerModeAvailable = true
+            ArticleReaderWebView.reveal(webView)
+        }
+
+        private func fallbackToRSS(on webView: WKWebView, reason: String) {
+            print("📖 ArticleReaderWebView: Falling back to RSS content (\(reason))")
+            pendingReaderModeRetry?.cancel()
+            pendingReaderModeRetry = nil
             hasAppliedReaderMode = true
             parent.isLoading = false
             parent.readerModeAvailable = false
-            ArticleReaderWebView.reveal(webView)
+            ArticleReaderWebView.hideForRSSFallback(webView)
         }
 
         private func scheduleReaderModeRetry(on webView: WKWebView) -> Bool {
@@ -12189,6 +13088,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
     let onScrollActivity: (Bool) -> Void
 
     private static func conceal(_ webView: WKWebView) {
+        webView.isHidden = false
         webView.alpha = 1
     }
 
@@ -12197,6 +13097,10 @@ struct ArticleReaderWebView: UIViewRepresentable {
         UIView.animate(withDuration: 0.15) {
             webView.alpha = 1
         }
+    }
+
+    private static func hideForRSSFallback(_ webView: WKWebView) {
+        webView.isHidden = true
     }
 
     private static func scrollToTop(_ webView: WKWebView) {
@@ -12249,7 +13153,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
         Self.conceal(webView)
 
         // Set a proper User-Agent to avoid being blocked
-        webView.customUserAgent = "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        webView.customUserAgent = articleReaderMobileSafariUserAgent
 
         print("📖 ArticleReaderWebView: Created WebView for \(articleURL)")
         return webView
@@ -12379,9 +13283,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
             DispatchQueue.main.async {
                 self.pendingReaderModeRetry?.cancel()
                 self.pendingReaderModeRetry = nil
-                self.parent.isLoading = false
-                self.parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                self.fallbackToRSS(on: webView, reason: "navigation failed")
             }
         }
 
@@ -12390,9 +13292,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
             DispatchQueue.main.async {
                 self.pendingReaderModeRetry?.cancel()
                 self.pendingReaderModeRetry = nil
-                self.parent.isLoading = false
-                self.parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                self.fallbackToRSS(on: webView, reason: "provisional navigation failed")
             }
         }
 
@@ -12403,6 +13303,20 @@ struct ArticleReaderWebView: UIViewRepresentable {
             pendingReaderModeRetry = nil
             readerModeAttempt += 1
 
+            guard is9to5MacArticleURL(parent.articleURL) else {
+                evaluateReaderMode(on: webView)
+                return
+            }
+
+            webView.evaluateJavaScript(articleAntiBlockCleanupJavaScript()) { [weak self] _, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.evaluateReaderMode(on: webView)
+                }
+            }
+        }
+
+        private func evaluateReaderMode(on webView: WKWebView) {
             let script = ReaderModeService.toggleScript(useCompactTitle: parent.useCompactTitleSizing)
             print("📖 ArticleReaderWebView: Applying Readability.js immediately (attempt \(readerModeAttempt), script length: \(script.count) chars)")
 
@@ -12418,10 +13332,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
                 print("📖 ArticleReaderWebView: JavaScript error on attempt \(readerModeAttempt): \(error.localizedDescription)")
                 if scheduleReaderModeRetry(on: webView) { return }
 
-                hasAppliedReaderMode = true
-                parent.isLoading = false
-                parent.readerModeAvailable = false
-                ArticleReaderWebView.reveal(webView)
+                fallbackToRSS(on: webView, reason: "readability javascript error")
                 return
             }
 
@@ -12429,30 +13340,52 @@ struct ArticleReaderWebView: UIViewRepresentable {
                 print("📖 ArticleReaderWebView: Readability.js result on attempt \(readerModeAttempt): \(success)")
                 if success {
                     hasAppliedReaderMode = true
-                    parent.isLoading = false
-                    parent.readerModeAvailable = true
-                    ArticleReaderWebView.applyTopContentInset(parent.topContentInset, to: webView, preserveTopPosition: true)
-                    ArticleReaderWebView.reveal(webView)
+                    verifyAntiBlockAfterReader(on: webView)
                     return
                 }
 
                 if scheduleReaderModeRetry(on: webView) { return }
 
-                hasAppliedReaderMode = true
-                parent.isLoading = false
-                parent.readerModeAvailable = false
-                print("📖 ArticleReaderWebView: Reader mode failed after retries - showing original page")
-                ArticleReaderWebView.reveal(webView)
+                fallbackToRSS(on: webView, reason: "readability failed")
                 return
             }
 
             print("📖 ArticleReaderWebView: Unexpected result type on attempt \(readerModeAttempt): \(String(describing: result))")
             if scheduleReaderModeRetry(on: webView) { return }
 
+            fallbackToRSS(on: webView, reason: "unexpected readability result")
+        }
+
+        private func verifyAntiBlockAfterReader(on webView: WKWebView) {
+            guard is9to5MacArticleURL(parent.articleURL) else {
+                finishReaderModeSuccess(on: webView)
+                return
+            }
+
+            webView.evaluateJavaScript(articleAntiBlockCleanupJavaScript()) { [weak self] _, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.finishReaderModeSuccess(on: webView)
+                }
+            }
+        }
+
+        private func finishReaderModeSuccess(on webView: WKWebView) {
+            hasAppliedReaderMode = true
+            parent.isLoading = false
+            parent.readerModeAvailable = true
+            ArticleReaderWebView.applyTopContentInset(parent.topContentInset, to: webView, preserveTopPosition: true)
+            ArticleReaderWebView.reveal(webView)
+        }
+
+        private func fallbackToRSS(on webView: WKWebView, reason: String) {
+            print("📖 ArticleReaderWebView: Falling back to RSS content (\(reason))")
+            pendingReaderModeRetry?.cancel()
+            pendingReaderModeRetry = nil
             hasAppliedReaderMode = true
             parent.isLoading = false
             parent.readerModeAvailable = false
-            ArticleReaderWebView.reveal(webView)
+            ArticleReaderWebView.hideForRSSFallback(webView)
         }
 
         private func scheduleReaderModeRetry(on webView: WKWebView) -> Bool {
@@ -12564,7 +13497,12 @@ struct HTMLWebView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // Load the HTML content
+        context.coordinator.parent = self
+        guard context.coordinator.currentHTMLContent != htmlContent || context.coordinator.currentBaseURL != baseURL else {
+            return
+        }
+        context.coordinator.currentHTMLContent = htmlContent
+        context.coordinator.currentBaseURL = baseURL
         uiView.loadHTMLString(htmlContent, baseURL: baseURL)
     }
     
@@ -12574,6 +13512,8 @@ struct HTMLWebView: UIViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate {
         var parent: HTMLWebView
+        var currentHTMLContent: String?
+        var currentBaseURL: URL?
         
         init(_ parent: HTMLWebView) {
             self.parent = parent

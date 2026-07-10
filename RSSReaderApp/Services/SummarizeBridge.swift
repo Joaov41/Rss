@@ -630,16 +630,19 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
     }
 
     private func resolveEndpoint() async throws -> NWEndpoint {
+        let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !host.isEmpty,
+           let port = NWEndpoint.Port(rawValue: UInt16(configuration.port)) {
+            print("Summarize bridge endpoint: manual \(host):\(configuration.port), secretLength=\(configuration.secret.count)")
+            return .hostPort(host: NWEndpoint.Host(host), port: port)
+        }
+
         if let discovered = await discoverBridgeEndpoint(timeout: 1.5) {
+            print("Summarize bridge endpoint: discovered \(discovered), secretLength=\(configuration.secret.count)")
             return discovered
         }
 
-        let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty,
-              let port = NWEndpoint.Port(rawValue: UInt16(configuration.port)) else {
-            throw RSSSummarizeProviderError.bridgeUnavailable
-        }
-        return .hostPort(host: NWEndpoint.Host(host), port: port)
+        throw RSSSummarizeProviderError.bridgeUnavailable
     }
 
     private func discoverBridgeEndpoint(timeout: TimeInterval) async -> NWEndpoint? {

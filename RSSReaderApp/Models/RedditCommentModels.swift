@@ -17,11 +17,11 @@ struct RedditCommentModel: Identifiable {
     let bodyBlocks: [AttributedString]
     let imageURLs: [URL]
     let displayLinks: [RedditCommentLink]
-    
+
     var createdDate: Date {
         Date(timeIntervalSince1970: createdUtc)
     }
-    
+
     // MARK: - Extract Images & Links
 
     private static func decodeHTMLEntities(_ text: String) -> String {
@@ -282,7 +282,7 @@ struct RedditCommentModel: Identifiable {
     var nonImageLinks: [URL] {
         displayLinks.map(\.url)
     }
-    
+
     /// Generates a cleaned version of the comment text for a preview.
     var cleanedBody: String {
         var text = body
@@ -300,9 +300,9 @@ struct RedditCommentModel: Identifiable {
         )
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    
+
     // MARK: - Initialization
-    
+
     init(id: String,
          author: String,
          body: String,
@@ -325,16 +325,16 @@ struct RedditCommentModel: Identifiable {
         self.imageURLs = preparedImageURLs
         self.displayLinks = preparedDisplayLinks
     }
-    
+
     // MARK: - Parsing from JSON
-    
+
     static func parseComments(from json: [String: Any],
                               indentationLevel: Int = 0) -> [RedditCommentModel] {
         guard let data = json["data"] as? [String: Any],
               let children = data["children"] as? [[String: Any]] else {
             return []
         }
-        
+
         var comments: [RedditCommentModel] = []
         for child in children {
             guard let kind = child["kind"] as? String, kind == "t1",
@@ -346,12 +346,12 @@ struct RedditCommentModel: Identifiable {
                   let createdUtc = data["created_utc"] as? TimeInterval else {
                 continue
             }
-            
+
             var repliesArray: [RedditCommentModel] = []
             if let repliesJson = data["replies"] as? [String: Any], !repliesJson.isEmpty {
                 repliesArray = parseComments(from: repliesJson, indentationLevel: indentationLevel + 1)
             }
-            
+
             let comment = RedditCommentModel(
                 id: id,
                 author: author,
