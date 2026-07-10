@@ -257,14 +257,18 @@ final class RSSSummarizeDaemonHTTPClient: @unchecked Sendable {
         return body?.isEmpty == false ? body! : "Connected"
     }
 
-    func generate(prompt: String, onPartial: ((String) -> Void)? = nil) async throws -> String {
+    func generate(
+        prompt: String,
+        timeout: TimeInterval = 300,
+        onPartial: ((String) -> Void)? = nil
+    ) async throws -> String {
         let url = configuration.baseURL
             .appendingPathComponent("v1/agent")
             .appending(queryItems: [URLQueryItem(name: "format", value: "json")])
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 300
+        request.timeoutInterval = timeout
         request.addValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -522,32 +526,12 @@ private enum RSSSummarizeTimeout {
         let seconds: TimeInterval
         var errorDescription: String? { "Summarize request timed out after \(Int(seconds)) seconds." }
     }
-
-    static func run<T: Sendable>(
-        seconds: TimeInterval,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw Error(seconds: seconds)
-            }
-
-            guard let value = try await group.next() else {
-                throw Error(seconds: seconds)
-            }
-            group.cancelAll()
-            return value
-        }
-    }
 }
 
 private final class RSSBridgeContinuationBox<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var didResume = false
+    private var timeoutWorkItem: DispatchWorkItem?
     private let connection: NWConnection?
     private let continuation: CheckedContinuation<T, Error>
 
@@ -556,24 +540,41 @@ private final class RSSBridgeContinuationBox<T>: @unchecked Sendable {
         self.continuation = continuation
     }
 
+    func installTimeoutWorkItem(_ workItem: DispatchWorkItem) {
+        lock.lock()
+        if didResume {
+            lock.unlock()
+            workItem.cancel()
+            return
+        }
+        timeoutWorkItem = workItem
+        lock.unlock()
+    }
+
     func resume(returning value: T) {
-        guard markResumed() else { return }
+        let terminal = markResumed()
+        guard terminal.didResume else { return }
+        terminal.timeoutWorkItem?.cancel()
         connection?.cancel()
         continuation.resume(returning: value)
     }
 
     func resume(throwing error: Error) {
-        guard markResumed() else { return }
+        let terminal = markResumed()
+        guard terminal.didResume else { return }
+        terminal.timeoutWorkItem?.cancel()
         connection?.cancel()
         continuation.resume(throwing: error)
     }
 
-    private func markResumed() -> Bool {
+    private func markResumed() -> (didResume: Bool, timeoutWorkItem: DispatchWorkItem?) {
         lock.lock()
         defer { lock.unlock() }
-        guard !didResume else { return false }
+        guard !didResume else { return (false, nil) }
         didResume = true
-        return true
+        let workItem = timeoutWorkItem
+        timeoutWorkItem = nil
+        return (true, workItem)
     }
 }
 
@@ -611,8 +612,12 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
         return response.text?.isEmpty == false ? response.text! : "Connected"
     }
 
-    func generate(prompt: String, onPartial: ((String) -> Void)? = nil) async throws -> String {
-        let response = try await send(kind: .generate, prompt: prompt, timeout: 300)
+    func generate(
+        prompt: String,
+        timeout: TimeInterval = 300,
+        onPartial: ((String) -> Void)? = nil
+    ) async throws -> String {
+        let response = try await send(kind: .generate, prompt: prompt, timeout: timeout)
         guard response.ok, let text = response.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             throw RSSSummarizeProviderError.bridgeRejected(response.error ?? "Summarize bridge returned an empty response.")
         }
@@ -624,9 +629,7 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
         let request = RSSSummarizeBridgeRequest(kind: kind, secret: configuration.secret, prompt: prompt)
         let endpoint = try await resolveEndpoint()
 
-        return try await RSSSummarizeTimeout.run(seconds: timeout) {
-            try await self.send(request: request, endpoint: endpoint)
-        }
+        return try await send(request: request, endpoint: endpoint, timeout: timeout)
     }
 
     private func resolveEndpoint() async throws -> NWEndpoint {
@@ -674,10 +677,19 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
         }
     }
 
-    private func send(request: RSSSummarizeBridgeRequest, endpoint: NWEndpoint) async throws -> RSSSummarizeBridgeResponse {
+    private func send(
+        request: RSSSummarizeBridgeRequest,
+        endpoint: NWEndpoint,
+        timeout: TimeInterval
+    ) async throws -> RSSSummarizeBridgeResponse {
         try await withCheckedThrowingContinuation { continuation in
             let connection = NWConnection(to: endpoint, using: .tcp)
             let box = RSSBridgeContinuationBox<RSSSummarizeBridgeResponse>(connection: connection, continuation: continuation)
+            let timeoutWorkItem = DispatchWorkItem {
+                box.resume(throwing: RSSSummarizeTimeout.Error(seconds: timeout))
+            }
+            box.installTimeoutWorkItem(timeoutWorkItem)
+            queue.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
 
             connection.stateUpdateHandler = { state in
                 switch state {
@@ -764,17 +776,18 @@ enum RSSSummarizeProviderClient {
     static func generate(
         prompt: String,
         settings: AppSettings,
+        timeout: TimeInterval = 300,
         onPartial: ((String) -> Void)? = nil
     ) async throws -> String {
         #if os(iOS)
         if !AppSettings.sanitizedSummarizeSecret(settings.summarizeBridgeSecret).isEmpty {
             return try await RSSSummarizeBridgeClient(configuration: bridgeConfiguration(from: settings))
-                .generate(prompt: prompt, onPartial: onPartial)
+                .generate(prompt: prompt, timeout: timeout, onPartial: onPartial)
         }
         #endif
 
         return try await RSSSummarizeDaemonHTTPClient(configuration: daemonConfiguration(from: settings))
-            .generate(prompt: prompt, onPartial: onPartial)
+            .generate(prompt: prompt, timeout: timeout, onPartial: onPartial)
     }
 
     static func daemonConfiguration(from settings: AppSettings) throws -> RSSSummarizeDaemonConfiguration {

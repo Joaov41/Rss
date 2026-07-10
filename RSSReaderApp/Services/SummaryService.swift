@@ -626,11 +626,13 @@ class SummaryService {
     func generateContentWithSummarize(
         prompt: String,
         settings: AppSettings,
+        timeout: TimeInterval = 300,
         onPartial: ((String) -> Void)? = nil
     ) async throws -> String {
         try await RSSSummarizeProviderClient.generate(
             prompt: prompt,
             settings: settings,
+            timeout: timeout,
             onPartial: onPartial
         )
     }

@@ -95,6 +95,14 @@ final class WebAISessionManager {
         loadProviderHome(provider, in: webView, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
     }
 
+    func cancelActiveRequest(for provider: WebAIProvider) {
+        guard let webView = webViews[provider] else { return }
+        webView.stopLoading()
+        webView.evaluateJavaScript(
+            "if (window.__webAICapture && typeof window.__webAICapture.stop === 'function') { window.__webAICapture.stop(); }"
+        ) { _, _ in }
+    }
+
     func removeCachedWebsiteData(
         for provider: WebAIProvider,
         from dataStore: WKWebsiteDataStore,
@@ -327,7 +335,11 @@ struct WebAIHandoffView: View {
                 appState.handleCapturedWebAIResponse(requestID: request.id, response: response)
             },
             onCaptureFailed: { message in
-                appState.handleWebAIRequestFailure(requestID: request.id, message: message)
+                appState.handleWebAIRequestFailure(
+                    requestID: request.id,
+                    message: message,
+                    dismissPanel: true
+                )
             }
         )
     }
@@ -1096,8 +1108,9 @@ private extension WebAIHandoffRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            print("[WebAI navigation] web content process terminated for \(parent.request.provider.displayName); reloading")
-            webView.reload()
+            let message = "\(parent.request.provider.displayName) stopped responding because its web process terminated. Please try again."
+            print("[WebAI navigation] \(message)")
+            deliverCaptureFailure(message)
         }
 
         private func scheduleReadyWork(in webView: WKWebView) {
@@ -1115,11 +1128,9 @@ private extension WebAIHandoffRepresentable {
         private func handleNavigationFailure(_ error: Error) {
             let nsError = error as NSError
             guard nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled else { return }
+            let message = "Could not load \(parent.request.provider.displayName): \(error.localizedDescription)"
             print("[WebAI navigation] failed provider=\(parent.request.provider.displayName) code=\(nsError.code) error=\(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.parent.isLoading = false
-                self.parent.fallbackMessage = "Could not load \(self.parent.request.provider.displayName): \(error.localizedDescription)"
-            }
+            deliverCaptureFailure(message)
         }
 
         private var shouldStagePromptForInjection: Bool {
@@ -1452,9 +1463,7 @@ private extension WebAIHandoffRepresentable {
 
         private func triggerManualFallback() {
             copyToPasteboard(parent.request.prompt)
-            DispatchQueue.main.async {
-                self.parent.fallbackMessage = "Auto-send could not find the message box. The prompt was copied to the clipboard so you can paste it manually."
-            }
+            deliverCaptureFailure("Auto-send could not find the message box. The prompt was copied to the clipboard; open Web AI and paste it manually, or try again.")
         }
 
         private func handlePromptInjectionSucceeded(in webView: WKWebView) {
@@ -1542,9 +1551,19 @@ private extension WebAIHandoffRepresentable {
             captureFinished = false
             expectedChunks.removeAll()
             chunkBuffers.removeAll()
-            webView.evaluateJavaScript(Self.buildCaptureBootstrapScript(handlerName: WebAIHandoffRepresentable.scriptMessageHandlerName)) { [weak self] _, _ in
+            webView.evaluateJavaScript(Self.buildCaptureBootstrapScript(handlerName: WebAIHandoffRepresentable.scriptMessageHandlerName)) { [weak self] _, bootstrapError in
                 guard let self else { return }
-                webView.evaluateJavaScript(self.buildArmCaptureScript(), completionHandler: nil)
+                guard bootstrapError == nil else {
+                    self.deliverCaptureFailure("Could not prepare automatic response capture for \(self.parent.request.provider.displayName). Please try again.")
+                    return
+                }
+                webView.evaluateJavaScript(self.buildArmCaptureScript()) { [weak self] result, armError in
+                    guard let self else { return }
+                    guard armError == nil, (result as? String) == "armed" else {
+                        self.deliverCaptureFailure("Could not start automatic response capture for \(self.parent.request.provider.displayName). Please try again.")
+                        return
+                    }
+                }
             }
         }
 
@@ -1552,6 +1571,7 @@ private extension WebAIHandoffRepresentable {
             guard !captureFinished else { return }
             captureFinished = true
             resetFallbackExtractionState()
+            resetProviderContentFailureMonitorState()
             DispatchQueue.main.async {
                 self.parent.fallbackMessage = nil
                 self.parent.onResponseCaptured(response)
@@ -1562,6 +1582,7 @@ private extension WebAIHandoffRepresentable {
             guard !captureFinished else { return }
             captureFinished = true
             resetFallbackExtractionState()
+            resetProviderContentFailureMonitorState()
             DispatchQueue.main.async {
                 self.parent.fallbackMessage = message
                 self.parent.onCaptureFailed(message)
@@ -1680,6 +1701,11 @@ private extension WebAIHandoffRepresentable {
                     return
                 }
 
+                if Date().timeIntervalSince(self.fallbackExtractionStartedAt) >= self.fallbackExtractionMaxWait {
+                    self.deliverCaptureFailure("Automatic response capture timed out for \(self.parent.request.provider.displayName). Please try again.")
+                    return
+                }
+
                 guard let webView else { return }
                 self.scheduleFallbackExtractionPoll(in: webView, token: token, delay: self.fallbackExtractionPollInterval)
             }
@@ -1721,6 +1747,11 @@ private extension WebAIHandoffRepresentable {
 
             if timedOut, !fallbackExtractionLastText.isEmpty, !lastTextMatchesBaseline {
                 deliverCapturedResponse(fallbackExtractionLastText)
+                return
+            }
+
+            if timedOut {
+                deliverCaptureFailure("Automatic response capture timed out for \(parent.request.provider.displayName). Please try again.")
                 return
             }
 

@@ -2288,8 +2288,10 @@ class AppState: ObservableObject {
         let responseFormat: WebAIResponseFormat
         let onSuccess: (String) -> Void
         let onFailure: (String) -> Void
+        var timeoutWorkItem: DispatchWorkItem?
     }
     private var pendingWebAIRequests: [UUID: PendingWebAIRequest] = [:]
+    private let webAIRequestTimeoutSeconds: TimeInterval = 210
 
     // MARK: - Initialization
     init(feedService: FeedService? = nil,
@@ -3377,6 +3379,8 @@ class AppState: ObservableObject {
             return
         }
 
+        let displacedCompletion = displaceActiveWebAIRequestIfNeeded(replacingWith: title)
+
         let request = WebAIHandoffRequest(
             provider: settings.selectedWebAIProvider,
             title: title,
@@ -3387,12 +3391,16 @@ class AppState: ObservableObject {
         )
         isWebAIHandoffMinimized = request.shouldStartMinimized
         activeWebAIHandoffRequest = request
+        displacedCompletion?()
     }
 
     func openWebAILoginSession(for provider: WebAIProvider) {
+        let title = "\(provider.displayName) Login"
+        let displacedCompletion = displaceActiveWebAIRequestIfNeeded(replacingWith: title)
+
         let request = WebAIHandoffRequest(
             provider: provider,
-            title: "\(provider.displayName) Login",
+            title: title,
             prompt: "",
             responseFormat: .plainText,
             shouldAutoCapture: false,
@@ -3400,6 +3408,7 @@ class AppState: ObservableObject {
         )
         isWebAIHandoffMinimized = false
         activeWebAIHandoffRequest = request
+        displacedCompletion?()
     }
 
     func resetWebAISession(for provider: WebAIProvider) {
@@ -3407,6 +3416,21 @@ class AppState: ObservableObject {
             DispatchQueue.main.async {
                 self?.showWebAIStatus(message)
             }
+        }
+    }
+
+    private func displaceActiveWebAIRequestIfNeeded(replacingWith replacementTitle: String) -> (() -> Void)? {
+        guard let activeRequest = activeWebAIHandoffRequest,
+              let pending = pendingWebAIRequests.removeValue(forKey: activeRequest.id) else {
+            return nil
+        }
+
+        pending.timeoutWorkItem?.cancel()
+        WebAISessionManager.shared.cancelActiveRequest(for: activeRequest.provider)
+        activeWebAIHandoffRequest = nil
+        isWebAIHandoffMinimized = false
+        return {
+            pending.onFailure("\(pending.title) was replaced by \(replacementTitle). Please try again.")
         }
     }
 
@@ -3436,17 +3460,37 @@ class AppState: ObservableObject {
             shouldStartMinimized: true
         )
 
-        pendingWebAIRequests[request.id] = PendingWebAIRequest(
+        let displacedCompletion = displaceActiveWebAIRequestIfNeeded(replacingWith: title)
+
+        var pending = PendingWebAIRequest(
             title: title,
             responseFormat: responseFormat,
             onSuccess: onSuccess,
-            onFailure: onFailure
+            onFailure: onFailure,
+            timeoutWorkItem: nil
+        )
+        let requestID = request.id
+        let providerName = request.provider.displayName
+        let timeoutSeconds = webAIRequestTimeoutSeconds
+        let timeoutWorkItem = DispatchWorkItem { [weak self] in
+            self?.handleWebAIRequestFailure(
+                requestID: requestID,
+                message: "\(providerName) did not return a response within \(Int(timeoutSeconds)) seconds. Please try again.",
+                dismissPanel: true
+            )
+        }
+        pending.timeoutWorkItem = timeoutWorkItem
+        pendingWebAIRequests[request.id] = pending
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + webAIRequestTimeoutSeconds,
+            execute: timeoutWorkItem
         )
 
         if activeWebAIHandoffRequest == nil && !isWebAIBatchHandoffInProgress {
             isWebAIHandoffMinimized = request.shouldStartMinimized
         }
         activeWebAIHandoffRequest = request
+        displacedCompletion?()
         return request.id
     }
 
@@ -3466,6 +3510,7 @@ class AppState: ObservableObject {
 
     func handleCapturedWebAIResponse(requestID: UUID, response: String) {
         guard let pending = pendingWebAIRequests.removeValue(forKey: requestID) else { return }
+        pending.timeoutWorkItem?.cancel()
 
         if activeWebAIHandoffRequest?.id == requestID {
             activeWebAIHandoffRequest = nil
@@ -3487,13 +3532,14 @@ class AppState: ObservableObject {
 
     func handleWebAIRequestFailure(requestID: UUID, message: String, dismissPanel: Bool = false) {
         guard let pending = pendingWebAIRequests.removeValue(forKey: requestID) else { return }
+        pending.timeoutWorkItem?.cancel()
 
         if activeWebAIHandoffRequest?.id == requestID {
             isWebAIHandoffMinimized = false
-        }
-
-        if dismissPanel, activeWebAIHandoffRequest?.id == requestID {
-            activeWebAIHandoffRequest = nil
+            if dismissPanel, let activeRequest = activeWebAIHandoffRequest {
+                WebAISessionManager.shared.cancelActiveRequest(for: activeRequest.provider)
+                activeWebAIHandoffRequest = nil
+            }
         }
 
         showWebAIStatus(message)
@@ -3511,6 +3557,7 @@ class AppState: ObservableObject {
 
         if userInitiated,
            let pending = pendingWebAIRequests.removeValue(forKey: request.id) {
+            pending.timeoutWorkItem?.cancel()
             pending.onFailure("\(pending.title) was cancelled before a response was captured.")
         }
     }
@@ -8405,6 +8452,7 @@ class AppState: ObservableObject {
 
     private var mlxGenerationTimeoutSeconds: TimeInterval { appStateMLXGenTimeout }
     private var mlxQueryTimeoutSeconds: TimeInterval { appStateMLXQueryTimeout }
+    private var interactiveAskAITimeoutSeconds: TimeInterval { 120 }
 
     // MARK: - Public Q&A entry point
 
@@ -8580,7 +8628,11 @@ class AppState: ObservableObject {
             Task(priority: .userInitiated) {
                 do {
                     let start = Date()
-                    let answer = try await self.summaryService.generateContentWithSummarize(prompt: prompt, settings: self.settings)
+                    let answer = try await self.summaryService.generateContentWithSummarize(
+                        prompt: prompt,
+                        settings: self.settings,
+                        timeout: self.interactiveAskAITimeoutSeconds
+                    )
                     let elapsed = Date().timeIntervalSince(start)
                     await MainActor.run {
                         self.recordSummarizeThroughput(text: answer, elapsed: elapsed, isQA: true)

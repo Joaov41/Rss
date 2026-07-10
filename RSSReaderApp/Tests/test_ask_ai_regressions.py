@@ -345,6 +345,65 @@ class AskAIRegressionTests(unittest.TestCase):
         app_state = read("RSSReaderApp/Controllers/AppState.swift")
         self.assertRegex(app_state, r"func performWebAIRequest\([\s\S]*enqueueWebAIRequest")
 
+    def test_interactive_summarize_request_has_cancelling_transport_timeout(self):
+        app_state = read("RSSReaderApp/Controllers/AppState.swift")
+        summary_service = read("RSSReaderApp/Services/SummaryService.swift")
+        bridge = read("RSSReaderApp/Services/SummarizeBridge.swift")
+
+        self.assertIn("private var interactiveAskAITimeoutSeconds: TimeInterval { 120 }", app_state)
+        self.assertRegex(
+            app_state,
+            r"generateContentWithSummarize\([\s\S]*?timeout: self\.interactiveAskAITimeoutSeconds",
+        )
+        self.assertIn("timeout: TimeInterval = 300", summary_service)
+        self.assertIn("timeout: timeout", summary_service)
+        self.assertNotIn("withThrowingTaskGroup", bridge)
+        self.assertIn("box.installTimeoutWorkItem(timeoutWorkItem)", bridge)
+        self.assertIn("queue.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)", bridge)
+        self.assertIn("connection?.cancel()", bridge)
+        self.assertIn("request.timeoutInterval = timeout", bridge)
+
+    def test_web_ai_timeout_removes_pending_request_and_stops_capture(self):
+        app_state = read("RSSReaderApp/Controllers/AppState.swift")
+        handoff = read("RSSReaderApp/Views/WebAIHandoffView.swift")
+
+        self.assertIn("private let webAIRequestTimeoutSeconds: TimeInterval = 210", app_state)
+        self.assertIn("var timeoutWorkItem: DispatchWorkItem?", app_state)
+        self.assertIn("DispatchQueue.main.asyncAfter(", app_state)
+        self.assertIn("handleWebAIRequestFailure(", app_state)
+        self.assertIn("dismissPanel: true", app_state)
+        self.assertGreaterEqual(app_state.count("pending.timeoutWorkItem?.cancel()"), 4)
+        self.assertIn("WebAISessionManager.shared.cancelActiveRequest", app_state)
+        self.assertIn("func cancelActiveRequest(for provider: WebAIProvider)", handoff)
+        self.assertIn("webView.stopLoading()", handoff)
+        self.assertIn("window.__webAICapture.stop()", handoff)
+
+    def test_web_ai_capture_failures_are_terminal(self):
+        source = read("RSSReaderApp/Views/WebAIHandoffView.swift")
+
+        process_termination = re.search(
+            r"func webViewWebContentProcessDidTerminate[\s\S]*?\n        \}",
+            source,
+        )
+        navigation_failure = re.search(
+            r"private func handleNavigationFailure[\s\S]*?\n        \}",
+            source,
+        )
+        manual_fallback = re.search(
+            r"private func triggerManualFallback[\s\S]*?\n        \}",
+            source,
+        )
+        self.assertIsNotNone(process_termination)
+        self.assertIsNotNone(navigation_failure)
+        self.assertIsNotNone(manual_fallback)
+        self.assertIn("deliverCaptureFailure", process_termination.group(0))
+        self.assertIn("deliverCaptureFailure", navigation_failure.group(0))
+        self.assertIn("deliverCaptureFailure", manual_fallback.group(0))
+        self.assertIn("if timedOut", source)
+        self.assertIn("Automatic response capture timed out", source)
+        self.assertIn("bootstrapError == nil", source)
+        self.assertIn('(result as? String) == "armed"', source)
+
     def test_empty_work_summary_sections_are_not_rendered(self):
         content = read("RSSReaderApp/Views/ContentView.swift")
         reddit = read("RSSReaderApp/Views/RedditDetailView.swift")
