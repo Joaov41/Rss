@@ -3927,6 +3927,10 @@ struct ContentView: View {
             .sorted(by: { $0.publishDate > $1.publishDate })
     }
 
+    private var favoriteTrackedItemIDs: [String] {
+        favoriteArticlesForList.map(\.id) + favoritePostsForList.map(\.id)
+    }
+
     @ViewBuilder
     private var favoritesArticlesSection: some View {
         Section(header: Text("RSS Articles")) {
@@ -4007,14 +4011,7 @@ struct ContentView: View {
             colorScheme: colorScheme,
             scrollOffset: feedListScrollOffset,
             restorationKey: "favorites_category",
-            trackedItemIDs: appState.feeds.flatMap { $0.articles }
-                .filter(\.isFavorite)
-                .sorted(by: { $0.publishDate > $1.publishDate })
-                .map(\.id)
-                + appState.redditFeeds.flatMap { $0.posts }
-                .filter(\.isFavorite)
-                .sorted(by: { $0.publishDate > $1.publishDate })
-                .map(\.id)
+            trackedItemIDs: favoriteTrackedItemIDs
         ) { offset in
             feedListScrollOffset = offset
         }
