@@ -55,7 +55,20 @@ public final class MarvisTTSModel: Module {
         promptURLs: [URL]? = nil,
         progressHandler: @escaping (Progress) -> Void
     ) async throws {
-        let textTokenizer = try await loadTokenizer(configuration: ModelConfiguration(id: repoId), hub: hub)
+        _ = hub
+        guard let repoID = Repo.ID(rawValue: repoId) else {
+            throw NSError(
+                domain: "MarvisTTSModel",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: \(repoId)"]
+            )
+        }
+        let modelDirectoryURL = try await ModelUtils.resolveOrDownloadModel(
+            repoID: repoID,
+            requiredExtension: "safetensors",
+            hfToken: nil
+        )
+        let textTokenizer = try await AutoTokenizer.from(modelFolder: modelDirectoryURL)
         let codec = try await Mimi.fromPretrained(progressHandler: progressHandler)
         let audioTokenizer = MimiTokenizer(codec)
         self.init(

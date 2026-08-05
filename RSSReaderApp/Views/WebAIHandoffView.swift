@@ -95,6 +95,14 @@ final class WebAISessionManager {
         loadProviderHome(provider, in: webView, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
     }
 
+    func cancelActiveRequest(for provider: WebAIProvider) {
+        guard let webView = webViews[provider] else { return }
+        webView.stopLoading()
+        webView.evaluateJavaScript(
+            "if (window.__webAICapture && typeof window.__webAICapture.stop === 'function') { window.__webAICapture.stop(); }"
+        ) { _, _ in }
+    }
+
     func removeCachedWebsiteData(
         for provider: WebAIProvider,
         from dataStore: WKWebsiteDataStore,
@@ -327,7 +335,11 @@ struct WebAIHandoffView: View {
                 appState.handleCapturedWebAIResponse(requestID: request.id, response: response)
             },
             onCaptureFailed: { message in
-                appState.handleWebAIRequestFailure(requestID: request.id, message: message)
+                appState.handleWebAIRequestFailure(
+                    requestID: request.id,
+                    message: message,
+                    dismissPanel: true
+                )
             }
         )
     }
@@ -619,7 +631,7 @@ struct WebAIHandoffIOSPresenterModifier: ViewModifier {
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(.ultraThickMaterial, in: Capsule())
+            .background(.thinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
@@ -1096,8 +1108,9 @@ private extension WebAIHandoffRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            print("[WebAI navigation] web content process terminated for \(parent.request.provider.displayName); reloading")
-            webView.reload()
+            let message = "\(parent.request.provider.displayName) stopped responding because its web process terminated. Please try again."
+            print("[WebAI navigation] \(message)")
+            deliverCaptureFailure(message)
         }
 
         private func scheduleReadyWork(in webView: WKWebView) {
@@ -1115,11 +1128,9 @@ private extension WebAIHandoffRepresentable {
         private func handleNavigationFailure(_ error: Error) {
             let nsError = error as NSError
             guard nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled else { return }
+            let message = "Could not load \(parent.request.provider.displayName): \(error.localizedDescription)"
             print("[WebAI navigation] failed provider=\(parent.request.provider.displayName) code=\(nsError.code) error=\(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.parent.isLoading = false
-                self.parent.fallbackMessage = "Could not load \(self.parent.request.provider.displayName): \(error.localizedDescription)"
-            }
+            deliverCaptureFailure(message)
         }
 
         private var shouldStagePromptForInjection: Bool {
@@ -1452,9 +1463,7 @@ private extension WebAIHandoffRepresentable {
 
         private func triggerManualFallback() {
             copyToPasteboard(parent.request.prompt)
-            DispatchQueue.main.async {
-                self.parent.fallbackMessage = "Auto-send could not find the message box. The prompt was copied to the clipboard so you can paste it manually."
-            }
+            deliverCaptureFailure("Auto-send could not find the message box. The prompt was copied to the clipboard; open Web AI and paste it manually, or try again.")
         }
 
         private func handlePromptInjectionSucceeded(in webView: WKWebView) {
@@ -1542,9 +1551,19 @@ private extension WebAIHandoffRepresentable {
             captureFinished = false
             expectedChunks.removeAll()
             chunkBuffers.removeAll()
-            webView.evaluateJavaScript(Self.buildCaptureBootstrapScript(handlerName: WebAIHandoffRepresentable.scriptMessageHandlerName)) { [weak self] _, _ in
+            webView.evaluateJavaScript(Self.buildCaptureBootstrapScript(handlerName: WebAIHandoffRepresentable.scriptMessageHandlerName)) { [weak self] _, bootstrapError in
                 guard let self else { return }
-                webView.evaluateJavaScript(self.buildArmCaptureScript(), completionHandler: nil)
+                guard bootstrapError == nil else {
+                    self.deliverCaptureFailure("Could not prepare automatic response capture for \(self.parent.request.provider.displayName). Please try again.")
+                    return
+                }
+                webView.evaluateJavaScript(self.buildArmCaptureScript()) { [weak self] result, armError in
+                    guard let self else { return }
+                    guard armError == nil, (result as? String) == "armed" else {
+                        self.deliverCaptureFailure("Could not start automatic response capture for \(self.parent.request.provider.displayName). Please try again.")
+                        return
+                    }
+                }
             }
         }
 
@@ -1552,6 +1571,7 @@ private extension WebAIHandoffRepresentable {
             guard !captureFinished else { return }
             captureFinished = true
             resetFallbackExtractionState()
+            resetProviderContentFailureMonitorState()
             DispatchQueue.main.async {
                 self.parent.fallbackMessage = nil
                 self.parent.onResponseCaptured(response)
@@ -1562,6 +1582,7 @@ private extension WebAIHandoffRepresentable {
             guard !captureFinished else { return }
             captureFinished = true
             resetFallbackExtractionState()
+            resetProviderContentFailureMonitorState()
             DispatchQueue.main.async {
                 self.parent.fallbackMessage = message
                 self.parent.onCaptureFailed(message)
@@ -1680,6 +1701,11 @@ private extension WebAIHandoffRepresentable {
                     return
                 }
 
+                if Date().timeIntervalSince(self.fallbackExtractionStartedAt) >= self.fallbackExtractionMaxWait {
+                    self.deliverCaptureFailure("Automatic response capture timed out for \(self.parent.request.provider.displayName). Please try again.")
+                    return
+                }
+
                 guard let webView else { return }
                 self.scheduleFallbackExtractionPoll(in: webView, token: token, delay: self.fallbackExtractionPollInterval)
             }
@@ -1724,6 +1750,11 @@ private extension WebAIHandoffRepresentable {
                 return
             }
 
+            if timedOut {
+                deliverCaptureFailure("Automatic response capture timed out for \(parent.request.provider.displayName). Please try again.")
+                return
+            }
+
             guard let webView else { return }
             scheduleFallbackExtractionPoll(in: webView, token: token, delay: fallbackExtractionPollInterval)
         }
@@ -1764,9 +1795,6 @@ private extension WebAIHandoffRepresentable {
             let requestID = parent.request.id.uuidString
             let responseFormat = parent.request.responseFormat.rawValue
             let escapedPrompt = escapedJavaScriptString(capturePromptReference())
-            let promptSource = shouldStagePromptForInjection
-                ? "(window.__codexCapturePromptText || \"\(escapedPrompt)\")"
-                : "\"\(escapedPrompt)\""
 
             return """
             (function() {
@@ -1774,7 +1802,7 @@ private extension WebAIHandoffRepresentable {
                 window.__webAICapture.start({
                     requestId: "\(requestID)",
                     provider: "\(parent.request.provider.rawValue)",
-                    prompt: \(promptSource),
+                    prompt: "\(escapedPrompt)",
                     responseFormat: "\(responseFormat)",
                     settleMs: \(parent.request.responseFormat == .strictJSON ? 1200 : 1800),
                     minLength: \(parent.request.responseFormat == .strictJSON ? 40 : 24),
@@ -1806,10 +1834,6 @@ private extension WebAIHandoffRepresentable {
                   .replace(/\\n{3,}/g, "\\n\\n")
                   .replace(/[ \\t]{2,}/g, " ")
                   .trim();
-              }
-
-              function activePromptText(state) {
-                return normalize(window.__codexCapturePromptText || (state && state.promptText) || "");
               }
 
               function uniqueNodes(nodes) {
@@ -1896,26 +1920,12 @@ private extension WebAIHandoffRepresentable {
                 const prompt = normalize(promptText);
                 if (!text || !prompt) return false;
                 if (text === prompt) return true;
-                if (text.length > 120 && prompt.includes(text)) return true;
                 if (text.length > 120 && prompt.startsWith(text)) return true;
-                const responsePrefix = text.slice(0, Math.min(text.length, 500));
-                if (responsePrefix.length >= 120 && prompt.includes(responsePrefix)) return true;
                 const promptPrefix = prompt.slice(0, Math.min(prompt.length, 240));
-                if (text.length > 120 &&
+                return text.length > 120 &&
                   promptPrefix.length > 80 &&
                   text.startsWith(promptPrefix) &&
-                  text.length <= prompt.length * 1.1) {
-                  return true;
-                }
-
-                if (text.length < 400) return false;
-                const probeLength = Math.min(260, text.length);
-                const probes = [
-                  text.slice(0, probeLength),
-                  text.slice(Math.max(0, Math.floor((text.length - probeLength) / 2)), Math.max(0, Math.floor((text.length - probeLength) / 2)) + probeLength),
-                  text.slice(Math.max(0, text.length - probeLength))
-                ];
-                return probes.filter(probe => probe.length >= 120 && prompt.includes(probe)).length >= 2;
+                  text.length <= prompt.length * 1.1;
               }
 
               function stripPromptEcho(value, promptText) {
@@ -1924,27 +1934,6 @@ private extension WebAIHandoffRepresentable {
                 if (!text || !prompt) return text;
                 if (text === prompt) return "";
                 if (text.startsWith(prompt)) return normalize(text.slice(prompt.length));
-                if (text.length > 120 && prompt.includes(text)) return "";
-
-                const maxProbeLength = Math.min(1200, text.length);
-                for (let length = maxProbeLength; length >= 160; length -= 80) {
-                  const probe = text.slice(0, length);
-                  const promptIndex = prompt.indexOf(probe);
-                  if (promptIndex === -1) continue;
-
-                  let matched = length;
-                  while (
-                    matched < text.length &&
-                    promptIndex + matched < prompt.length &&
-                    text.charCodeAt(matched) === prompt.charCodeAt(promptIndex + matched)
-                  ) {
-                    matched += 1;
-                  }
-
-                  if (matched >= 160) {
-                    return normalize(text.slice(matched));
-                  }
-                }
                 return text;
               }
 
@@ -2111,14 +2100,13 @@ private extension WebAIHandoffRepresentable {
                 currentTarget() {
                   const s = this.state;
                   if (!s) return null;
-                  const promptText = activePromptText(s);
 
-                  const containers = assistantContainers(s.provider, promptText);
+                  const containers = assistantContainers(s.provider, s.promptText);
                   if (!containers.length) return null;
 
-                  const latest = latestContainer(s.provider, promptText);
+                  const latest = latestContainer(s.provider, s.promptText);
                   const latestText = cleanText(latest);
-                  if (isPromptEcho(latestText, promptText)) return null;
+                  if (isPromptEcho(latestText, s.promptText)) return null;
 
                   if (containers.length > s.baselineCount) {
                     return latest;
@@ -2139,15 +2127,14 @@ private extension WebAIHandoffRepresentable {
                   let text = target ? cleanText(target) : "";
                   const now = Date.now();
                   const streaming = isStreaming(s.provider);
-                  const promptText = activePromptText(s);
 
                   if (s.provider === "gemini" && isGeminiLandingText(text)) return;
-                  text = stripPromptEcho(text, promptText);
+                  text = stripPromptEcho(text, s.promptText);
                   if (s.provider === "gemini") {
                     text = stripGeminiBoilerplate(text);
                   }
                   if (s.provider === "gemini" && isGeminiBoilerplateText(text)) return;
-                  if (isPromptEcho(text, promptText)) return;
+                  if (isPromptEcho(text, s.promptText)) return;
 
                   if (isProviderContentLoadFailure(text)) {
                     if (s.contentFailureRetries < 3 && (now - s.lastContentFailureAt) > 2200 && clickProviderRetryButton()) {
@@ -2201,13 +2188,12 @@ private extension WebAIHandoffRepresentable {
                 deliver(reason, text) {
                   const s = this.state;
                   if (!s || s.delivered) return;
-                  const promptText = activePromptText(s);
-                  text = stripPromptEcho(text, promptText);
+                  text = stripPromptEcho(text, s.promptText);
                   if (s.provider === "gemini") {
                     text = stripGeminiBoilerplate(text);
                   }
                   if (s.provider === "gemini" && (isGeminiLandingText(text) || isGeminiBoilerplateText(text))) return;
-                  if (isPromptEcho(text, promptText)) return;
+                  if (isPromptEcho(text, s.promptText)) return;
                   if (isProviderContentLoadFailure(text)) {
                     const providerName = s.provider === "chatgpt" ? "ChatGPT" : "Web AI";
                     this.fail(providerName + " could not load the response. Try again.");
@@ -2889,7 +2875,7 @@ private extension WebAIHandoffRepresentable {
 
             return """
             (function() {
-                const prompt = normalize(window.__codexCapturePromptText || "\(escapedPrompt)");
+                const prompt = "\(escapedPrompt)";
                 const provider = "\(provider)";
 
                 function normalize(value) {
@@ -2940,26 +2926,10 @@ private extension WebAIHandoffRepresentable {
                 function isPromptEcho(value) {
                     if (!value) return true;
                     const normalizedValue = normalize(value);
-                    const normalizedPrompt = prompt;
+                    const normalizedPrompt = normalize(prompt);
                     if (!normalizedPrompt) return false;
                     if (normalizedValue === normalizedPrompt) return true;
-                    if (normalizedValue.length > 120 && normalizedPrompt.includes(normalizedValue)) return true;
                     if (normalizedValue.startsWith(normalizedPrompt) && normalizedValue.length <= normalizedPrompt.length * 1.15) return true;
-                    const valuePrefix = normalizedValue.slice(0, Math.min(normalizedValue.length, 500));
-                    if (valuePrefix.length >= 120 && normalizedPrompt.includes(valuePrefix)) return true;
-
-                    if (normalizedValue.length >= 400) {
-                        const probeLength = Math.min(260, normalizedValue.length);
-                        const middleStart = Math.max(0, Math.floor((normalizedValue.length - probeLength) / 2));
-                        const probes = [
-                            normalizedValue.slice(0, probeLength),
-                            normalizedValue.slice(middleStart, middleStart + probeLength),
-                            normalizedValue.slice(Math.max(0, normalizedValue.length - probeLength))
-                        ];
-                        if (probes.filter(probe => probe.length >= 120 && normalizedPrompt.includes(probe)).length >= 2) {
-                            return true;
-                        }
-                    }
 
                     const promptLines = prompt
                         .split(/\\n+/)
@@ -2972,31 +2942,10 @@ private extension WebAIHandoffRepresentable {
 
                 function stripPromptEcho(value) {
                     const text = normalize(value);
-                    const normalizedPrompt = prompt;
+                    const normalizedPrompt = normalize(prompt);
                     if (!text || !normalizedPrompt) return text;
                     if (text === normalizedPrompt) return "";
                     if (text.startsWith(normalizedPrompt)) return normalize(text.slice(normalizedPrompt.length));
-                    if (text.length > 120 && normalizedPrompt.includes(text)) return "";
-
-                    const maxProbeLength = Math.min(1200, text.length);
-                    for (let length = maxProbeLength; length >= 160; length -= 80) {
-                        const probe = text.slice(0, length);
-                        const promptIndex = normalizedPrompt.indexOf(probe);
-                        if (promptIndex === -1) continue;
-
-                        let matched = length;
-                        while (
-                            matched < text.length &&
-                            promptIndex + matched < normalizedPrompt.length &&
-                            text.charCodeAt(matched) === normalizedPrompt.charCodeAt(promptIndex + matched)
-                        ) {
-                            matched += 1;
-                        }
-
-                        if (matched >= 160) {
-                            return normalize(text.slice(matched));
-                        }
-                    }
                     return text;
                 }
 

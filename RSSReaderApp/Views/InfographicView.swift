@@ -1,8 +1,6 @@
 import SwiftUI
 import WebKit
-#if os(iOS)
-import UIKit
-#elseif os(macOS)
+#if os(macOS)
 import AppKit
 #endif
 
@@ -12,7 +10,8 @@ struct InfographicView: View {
     var filePrefix: String = "infographic"
     var loadingLabel: String? = nil
     var emptyLabel: String? = nil
-    var onAskAI: ((String) async throws -> String)? = nil
+    var onMinimize: (() -> Void)? = nil
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @State private var isSaving = false
     @State private var saveMessage: String?
@@ -21,10 +20,10 @@ struct InfographicView: View {
     @State private var webViewRef: WKWebView?
     @State private var shareURL: URL?
     @State private var showShareSheet = false
-    @State private var showAskAIResponse = false
     @State private var isAskingAI = false
-    @State private var askAIResponse: String?
-    @State private var askAIError: String?
+    @State private var askAIPrompt = ""
+    @State private var askAIResponse = ""
+    @State private var showAskAIResponseSheet = false
     
     private var loadingText: String {
         loadingLabel ?? "Rendering \(title.lowercased())…"
@@ -35,125 +34,114 @@ struct InfographicView: View {
     }
     
     var body: some View {
-        Group {
-            #if os(macOS)
-            // Avoid macOS NavigationView sidebar+detail split that can place content in a collapsed sidebar column.
-            if #available(macOS 13.0, *) {
-                NavigationStack {
-                    infographicContent
-                }
-            } else {
-                NavigationView {
-                    EmptyView()
-                    infographicContent
+        NavigationView {
+            VStack(spacing: 0) {
+                if let data = htmlData, let htmlString = String(data: data, encoding: .utf8) {
+                    ZStack {
+                        WebView(htmlContent: htmlString,
+                                webView: $webViewRef,
+                                isLoading: $isLoading,
+                                onAskAISelection: { selectedText, context in
+                                    handleAskAISelection(selectedText: selectedText, context: context, useWebAI: false)
+                                },
+                                onAskAIWebSelection: { selectedText, context in
+                                    handleAskAISelection(selectedText: selectedText, context: context, useWebAI: true)
+                                })
+                            .edgesIgnoringSafeArea(.bottom)
+                        if isLoading {
+                            ProgressView(loadingText)
+                                .padding(12)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(12)
+                        } else if isAskingAI {
+                            ProgressView("Asking AI...")
+                                .padding(12)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(12)
+                        }
+                    }
+                        .edgesIgnoringSafeArea(.bottom)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.secondary)
+                        Text(emptyText)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            #else
-            NavigationView {
-                infographicContent
+            .navigationTitle(title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if let onMinimize = onMinimize {
+                        Button {
+                            onMinimize()
+                        } label: {
+                            Label("Minimize", systemImage: "arrow.down.right.and.arrow.up.left")
+                        }
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: snapshotAndCopyImage) {
+                        Label("Copy Image", systemImage: "square.on.square")
+                    }
+                    .disabled(htmlData == nil || webViewRef == nil || isLoading || isCapturingSnapshot)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: snapshotAndSaveImage) {
+                        Label("Save Image", systemImage: "arrow.down.doc")
+                    }
+                    .disabled(htmlData == nil || webViewRef == nil || isLoading || isCapturingSnapshot || isSaving)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let message = saveMessage {
+                    Text(message)
+                        .font(.caption)
+                        .padding(8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(8)
+                        .padding(.bottom, 20)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                withAnimation {
+                                    saveMessage = nil
+                                }
+                            }
+                        }
+                }
+            }
+            #if os(iOS)
+            .sheet(isPresented: $showShareSheet, onDismiss: { shareURL = nil }) {
+                if let shareURL {
+                    ShareSheet(activityItems: [shareURL])
+                        .presentationDetents([.medium, .large])
+                }
+            }
+            .sheet(isPresented: $showAskAIResponseSheet) {
+                AskAIResponseSheet(
+                    question: askAIPrompt,
+                    answer: askAIResponse,
+                    onCopy: copyAskAIResponseToClipboard
+                )
+                .presentationDetents([.medium, .large])
             }
             #endif
         }
         #if os(macOS)
         .frame(minWidth: 600, minHeight: 800)
         #endif
-    }
-
-    private var infographicContent: some View {
-        VStack(spacing: 0) {
-            if let data = htmlData, let htmlString = String(data: data, encoding: .utf8) {
-                ZStack {
-                    WebView(
-                        htmlContent: htmlString,
-                        webView: $webViewRef,
-                        isLoading: $isLoading,
-                        onAskAI: onAskAI == nil ? nil : { selection in
-                            handleAskAISelection(selection)
-                        }
-                    )
-                    .edgesIgnoringSafeArea(.bottom)
-
-                    if isLoading {
-                        ProgressView(loadingText)
-                            .padding(12)
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(12)
-                    }
-                }
-                .edgesIgnoringSafeArea(.bottom)
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.secondary)
-                    Text(emptyText)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .navigationTitle(title)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Close") {
-                    dismiss()
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: snapshotAndCopyImage) {
-                    Label("Copy Image", systemImage: "square.on.square")
-                }
-                .disabled(htmlData == nil || webViewRef == nil || isLoading || isCapturingSnapshot)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: snapshotAndSaveImage) {
-                    Label("Save Image", systemImage: "arrow.down.doc")
-                }
-                .disabled(htmlData == nil || webViewRef == nil || isLoading || isCapturingSnapshot || isSaving)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if let message = saveMessage {
-                Text(message)
-                    .font(.caption)
-                    .padding(8)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
-                    .padding(.bottom, 20)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            withAnimation {
-                                saveMessage = nil
-                            }
-                        }
-                    }
-            }
-        }
-        #if os(iOS)
-        .sheet(isPresented: $showShareSheet, onDismiss: { shareURL = nil }) {
-            if let shareURL {
-                ShareSheet(activityItems: [shareURL])
-                    .presentationDetents([.medium, .large])
-            }
-        }
-        #endif
-        .sheet(isPresented: $showAskAIResponse) {
-            AskAIResponseSheet(
-                isLoading: isAskingAI,
-                response: askAIResponse,
-                errorMessage: askAIError,
-                onClose: { showAskAIResponse = false },
-                onCopy: copyAskAIResponse
-            )
-            #if os(macOS)
-            .frame(minWidth: 480, idealWidth: 640, maxWidth: .infinity,
-                   minHeight: 420, idealHeight: 520, maxHeight: .infinity)
-            #endif
-        }
     }
     
     private func copyHTMLToClipboard() {
@@ -169,47 +157,17 @@ struct InfographicView: View {
         }
     }
 
-    private func handleAskAISelection(_ selection: String) {
-        let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let onAskAI else { return }
-        isAskingAI = true
-        askAIResponse = nil
-        askAIError = nil
-        showAskAIResponse = true
-        Task {
-            do {
-                let response = try await onAskAI(trimmed)
-                await MainActor.run {
-                    self.askAIResponse = formatAskAIResponseForDisplay(response)
-                    self.isAskingAI = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.askAIError = error.localizedDescription
-                    self.isAskingAI = false
-                }
-            }
-        }
-    }
-
-    private func copyAskAIResponse() {
-        guard let askAIResponse, !askAIResponse.isEmpty else { return }
-        #if os(iOS)
-        UIPasteboard.general.string = askAIResponse
-        #elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(askAIResponse, forType: .string)
-        #endif
-    }
-
     private func captureSnapshot(_ completion: @escaping (Data?) -> Void) {
         guard let webViewRef else { completion(nil); return }
         let config = WKSnapshotConfiguration()
         config.afterScreenUpdates = true
-        
         #if os(iOS)
         let contentSize = webViewRef.scrollView.contentSize
+        #elseif os(macOS)
+        let contentSize = webViewRef.bounds.size
+        #endif
         if contentSize.width > 0 && contentSize.height > 0 {
+            #if os(iOS)
             let maxPixels: CGFloat = 24_000_000
             let scale = UIScreen.main.scale
             let maxPointsArea = maxPixels / max(1, (scale * scale))
@@ -228,14 +186,10 @@ struct InfographicView: View {
             } else {
                 config.rect = CGRect(origin: .zero, size: contentSize)
             }
-        }
-        #else
-        // On macOS, use the webView's bounds for snapshot
-        let contentSize = webViewRef.bounds.size
-        if contentSize.width > 0 && contentSize.height > 0 {
+            #else
             config.rect = CGRect(origin: .zero, size: contentSize)
+            #endif
         }
-        #endif
 
         webViewRef.takeSnapshot(with: config) { image, error in
             DispatchQueue.main.async {
@@ -332,6 +286,38 @@ struct InfographicView: View {
             }
         }
     }
+
+    private func handleAskAISelection(selectedText: String, context: String, useWebAI: Bool) {
+        guard !isAskingAI else { return }
+        let prompt = buildAskAISelectionPrompt(selectedText: selectedText, extractedContext: context)
+        guard !prompt.isEmpty else { return }
+
+        askAIPrompt = prompt
+        askAIResponse = ""
+        isAskingAI = true
+
+        appState.askQuestionAboutGlobalSummarySelection(
+            selectedText: selectedText,
+            extractedContext: context,
+            useWebAI: useWebAI
+        ) { answer in
+            DispatchQueue.main.async {
+                self.isAskingAI = false
+                self.askAIResponse = formatAskAIResponseForDisplay(answer)
+                self.showAskAIResponseSheet = true
+            }
+        }
+    }
+
+    private func copyAskAIResponseToClipboard() {
+        guard !askAIResponse.isEmpty else { return }
+        #if os(iOS)
+        UIPasteboard.general.string = askAIResponse
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(askAIResponse, forType: .string)
+        #endif
+    }
 }
 
 #if os(iOS)
@@ -339,7 +325,8 @@ struct WebView: UIViewRepresentable {
     let htmlContent: String
     @Binding var webView: WKWebView?
     @Binding var isLoading: Bool
-    var onAskAI: ((String) -> Void)? = nil
+    var onAskAISelection: ((String, String) -> Void)? = nil
+    var onAskAIWebSelection: ((String, String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -347,21 +334,17 @@ struct WebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.preferences.javaScriptEnabled = onAskAI != nil
-        let webView: WKWebView
-        if onAskAI != nil {
-            let askAIWebView = AskAIWebView(frame: .zero, configuration: config)
-            askAIWebView.onAskAI = onAskAI
-            askAIWebView.installAskAIMenuItemIfNeeded()
-            webView = askAIWebView
-        } else {
-            webView = WKWebView(frame: .zero, configuration: config)
+        config.preferences.javaScriptEnabled = true
+        let webView = AskAIEnabledWKWebView(frame: .zero, configuration: config)
+        webView.onAskAISelection = { action, selectedText, context in
+            switch action {
+            case .standard:
+                onAskAISelection?(selectedText, context)
+            case .web:
+                onAskAIWebSelection?(selectedText, context)
+            }
         }
         webView.navigationDelegate = context.coordinator
-        context.coordinator.webView = webView
-        if onAskAI != nil, #available(iOS 16.0, *) {
-            context.coordinator.installEditMenuInteraction(on: webView)
-        }
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
@@ -374,21 +357,24 @@ struct WebView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
+        if let askAIWebView = uiView as? AskAIEnabledWKWebView {
+            askAIWebView.onAskAISelection = { action, selectedText, context in
+                switch action {
+                case .standard:
+                    onAskAISelection?(selectedText, context)
+                case .web:
+                    onAskAIWebSelection?(selectedText, context)
+                }
+            }
+        }
         guard context.coordinator.lastHTML != htmlContent else { return }
         context.coordinator.lastHTML = htmlContent
         uiView.loadHTMLString(htmlContent, baseURL: nil)
-
-        if let askAIWebView = uiView as? AskAIWebView {
-            askAIWebView.onAskAI = onAskAI
-            askAIWebView.installAskAIMenuItemIfNeeded()
-        }
     }
 
-    class Coordinator: NSObject, WKNavigationDelegate, UIEditMenuInteractionDelegate {
+    class Coordinator: NSObject, WKNavigationDelegate {
         var parent: WebView
         var lastHTML: String?
-        weak var webView: WKWebView?
-        private var editMenuInteraction: UIEditMenuInteraction?
         init(parent: WebView) {
             self.parent = parent
         }
@@ -427,37 +413,6 @@ struct WebView: UIViewRepresentable {
 
             decisionHandler(.cancel)
         }
-
-        @available(iOS 16.0, *)
-        func installEditMenuInteraction(on webView: WKWebView) {
-            guard editMenuInteraction == nil else { return }
-            let interaction = UIEditMenuInteraction(delegate: self)
-            webView.addInteraction(interaction)
-            editMenuInteraction = interaction
-        }
-
-        @available(iOS 16.0, *)
-        func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
-            guard parent.onAskAI != nil else {
-                return UIMenu(children: suggestedActions)
-            }
-            let askAction = UIAction(title: "Ask AI", image: UIImage(systemName: "sparkles")) { [weak self] _ in
-                self?.sendSelectionToAskAI()
-            }
-            return UIMenu(children: suggestedActions + [askAction])
-        }
-
-        private func sendSelectionToAskAI() {
-            guard let webView else { return }
-            webView.evaluateJavaScript("window.getSelection().toString()") { [weak self] result, error in
-                guard error == nil, let selection = result as? String else { return }
-                let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                DispatchQueue.main.async {
-                    self?.parent.onAskAI?(trimmed)
-                }
-            }
-        }
     }
 }
 
@@ -475,7 +430,8 @@ struct WebView: NSViewRepresentable {
     let htmlContent: String
     @Binding var webView: WKWebView?
     @Binding var isLoading: Bool
-    var onAskAI: ((String) -> Void)? = nil
+    var onAskAISelection: ((String, String) -> Void)? = nil
+    var onAskAIWebSelection: ((String, String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -483,15 +439,8 @@ struct WebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.preferences.javaScriptEnabled = onAskAI != nil
-        let webView: WKWebView
-        if onAskAI != nil {
-            let askAIWebView = AskAIWebViewMac(frame: .zero, configuration: config)
-            askAIWebView.onAskAI = onAskAI
-            webView = askAIWebView
-        } else {
-            webView = WKWebView(frame: .zero, configuration: config)
-        }
+        config.preferences.javaScriptEnabled = false
+        let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
         DispatchQueue.main.async {
@@ -506,10 +455,6 @@ struct WebView: NSViewRepresentable {
         guard context.coordinator.lastHTML != htmlContent else { return }
         context.coordinator.lastHTML = htmlContent
         nsView.loadHTMLString(htmlContent, baseURL: nil)
-
-        if let askAIWebView = nsView as? AskAIWebViewMac {
-            askAIWebView.onAskAI = onAskAI
-        }
     }
 
     class Coordinator: NSObject, WKNavigationDelegate {

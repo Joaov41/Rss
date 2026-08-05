@@ -2,13 +2,23 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(iOS)
 import AVFoundation
+import UIKit
 #elseif os(macOS)
 import AppKit
 #endif
 
+private struct SettingsFormWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.presentationMode) var presentationMode
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @State private var showingFileImporter = false
     @State private var showingFileExporter = false
@@ -63,8 +73,18 @@ struct SettingsView: View {
     
     // Local TTS voice picker state
     @State private var localVoiceID: String = ""
+    @State private var settingsFormWidth: CGFloat = 0
     private let iosVoiceKey = "LocalTTS.iOSOnMac.SelectedVoiceID"
     private let macVoiceKey = "LocalTTS.Mac.SelectedVoiceID"
+    private var usesCompactSettingsLayout: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .compact ||
+            UIDevice.current.userInterfaceIdiom == .phone ||
+            (settingsFormWidth > 0 && settingsFormWidth < 560)
+        #else
+        false
+        #endif
+    }
     #if os(iOS)
     @State private var iosVoices: [(id: String, title: String)] = []
     @State private var testSynthIOS: AVSpeechSynthesizer? = nil
@@ -122,7 +142,7 @@ struct SettingsView: View {
     }
     
     var body: some View {
-        settingsNavigationContainer {
+        NavigationView {
             ZStack {
                 settingsBackground
                     .ignoresSafeArea()
@@ -163,7 +183,7 @@ struct SettingsView: View {
                                 }
                             } else {
                                 // Preload and warm up when switching to a local model
-                                Task { await appState.warmUpMLXIfNeeded() }
+                                appState.warmUpMLXIfNeeded()
                             }
                         }
                         
@@ -759,46 +779,38 @@ struct SettingsView: View {
                                     .foregroundColor(.secondary)
                             } else {
                                 ForEach(storageBreakdownItems) { item in
-                                    HStack(alignment: .top, spacing: 12) {
+                                    HStack(alignment: .top, spacing: 10) {
                                         Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
                                             .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
+                                            .frame(width: 22)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.name)
                                                 .font(.subheadline)
                                                 .fontWeight(.semibold)
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
                                             Text(item.detail)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
+                                                .lineLimit(2)
                                         }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                        Spacer()
 
                                         Text(item.sizeText)
                                             .font(.caption)
                                             .fontWeight(.semibold)
                                             .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
 
-                                        ZStack {
-                                            if item.cleanupKind != nil || item.isModelStorage {
-                                                Button(role: .destructive) {
-                                                    pendingStorageBreakdownDelete = item
-                                                    showStorageBreakdownDeleteConfirm = true
-                                                } label: {
-                                                    Image(systemName: "trash")
-                                                }
-                                                .buttonStyle(.borderless)
-                                                .disabled(isDeletingStorageBreakdown)
+                                        if item.cleanupKind != nil || item.isModelStorage {
+                                            Button(role: .destructive) {
+                                                pendingStorageBreakdownDelete = item
+                                                showStorageBreakdownDeleteConfirm = true
+                                            } label: {
+                                                Image(systemName: "trash")
                                             }
+                                            .buttonStyle(.borderless)
+                                            .disabled(isDeletingStorageBreakdown)
                                         }
-                                        .frame(width: 24, alignment: .center)
                                     }
                                     .padding(.vertical, 3)
                                 }
@@ -813,10 +825,8 @@ struct SettingsView: View {
                             Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
                     }
 
                     Section("Local Model Storage") {
@@ -844,18 +854,17 @@ struct SettingsView: View {
                                     .foregroundColor(.secondary)
                             } else {
                                 ForEach(modelStorageItems) { item in
-                                    HStack(alignment: .top, spacing: 12) {
+                                    HStack(alignment: .top, spacing: 10) {
                                         Image(systemName: item.kind == .liteRT ? "cube.box.fill" : "cpu.fill")
                                             .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
+                                            .frame(width: 22)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             HStack(spacing: 6) {
                                                 Text(item.name)
                                                     .font(.subheadline)
                                                     .fontWeight(.semibold)
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
+                                                    .lineLimit(2)
                                                 if item.isCurrentSelection {
                                                     Text("Current")
                                                         .font(.caption2)
@@ -868,18 +877,12 @@ struct SettingsView: View {
                                             Text("\(item.kind.rawValue) • \(item.detail)")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
+                                            Text(item.sizeText)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
                                         }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                                        Text(item.sizeText)
-                                            .font(.caption)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
+                                        Spacer()
 
                                         Button(role: .destructive) {
                                             pendingModelStorageDelete = item
@@ -889,7 +892,6 @@ struct SettingsView: View {
                                         }
                                         .buttonStyle(.borderless)
                                         .disabled(isDeletingModelStorage)
-                                        .frame(width: 24, alignment: .center)
                                     }
                                     .padding(.vertical, 4)
                                 }
@@ -904,10 +906,8 @@ struct SettingsView: View {
                             Text("Deleting a model removes only that selected model. Other app caches and other models are left alone.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
                     }
 
                     Section("Actions") {
@@ -923,14 +923,19 @@ struct SettingsView: View {
                     }
                 }
                 .scrollContentBackground(.hidden) // Hide default form background
-                #if os(macOS)
-                .formStyle(.grouped)
-                .frame(minWidth: 700, idealWidth: 820, maxWidth: .infinity)
-                #endif
                 .safeAreaPadding(.horizontal, 24)
                 .safeAreaPadding(.vertical, 8)
                 .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                 .padding()
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(key: SettingsFormWidthPreferenceKey.self, value: proxy.size.width)
+                    }
+                )
+                .onPreferenceChange(SettingsFormWidthPreferenceKey.self) { width in
+                    settingsFormWidth = width
+                }
             }
             .navigationTitle("Settings")
             #if os(iOS)
@@ -1018,21 +1023,6 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .modifier(AdaptiveGlassModifier(cornerRadius: 40))
-    }
-
-    @ViewBuilder
-    private func settingsNavigationContainer<Content: View>(
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        #if os(macOS)
-        NavigationStack {
-            content()
-        }
-        #else
-        NavigationView {
-            content()
-        }
-        #endif
     }
     
     private func loadCurrentSettings() {
@@ -1246,7 +1236,16 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var redditAuthenticatedView: some View {
+        if usesCompactSettingsLayout {
+            redditAuthenticatedPhoneView
+        } else {
+            redditAuthenticatedRegularView
+        }
+    }
+
+    private var redditAuthenticatedRegularView: some View {
         Group {
             HStack(spacing: 12) {
                 VStack(alignment: .leading) {
@@ -1258,16 +1257,15 @@ struct SettingsView: View {
                 }
                 Spacer()
                 Button("Refresh Token") {
-                    appState.redditOAuthManager.refreshAccessToken { result in
-                        switch result {
-                        case .success:
-                            print("🔐 RedditOAuth: Token refreshed manually from SettingsView")
-                        case .failure(let error):
-                            print("❌ RedditOAuth: Manual token refresh failed: \(error.localizedDescription)")
-                        }
-                    }
+                    refreshRedditToken()
                 }
                 .buttonStyle(.bordered)
+
+                Button("Reconnect") {
+                    reconnectReddit()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
 
                 Button("Logout") {
                     appState.redditOAuthManager.logout()
@@ -1280,25 +1278,95 @@ struct SettingsView: View {
             Text("✅ Using OAuth - Higher rate limits (600 req/10min)")
                 .font(.caption)
                 .foregroundColor(.green)
+
+            Text(appState.redditOAuthManager.hasReplyPermission ? "✅ Reply permission granted" : "⚠️ Reconnect to grant reply permission")
+                .font(.caption)
+                .foregroundColor(appState.redditOAuthManager.hasReplyPermission ? .green : .orange)
         }
     }
 
+    private var redditAuthenticatedPhoneView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Logged in as")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("u/\(appState.redditOAuthManager.username)")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.vertical, 8)
+
+            redditAuthButtons
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Using OAuth - higher rate limits", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+
+                Label(
+                    appState.redditOAuthManager.hasReplyPermission ? "Reply permission granted" : "Reconnect to grant reply permission",
+                    systemImage: appState.redditOAuthManager.hasReplyPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                .foregroundColor(appState.redditOAuthManager.hasReplyPermission ? .green : .orange)
+            }
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var redditAuthButtons: some View {
+        VStack(spacing: 8) {
+            refreshRedditTokenButton
+            reconnectRedditButton
+            logoutRedditButton
+        }
+    }
+
+    private var refreshRedditTokenButton: some View {
+        Button("Refresh Token") {
+            refreshRedditToken()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var reconnectRedditButton: some View {
+        Button("Reconnect") {
+            reconnectReddit()
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.orange)
+        .controlSize(.regular)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var logoutRedditButton: some View {
+        Button("Logout") {
+            appState.redditOAuthManager.logout()
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.red)
+        .controlSize(.regular)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity)
+    }
+
     private var redditSignInView: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 8) {
             Button(action: {
-                appState.redditOAuthManager.startOAuthFlow { result in
-                    switch result {
-                    case .success:
-                        print("✅ Successfully authenticated with Reddit")
-                    case .failure(let error):
-                        print("❌ Reddit auth failed: \(error.localizedDescription)")
-                    }
-                }
+                signInWithReddit()
             }) {
                 HStack {
                     Image(systemName: "person.circle.fill")
                     Text("Sign in with Reddit")
                 }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
@@ -1306,6 +1374,33 @@ struct SettingsView: View {
             Text("⚠️ Using public API - Limited to ~60 requests/min")
                 .font(.caption)
                 .foregroundColor(.orange)
+        }
+    }
+
+    private func reconnectReddit() {
+        appState.redditOAuthManager.logout()
+        signInWithReddit()
+    }
+
+    private func refreshRedditToken() {
+        appState.redditOAuthManager.refreshAccessToken { result in
+            switch result {
+            case .success:
+                print("🔐 RedditOAuth: Token refreshed manually from SettingsView")
+            case .failure(let error):
+                print("❌ RedditOAuth: Manual token refresh failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func signInWithReddit() {
+        appState.redditOAuthManager.startOAuthFlow { result in
+            switch result {
+            case .success:
+                print("✅ Successfully authenticated with Reddit")
+            case .failure(let error):
+                print("❌ Reddit auth failed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1318,11 +1413,7 @@ struct SettingsView: View {
         case .appleCloud:
             return "Uses Apple Intelligence cloud AI via Shortcuts"
         case .applePCCGateway:
-            #if os(macOS)
-            return "Runs /usr/bin/fm respond --model pcc locally on this Mac"
-            #else
             return "Uses a token-protected Mac gateway that forwards OpenAI-style requests to fm serve with the pcc model"
-            #endif
         case .mlxLocal:
             return "Runs Gemma locally with LiteRT-LM acceleration using .litertlm model files"
         case .coreAIMLXLocal:
@@ -1338,43 +1429,6 @@ struct SettingsView: View {
     @ViewBuilder
     private var pccGatewaySettingsView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            #if os(macOS)
-            Text("Apple PCC")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-
-            Text("Runs /usr/bin/fm respond --model pcc locally on this Mac. If this beta blocks PCC from the app process, RSSReader retries through a minimized Terminal helper.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Button {
-                isTestingPCCGatewayConnection = true
-                pccGatewayConnectionStatus = "Testing..."
-                appState.testPCCGatewayConnection { result in
-                    isTestingPCCGatewayConnection = false
-                    switch result {
-                    case .success(let message):
-                        pccGatewayConnectionStatus = message.isEmpty ? "Connected" : message
-                    case .failure(let error):
-                        pccGatewayConnectionStatus = "Connection failed: \(error.localizedDescription)"
-                    }
-                }
-            } label: {
-                if isTestingPCCGatewayConnection {
-                    Label("Testing...", systemImage: "arrow.triangle.2.circlepath")
-                } else {
-                    Label("Check PCC", systemImage: "bolt.horizontal.circle")
-                }
-            }
-            .buttonStyle(.bordered)
-            .disabled(isTestingPCCGatewayConnection)
-
-            if let pccGatewayConnectionStatus {
-                Text(pccGatewayConnectionStatus)
-                    .font(.caption)
-                    .foregroundStyle(pccGatewayConnectionStatus.localizedCaseInsensitiveContains("failed") ? Color.secondary : Color.green)
-            }
-            #else
             Text("Apple PCC Gateway")
                 .font(.subheadline)
                 .fontWeight(.semibold)
@@ -1459,7 +1513,6 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(pccGatewayConnectionStatus == "Connected" ? .green : .secondary)
             }
-            #endif
         }
         .padding(.top, 8)
     }
@@ -1589,7 +1642,7 @@ struct SettingsView: View {
                 tintColor: .orange.opacity(0.3)
             ))
             .onSubmit {
-                Task { await appState.warmUpMLXIfNeeded() }
+                appState.warmUpMLXIfNeeded()
             }
 
             Text("Use a LiteRT-LM repo such as \(LiteRTLocalService.defaultModelRepo).")
@@ -1689,7 +1742,7 @@ struct SettingsView: View {
                 tintColor: .orange.opacity(0.3)
             ))
             .onSubmit {
-                Task { await appState.warmUpMLXIfNeeded() }
+                appState.warmUpMLXIfNeeded()
             }
 
             Text("Uses an MLX-format Gemma 4 E2B model for comparison with the LiteRT Gemma 4 E2B model.")
@@ -1801,8 +1854,8 @@ struct SettingsView: View {
                 await MainActor.run {
                     progress.completedUnitCount = 100
                     mlxDownloadProgress = progress
+                    appState.warmUpMLXIfNeeded()
                 }
-                await appState.warmUpMLXIfNeeded()
             } catch {
                 await MainActor.run {
                     mlxLoadError = error.localizedDescription
@@ -1830,7 +1883,9 @@ struct SettingsView: View {
                         }
                     }
                 )
-                await appState.warmUpMLXIfNeeded()
+                await MainActor.run {
+                    appState.warmUpMLXIfNeeded()
+                }
             } catch {
                 await MainActor.run {
                     mlxLoadError = error.localizedDescription

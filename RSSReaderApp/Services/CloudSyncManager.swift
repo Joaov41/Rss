@@ -113,7 +113,7 @@ final class CloudSyncManager {
     }
 
     // Snapshot of all read/favorite states for replay to late subscribers
-    struct ReadStateSnapshot {
+    struct ReadStateSnapshot: Equatable {
         let readArticles: Set<String>
         let favoriteArticles: Set<String>
         let readRedditPosts: Set<String>
@@ -323,13 +323,11 @@ final class CloudSyncManager {
             if sawV2ReadArticlesChange {
                 let ids = getCloudReadArticles()
                 print("☁️ CloudSyncManager: Received \(ids.count) read articles from cloud (v2 shards)")
-                remoteChangesPublisher.send(.readArticles(ids))
             }
 
             if sawV2ReadRedditChange {
                 let ids = getCloudReadRedditPosts()
                 print("☁️ CloudSyncManager: Received \(ids.count) read Reddit posts from cloud (v2 shards)")
-                remoteChangesPublisher.send(.readRedditPosts(ids))
             }
 
             if sawV2ReadArticlesChange || sawV2ReadRedditChange {
@@ -871,6 +869,12 @@ final class CloudSyncManager {
         let timestamp = cloudStore.double(forKey: Keys.lastSyncTimestamp)
         guard timestamp > 0 else { return nil }
         return Date(timeIntervalSince1970: timestamp)
+    }
+
+    /// Distinguishes an intentionally stored empty subscription list from an
+    /// account where no subscription value has ever been written.
+    func hasCloudSubscriptionsValue() -> Bool {
+        cloudStore.data(forKey: Keys.subscriptions) != nil
     }
 
     /// Force an immediate sync with iCloud

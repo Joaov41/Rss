@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct AIQuestionView: View {
+    /// Optional article/post text to use as context for the question.
+    var articleContent: String = ""
+
+    @EnvironmentObject var appState: AppState
+
     @State private var questionText: String = ""
     @State private var isLoading: Bool = false
     @State private var answer: String = ""
@@ -9,7 +14,6 @@ struct AIQuestionView: View {
 
     var body: some View {
         ZStack {
-            // Adaptive gradient background
             LinearGradient(
                 colors: colorScheme == .dark ? [
                     Color.indigo.opacity(0.3),
@@ -28,42 +32,34 @@ struct AIQuestionView: View {
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
-            
+
             VStack(spacing: 20) {
                 Text("Ask AI About This Article")
                     .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(.white)
-                
+
                 VStack(spacing: 16) {
                     if #available(iOS 26.0, *) {
                         TextField("Ask a question about this article...", text: $questionText)
                             .textFieldStyle(LiquidGlassTextFieldStyle())
-                            .onSubmit {
-                                if !questionText.isEmpty {
-                                    askQuestion()
-                                }
-                            }
+                            .onSubmit { submitQuestion() }
                     } else {
                         TextField("Ask a question about this article...", text: $questionText)
                             .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(cornerRadius: 12, tintColor: .blue.opacity(0.3)))
-                            .onSubmit {
-                                if !questionText.isEmpty {
-                                    askQuestion()
-                                }
-                            }
+                            .onSubmit { submitQuestion() }
                     }
-                    
+
                     HStack {
                         Button {
-                            askQuestion()
+                            submitQuestion()
                         } label: {
                             Image(systemName: "questionmark.circle")
                         }
                         .accessibilityLabel("Ask")
                         .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .blue.opacity(0.4)))
                         .disabled(questionText.isEmpty || isLoading)
-                        
+
                         Button {
                             presentationMode.wrappedValue.dismiss()
                         } label: {
@@ -73,16 +69,16 @@ struct AIQuestionView: View {
                         .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .red.opacity(0.3)))
                     }
                 }
-                
+
                 if isLoading {
                     ProgressView()
                         .scaleEffect(1.2)
                         .padding()
                 }
-                
+
                 if !answer.isEmpty {
                     ScrollView {
-                        Text(.init(answer))
+                        Text(answer)
                             .padding()
                             .background(
                                 RoundedRectangle(cornerRadius: 12)
@@ -93,26 +89,43 @@ struct AIQuestionView: View {
                                     )
                             )
                             .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: 300)
+
+                    // Throughput badge for on-device providers only
+                    let throughput = appState.mlxLastThroughput
+                    if !throughput.isEmpty,
+	                       (appState.settings.selectedSummaryProvider == .appleLocal ||
+	                        appState.settings.selectedSummaryProvider == .mlxLocal ||
+	                        appState.settings.selectedSummaryProvider == .coreAIMLXLocal ||
+	                        appState.settings.selectedSummaryProvider == .applePCCGateway ||
+	                        appState.settings.selectedSummaryProvider == .summarizeDaemon) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "cpu")
+                                .font(.caption2)
+                            Text(throughput)
+                                .font(.caption2)
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(.white.opacity(0.7))
+                    }
                 }
-                
+
                 Spacer()
             }
             .padding()
         }
     }
 
-    private func askQuestion() {
+    private func submitQuestion() {
         guard !questionText.isEmpty else { return }
-        
         isLoading = true
         answer = ""
-        
-        // Simulate API call - replace with actual implementation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+
+        appState.answerQuestion(questionText, context: articleContent) { @MainActor result in
+            self.answer = result
             self.isLoading = false
-            self.answer = "This is a sample answer to demonstrate the glass effect UI. The actual implementation would connect to your AI service."
         }
     }
 }
@@ -120,5 +133,6 @@ struct AIQuestionView: View {
 struct AIQuestionView_Previews: PreviewProvider {
     static var previews: some View {
         AIQuestionView()
+            .environmentObject(AppState())
     }
-} 
+}

@@ -51,6 +51,7 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "yyjson", package: "yyjson"),
             ],
             path: "Sources/MLXAudioCore",
             swiftSettings: [
@@ -84,6 +85,7 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "yyjson", package: "yyjson"),
             ],
             path: "Sources/MLXAudioTTS"
         ),
@@ -100,6 +102,7 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "yyjson", package: "yyjson"),
             ],
             path: "Sources/MLXAudioSTT"
         ),
@@ -113,6 +116,7 @@ let package = Package(
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "yyjson", package: "yyjson"),
             ],
             path: "Sources/MLXAudioVAD"
         ),

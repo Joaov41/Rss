@@ -11,6 +11,30 @@ private let defaultLsdDecodeSteps: Int = 1
 private let defaultNoiseClamp: Float? = nil
 private let defaultEosThreshold: Float = -4.0
 private let defaultAudioPrompt: String = "alba"
+private let predefinedAudioPrompts = [
+    "alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma",
+]
+
+private func predefinedAudioPromptURLs(_ voiceName: String, modelFolder: URL) -> [URL] {
+    [
+        modelFolder.appendingPathComponent("embeddings/\(voiceName).safetensors"),
+        modelFolder.appendingPathComponent("\(voiceName).safetensors"),
+    ]
+}
+
+private func hasPredefinedAudioPrompt(_ voiceName: String, modelFolder: URL) -> Bool {
+    predefinedAudioPromptURLs(voiceName, modelFolder: modelFolder).contains {
+        FileManager.default.fileExists(atPath: $0.path)
+    }
+}
+
+private func hasCompletePocketTTSSnapshot(_ modelFolder: URL) -> Bool {
+    FileManager.default.fileExists(atPath: modelFolder.appendingPathComponent("config.json").path)
+        && FileManager.default.fileExists(atPath: modelFolder.appendingPathComponent("model.safetensors").path)
+        && predefinedAudioPrompts.allSatisfy {
+            hasPredefinedAudioPrompt($0, modelFolder: modelFolder)
+        }
+}
 
 public struct PocketTTSState {
     public var flowCache: [KVCacheSimple]
@@ -119,15 +143,14 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
         progressHandler: @escaping (Progress) -> Void = { _ in }
     ) async throws -> MLXArray? {
         _ = progressHandler
-        let fileURL = modelFolder.appendingPathComponent("embeddings/\(voiceName).safetensors")
-        if !FileManager.default.fileExists(atPath: fileURL.path) {
-            return nil
+        for fileURL in predefinedAudioPromptURLs(voiceName, modelFolder: modelFolder) {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { continue }
+            let arrays = try MLX.loadArrays(url: fileURL)
+            if let prompt = arrays["audio_prompt"] {
+                return prompt
+            }
         }
-        let arrays = try MLX.loadArrays(url: fileURL)
-        guard let prompt = arrays["audio_prompt"] else {
-            return nil
-        }
-        return prompt
+        return nil
     }
 
     private func resolveAudioPrompt(
@@ -369,13 +392,8 @@ private func resolveOrDownloadPocketTTSModel(
         .appendingPathComponent("mlx-audio")
         .appendingPathComponent(modelSubdir)
 
-    if FileManager.default.fileExists(atPath: modelDir.path) {
-        let files = try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
-        let hasConfig = files?.contains { $0.lastPathComponent == "config.json" } ?? false
-        let hasWeights = files?.contains { $0.pathExtension == "safetensors" } ?? false
-        if hasConfig, hasWeights {
-            return modelDir
-        }
+    if hasCompletePocketTTSSnapshot(modelDir) {
+        return modelDir
     }
 
     try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
@@ -388,6 +406,14 @@ private func resolveOrDownloadPocketTTSModel(
             print("\(progress.completedUnitCount)/\(progress.totalUnitCount) files")
         }
     )
+
+    guard hasCompletePocketTTSSnapshot(modelDir) else {
+        throw NSError(
+            domain: "PocketTTSModel",
+            code: 4,
+            userInfo: [NSLocalizedDescriptionKey: "Pocket TTS voice prompts are missing after refreshing the model cache."]
+        )
+    }
     return modelDir
 }
 

@@ -2,31 +2,31 @@ import SwiftUI
 
 struct iPadContentView: View {
     @EnvironmentObject var appState: AppState
-    
+
     var body: some View {
         // For iPad, embed ContentView in NavigationView for swipe gestures
         NavigationView {
             ContentView()
                 .environmentObject(appState)
         }
-#if os(iOS)
+        #if os(iOS)
         .navigationViewStyle(StackNavigationViewStyle())
-#endif
+        #endif
     }
 }
 
 struct iPhoneContentView: View {
     @EnvironmentObject var appState: AppState
-    
+
     var body: some View {
         // For iPhone, embed ContentView in a NavigationView to enable swipe back
         NavigationView {
             ContentView()
                 .environmentObject(appState)
         }
-#if os(iOS)
+        #if os(iOS)
         .navigationViewStyle(StackNavigationViewStyle())
-#endif
+        #endif
     }
 }
 
@@ -111,15 +111,13 @@ struct LiquidGlassButtonStyle: ButtonStyle {
     
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.caption)
+            .font(.callout)
             .fontWeight(.medium)
             .symbolRenderingMode(.monochrome)
             .foregroundColor(foregroundColor)
             .tint(foregroundColor)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             .background(
                 Group {
                     if showsBackground {
@@ -182,11 +180,7 @@ struct LiquidGlassButtonStyle: ButtonStyle {
         return isTranslucent ? .ultraThinMaterial : .thickMaterial
         #else
         // Use simple colors on macOS to avoid Metal texture conflicts
-        if #available(macOS 12.0, *) {
-            return isTranslucent ? .ultraThinMaterial : .thickMaterial
-        } else {
-            return isTranslucent ? Color.gray.opacity(0.15) : Color.gray.opacity(0.25)
-        }
+        return isTranslucent ? Color.gray.opacity(0.1) : Color.gray.opacity(0.2)
         #endif
     }
     
@@ -230,37 +224,6 @@ struct AdaptiveGlassContainerView<Content: View>: View {
 }
 
 // MARK: - Unified Glass Style Extensions
-struct AdaptiveGlassModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    let tintColor: Color?
-
-    init(cornerRadius: CGFloat = 12, tintColor: Color? = nil) {
-        self.cornerRadius = cornerRadius
-        self.tintColor = tintColor
-    }
-
-    func body(content: Content) -> some View {
-        if #available(iOS 15.0, macOS 12.0, *) {
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke(tintColor?.opacity(0.3) ?? Color.white.opacity(0.2), lineWidth: 1)
-                )
-        } else {
-            content
-                .background(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(tintColor ?? Color.gray.opacity(0.2))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke(tintColor?.opacity(0.3) ?? Color.gray.opacity(0.3), lineWidth: 1)
-                )
-        }
-    }
-}
-
 extension View {
     func applyGlassStyle(cornerRadius: CGFloat = 12, tintColor: Color? = nil) -> some View {
         if #available(iOS 15.0, macOS 12.0, *) {

@@ -112,6 +112,31 @@ extension String {
 // MARK: - FeedService Class
 class FeedService {
     private var cancellables = Set<AnyCancellable>()
+
+    private final class CachedArticleContent {
+        let sourceContentFingerprint: Int
+        let content: String
+        let previewText: String
+        let expiresAt: Date
+
+        init(sourceContentFingerprint: Int, content: String, previewText: String, expiresAt: Date) {
+            self.sourceContentFingerprint = sourceContentFingerprint
+            self.content = content
+            self.previewText = previewText
+            self.expiresAt = expiresAt
+        }
+    }
+
+    // Full-article HTML is expensive to download and parse. Keep the cache
+    // bounded so it cannot become another source of sustained memory growth.
+    private let fullArticleCache: NSCache<NSString, CachedArticleContent> = {
+        let cache = NSCache<NSString, CachedArticleContent>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 16 * 1024 * 1024
+        return cache
+    }()
+    private let fullArticleCacheTTL: TimeInterval = 10 * 60
+    private let maxConcurrentFullArticleFetches = 4
     
     // MARK: - Feed Fetching
     func fetchFeed(url: String) -> AnyPublisher<Feed, Never> {
@@ -318,7 +343,7 @@ class FeedService {
                 title: rawTitle,
                 feedURL: url
             )
-
+            
             var article = Article(
                 id: articleId,
                 title: rawTitle.removingHTML(),
@@ -399,36 +424,118 @@ class FeedService {
     
     /// For each article in the feed that appears truncated, fetch the full content from the webpage.
     private func fetchFullArticlesIfNeeded(for feed: Feed) -> AnyPublisher<Feed, Never> {
-        let articlePublishers = feed.articles.map { article -> AnyPublisher<Article, Never> in
-            if isTruncated(article.content), let link = article.url {
-                return fetchFullArticle(for: article, from: link)
+        feed.articles.publisher
+            .flatMap(maxPublishers: .max(maxConcurrentFullArticleFetches)) { article -> AnyPublisher<Article, Never> in
+            if self.isTruncated(article.content), let link = article.url {
+                return self.fetchFullArticle(for: article, from: link)
             } else {
                 return Just(article).eraseToAnyPublisher()
             }
         }
-        
-        return Publishers.MergeMany(articlePublishers)
             .collect()
             .map { updatedArticles -> Feed in
                 // Sort articles by publishDate descending (most recent first)
                 let sortedArticles = updatedArticles.sorted { $0.publishDate > $1.publishDate }
-                // 🐞 DEBUG LOG: Print publishDate for each article after sorting
-                print("🐞 Article publish dates after sorting:")
-                for article in sortedArticles {
-                    print(article.publishDate)
-                }
                 var finalFeed = feed
                 finalFeed.articles = sortedArticles
                 return finalFeed
             }
             .eraseToAnyPublisher()
     }
+
+    private func articleContentFingerprint(_ content: String) -> Int {
+        var hasher = Hasher()
+        hasher.combine(content)
+        return hasher.finalize()
+    }
+
+    private func canonicalArticleURL(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+
+        components.fragment = nil
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+
+        if let port = components.port, port == 80 || port == 443 {
+            components.port = nil
+        }
+
+        if var path = components.percentEncodedPath.removingPercentEncoding {
+            if path.count > 1 && path.hasSuffix("/") {
+                path.removeLast()
+            }
+            components.percentEncodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? components.percentEncodedPath
+        }
+
+        return components.string ?? url.absoluteString
+    }
+
+    private func cachedFullArticle(for article: Article, from url: URL) -> Article? {
+        let cacheKey = canonicalArticleURL(url) as NSString
+        guard let cached = fullArticleCache.object(forKey: cacheKey) else {
+            return nil
+        }
+
+        guard cached.expiresAt > Date() else {
+            fullArticleCache.removeObject(forKey: cacheKey)
+            return nil
+        }
+
+        guard cached.sourceContentFingerprint == articleContentFingerprint(article.content) else {
+            return nil
+        }
+
+        var updated = article
+        updated.content = cached.content
+        updated.previewText = cached.previewText
+        return updated
+    }
+
+    private func cacheFullArticle(_ article: Article, for url: URL, sourceContentFingerprint: Int) {
+        guard !article.content.isEmpty else { return }
+        guard articleContentFingerprint(article.content) != sourceContentFingerprint else { return }
+
+        let cacheEntry = CachedArticleContent(
+            sourceContentFingerprint: sourceContentFingerprint,
+            content: article.content,
+            previewText: article.previewText,
+            expiresAt: Date().addingTimeInterval(fullArticleCacheTTL)
+        )
+        let cost = max(1, article.content.utf8.count + article.previewText.utf8.count)
+        fullArticleCache.setObject(
+            cacheEntry,
+            forKey: canonicalArticleURL(url) as NSString,
+            cost: cost
+        )
+    }
     
     /// Fetch the full article content by performing a secondary network request and scraping the webpage.
     private func fetchFullArticle(for article: Article, from url: URL) -> AnyPublisher<Article, Never> {
+        if let cachedArticle = cachedFullArticle(for: article, from: url) {
+            return Just(cachedArticle).eraseToAnyPublisher()
+        }
+
+        let sourceContentFingerprint = articleContentFingerprint(article.content)
+
         return URLSession.shared.dataTaskPublisher(for: url)
-            .map { $0.data }
+            .tryMap { output -> Data in
+                if let response = output.response as? HTTPURLResponse {
+                    guard (200..<300).contains(response.statusCode) else {
+                        throw URLError(.badServerResponse)
+                    }
+
+                    if let mimeType = response.mimeType?.lowercased(),
+                       ["application/pdf", "image/", "audio/", "video/"].contains(where: mimeType.hasPrefix) {
+                        throw URLError(.cannotParseResponse)
+                    }
+                }
+                return output.data
+            }
             .catch { _ in Just(Data()) } // Fallback to empty data if network fails
+            // Ensure HTML decoding and SwiftSoup work stay off the main thread.
+            .receive(on: DispatchQueue.global(qos: .utility))
             .map { data -> Article in
                 guard let html = String(data: data, encoding: .utf8) else {
                     return article
@@ -442,7 +549,9 @@ class FeedService {
                     
                     // Special handling for 9to5Mac
                     if host.contains("9to5mac.com") {
-                        return self.handle9to5Mac(doc: doc, article: article)
+                        let updated = self.handle9to5Mac(doc: doc, article: article)
+                        self.cacheFullArticle(updated, for: url, sourceContentFingerprint: sourceContentFingerprint)
+                        return updated
                     }
                     
                     // Remove common "read more" elements and other distractions
@@ -519,6 +628,8 @@ class FeedService {
                     
                     var updated = article
                     updated.content = contentHTML
+                    updated.previewText = Article.makePreviewText(from: contentHTML)
+                    self.cacheFullArticle(updated, for: url, sourceContentFingerprint: sourceContentFingerprint)
                     return updated
                     
                 } catch {
@@ -532,7 +643,7 @@ class FeedService {
     }
     
     /// Special handler for 9to5Mac articles which have a specific structure
-    private func handle9to5Mac(doc: Document, article: Article) -> Article {
+    private func handle9to5Mac(doc: SwiftSoup.Document, article: Article) -> Article {
         do {
             // Remove sponsor blocks, newsletter forms, and other clutter
             try doc.select(".sponsor-block, .newsletter-block, .comments-link, .st-related-posts, script, style, form").remove()
@@ -600,6 +711,7 @@ class FeedService {
             // Create updated article with full content
             var updated = article
             updated.content = contentHTML
+            updated.previewText = Article.makePreviewText(from: contentHTML)
             return updated
             
         } catch {

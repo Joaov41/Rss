@@ -14,30 +14,37 @@ class CommentSummaryService {
     
     func summarizeComments(_ comments: [RedditCommentModel]) -> AnyPublisher<CommentSummary, Never> {
         print("📱 CommentSummaryService: Starting summarization of \(comments.count) comments")
-        
-        // Extract all comment text - but limit the total amount to avoid performance issues
+
+        #if os(iOS)
+        // Start background task to ensure completion even when locked
+        let backgroundHandle = GeminiBackgroundTaskManager.shared.beginLongRunningTask(
+            identifier: GeminiBackgroundTaskManager.shared.taskIdentifier(for: .processing),
+            title: "Summarizing Comments"
+        )
+        backgroundHandle.reportProgress(fractionCompleted: 0.1)
+        #endif
+
+        // Gemini has a large context window, but this safety cap prevents request overflow.
         var commentTexts = comments.flatMap { extractAllCommentTexts(from: $0) }
-        
-        // Limit the number of comments to process if there are too many
-        let maxComments = 800 // Adjust this based on empirical performance testing
+        let maxComments = 800
         if commentTexts.count > maxComments {
-            print("⚠️ CommentSummaryService: Limiting from \(commentTexts.count) to \(maxComments) comments for summarization")
+            print("⚠️ CommentSummaryService: Limiting from \(commentTexts.count) to \(maxComments) comments for Gemini summarization")
             commentTexts = Array(commentTexts.prefix(maxComments))
         }
-        
+
         // Combine all comments into a single text for summarization
         let combinedText = commentTexts.joined(separator: "\n\n")
-        
-        // Get unique commenters - working with the original list so we have complete data
-        var commenters = Set<String>()
-        // Limit to a reasonable number to avoid performance issues
-        for comment in comments.prefix(1000) {
-            commenters.insert(comment.author)
-        }
+
+        // Get unique commenters across the full loaded thread.
+        let commenters = Set(comments.flatMap { extractAllCommentAuthors(from: $0) })
         let topCommenters = Array(commenters).prefix(5).map { $0 }
-        
+
         print("📱 CommentSummaryService: Preparing to summarize \(commentTexts.count) comments with \(commenters.count) unique commenters")
-        
+
+        #if os(iOS)
+        backgroundHandle.reportProgress(fractionCompleted: 0.2)
+        #endif
+
         // Create a customized prompt for Reddit comments instead of using the generic article prompt
         let redditCommentsPrompt = """
         You are analyzing comments from a Reddit post.
@@ -46,32 +53,54 @@ class CommentSummaryService {
         \(combinedText)
 
         ---
-        Task: Briefly summarize the top 2-3 main themes and points discussed in the comments above. For each theme, provide a one-sentence description and, if possible, a short quote as an example. Keep the overall summary concise (5-8 sentences total).
-
-        Format your response in plain text. Do NOT include Markdown symbols (such as #, *, _, or `) and do NOT include any HTML tags.
-
-        Example Structure:
-
-        Theme 1: One-sentence summary. Example: "[Short quote]"
-        Theme 2: One-sentence summary. Example: "[Short quote]"
-
-        Final Overall Summary: One or two sentences summarizing the general tone and main takeaways.
+        Task: Briefly summarize ALL the main themes and points discussed in the comments above. For each theme, provide a one-sentence description and, if possible, a short quote as an example. Keep the overall summary concise (5-8 sentences total).
+        Return plain text only. Do not use Markdown symbols, headings, bullet markers, or HTML tags.
         """
-        
-        return summaryService.summarizeText(combinedText, customPrompt: redditCommentsPrompt)
+
+        return summaryService.summarizeText(
+            combinedText,
+            customPrompt: redditCommentsPrompt,
+            existingBackgroundTaskHandle:
+                {
+                    #if os(iOS)
+                    backgroundHandle
+                    #else
+                    nil
+                    #endif
+                }()
+        )
+            .handleEvents(
+                receiveOutput: { _ in
+                    #if os(iOS)
+                    backgroundHandle.reportProgress(fractionCompleted: 0.9)
+                    #endif
+                },
+                receiveCompletion: { _ in
+                    #if os(iOS)
+                    backgroundHandle.finish(success: true)
+                    print("✅ CommentSummaryService: Background task completed (works when locked)")
+                    #endif
+                },
+                receiveCancel: {
+                    #if os(iOS)
+                    backgroundHandle.finish(success: false)
+                    #endif
+                }
+            )
             .map { summaryText -> CommentSummary in
-                let cleanedSummary = self.cleanMarkdownArtifactsForDisplay(summaryText)
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
+
                 // Analyze sentiment (simplified version)
                 let sentiment = self.analyzeSentiment(in: combinedText)
-                
+
                 // Extract main topics (simplified version)
-                let mainTopics = self.extractMainTopics(from: cleanedSummary)
-                
+                let mainTopics = self.extractMainTopics(from: cleanedSummaryText)
+
                 print("✅ CommentSummaryService: Summary generated successfully")
                 return CommentSummary(
                     postId: comments.first?.id ?? "",
                     subreddit: "",
-                    summary: cleanedSummary,
+                    summary: cleanedSummaryText,
                     commentCount: commentTexts.count,
                     topCommenters: Array(topCommenters),
                     mainTopics: mainTopics,
@@ -81,43 +110,29 @@ class CommentSummaryService {
             }
             .eraseToAnyPublisher()
     }
-
-    private func cleanMarkdownArtifactsForDisplay(_ input: String) -> String {
-        var value = input
-        value = value.replacingOccurrences(of: "\r\n", with: "\n")
-        value = value.replacingOccurrences(of: "\r", with: "\n")
-        value = value.replacingOccurrences(of: #"\\r\\n"#, with: "\n", options: .regularExpression)
-        value = value.replacingOccurrences(of: #"\\n"#, with: "\n", options: .regularExpression)
-        value = value.replacingOccurrences(of: #"\\r"#, with: "\n", options: .regularExpression)
-        value = value.replacingOccurrences(of: #"(?m)^```[a-zA-Z0-9_-]*\s*$"#, with: "", options: .regularExpression)
-        value = value.replacingOccurrences(of: "```", with: "")
-        value = value.replacingOccurrences(of: "\\*\\*(.*?)\\*\\*", with: "$1", options: .regularExpression)
-        value = value.replacingOccurrences(of: "\\*(.*?)\\*", with: "$1", options: .regularExpression)
-        value = value.replacingOccurrences(of: "__(.*?)__", with: "$1", options: .regularExpression)
-        value = value.replacingOccurrences(of: "_(.*?)_", with: "$1", options: .regularExpression)
-        value = value.replacingOccurrences(of: "`([^`]*)`", with: "$1", options: .regularExpression)
-        value = value.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
-        value = value.replacingOccurrences(of: "(?m)(^\\s*[-•]?\\s*)#{1,6}\\s*", with: "$1", options: .regularExpression)
-        value = value.replacingOccurrences(of: "(?m)^\\s*\\*\\s+", with: "- ", options: .regularExpression)
-        value = value.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
-        return value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
     
     // Helper function to extract all comment texts recursively
     private func extractAllCommentTexts(from comment: RedditCommentModel) -> [String] {
         var texts = [comment.body]
         
-        // Limit recursion depth for very nested comment threads
-        if comment.indentationLevel < 10 {
-            for reply in comment.replies {
-                texts.append(contentsOf: extractAllCommentTexts(from: reply))
-            }
-        } else {
-            // For deeply nested comments, just include the direct text without replies
-            print("⚠️ CommentSummaryService: Limiting recursion depth for deeply nested comment")
+        for reply in comment.replies {
+            texts.append(contentsOf: extractAllCommentTexts(from: reply))
         }
         
         return texts
+    }
+
+    private func extractAllCommentAuthors(from comment: RedditCommentModel) -> [String] {
+        var authors: [String] = []
+        if !comment.author.isEmpty {
+            authors.append(comment.author)
+        }
+
+        for reply in comment.replies {
+            authors.append(contentsOf: extractAllCommentAuthors(from: reply))
+        }
+
+        return authors
     }
     
     // Simple sentiment analysis

@@ -4,16 +4,28 @@ import Kingfisher
 #if os(iOS)
 import AVFoundation
 import UIKit
+
+private func ensureBackgroundTTSReady() {
+    let audioSession = AVAudioSession.sharedInstance()
+    do {
+        try audioSession.setCategory(
+            .playback,
+            mode: .spokenAudio,
+            options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP]
+        )
+        try audioSession.setActive(true)
+    } catch {
+        print("🔊 [RedditDetailView] Failed to configure audio session: \(error)")
+    }
+}
+
 #elseif os(macOS)
 import AppKit
+private func ensureBackgroundTTSReady() {}
+#else
+private func ensureBackgroundTTSReady() {}
 #endif
 import Foundation
-
-#if os(iOS)
-private typealias KokoroAudioPlayer = AVAudioPlayer
-#elseif os(macOS)
-private typealias KokoroAudioPlayer = NSSound
-#endif
 
 // Enhanced swipe back extension is defined in ContentView.swift
 
@@ -27,13 +39,12 @@ private typealias KokoroAudioPlayer = NSSound
 #if os(iOS)
 // no-op: voice list UI removed to avoid compile issues
 #endif
-
-#if os(iOS)
 struct ConditionalEnhancedSwipeBack: ViewModifier {
     let isEnabled: Bool
     let appState: AppState
     
     func body(content: Content) -> some View {
+        #if os(iOS)
         if isEnabled {
             content.enhancedSwipeBack {
                 appState.navigateBack()
@@ -41,55 +52,108 @@ struct ConditionalEnhancedSwipeBack: ViewModifier {
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }
-#endif
+
 
 struct RedditDetailView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @State private var comments: [RedditCommentModel] = []
     @State private var displayedComments: [RedditCommentModel] = []
     @State private var isLoadingComments = false
     @State private var selectedCommentSort: RedditService.CommentSortOption = .best
+    @State private var commentLoadStatusMessage: String? = nil
+    @State private var showPostCommentSheet = false
     @State private var commentSummary: CommentSummary?
     @State private var showCommentSummary = false
     @State private var cancellables = Set<AnyCancellable>()
     @State private var showMoreCommentsButton = false
     @State private var hasMoreCommentsToLoad = false
-    @State private var commentBanner: RedditStatusMessage? = nil
-    @State private var commentLoadError: String? = nil
-    @State private var commentLoadTask: Task<Void, Never>? = nil
     @State private var isProcessingQuestion = false
     @State private var previousQuestionText: String? = nil
     @State private var commentsSentToLLMCount: Int? = nil
     @State private var isShowingAnalytics = false // State for analytics sheet
-    @State private var analyticsProviderOverride: AppSettings.SummaryProvider? = nil
     @State private var selectedImageURL: URL? = nil
-    @State private var showingImagePopup = false
-    
-    #if os(iOS)
-    private let toolbarPlacement: ToolbarItemPlacement = .bottomBar
-    #endif
+    @State private var analyticsProviderOverride: AppSettings.SummaryProvider? = nil
     
     // Default max number of comments to show
     private let maxDisplayComments = 50
     private let redditTopAnchor = "redditDetailTopAnchor"
+    private let iphoneDetailHorizontalInset: CGFloat = 16
+
+    private var detailBackground: Color {
+        colorScheme == .dark ? .black : AppColors.redditBackground(for: colorScheme)
+    }
+
+    private var shouldShowMaterialOverlay: Bool {
+        colorScheme != .dark
+    }
+
+    private var postTitleFont: Font {
+        #if os(iOS)
+        return isCompactWidth ? .system(size: 28, weight: .bold) : .largeTitle.bold()
+        #else
+        return .largeTitle.bold()
+        #endif
+    }
 
     private var shouldShowExplicitWebAIControls: Bool {
         appState.settings.selectedSummaryProvider != .webAI
+    }
+
+    private var activeSummaryProviderName: String {
+        appState.settings.selectedSummaryProvider == .webAI
+            ? appState.settings.selectedWebAIProvider.displayName
+            : appState.settings.selectedSummaryProvider.displayName
+    }
+
+    private var activeSummaryProviderIcon: String {
+        switch appState.settings.selectedSummaryProvider {
+        case .gemini:
+            return "sparkles"
+        case .appleLocal:
+            return "cpu"
+        case .appleCloud:
+            return "cloud.fill"
+        case .applePCCGateway:
+            return "network"
+        case .mlxLocal, .coreAIMLXLocal:
+            return "memorychip"
+        case .webAI:
+            return "globe"
+        case .summarizeDaemon:
+            return "terminal"
+        }
+    }
+
+    private var activeSummaryProviderBadge: some View {
+        Label(activeSummaryProviderName, systemImage: activeSummaryProviderIcon)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .accessibilityLabel("Using \(activeSummaryProviderName)")
     }
     
     // Q&A states
     @State private var showQAInterface = false
     @State private var questionText = ""
     @State private var answerText = "Ask a question about this post or its comments..."
-    @State private var answerParagraphs: [String]? = nil
-    @State private var showSelectionAskAIResponse = false
-    @State private var isSelectionAskAIInFlight = false
-    @State private var selectionAskAIResponse: String?
-    @State private var selectionAskAIError: String?
-    @State private var selectionAskAITask: Task<Void, Never>?
+    @State private var isAskingSelectionAI = false
+    @State private var selectionAskAIPrompt = ""
+    @State private var selectionAskAIResponse = ""
+    @State private var showSelectionAskAISheet = false
+
+    private var qaAnswerUnavailable: Bool {
+        answerText.isEmpty || answerText == "Ask a question about this post or its comments..."
+    }
     
     // TTS state variables for Q&A
     @State private var isSynthesizingSpeechQA: Bool = false
@@ -107,29 +171,14 @@ struct RedditDetailView: View {
     @State private var localSpeechSynthQA: NSSpeechSynthesizer?
     @StateObject private var soundDelegateQA = SoundDelegate()
     @State private var nextAudioChunkQA: Data? = nil
-    @State private var localTTSTaskQA: Task<Void, Never>? = nil
     #endif
-
-    // TTS state variables for Post Summary
-    @State private var isSynthesizingSpeechSummary: Bool = false
-    @State private var isSpeakingLocallySummary: Bool = false
-    @State private var speechSynthesisErrorSummary: String? = nil
-    @State private var ttsCanceledSummary: Bool = false
+    
+    // Voice picker state (Mac only)
     #if os(iOS)
-    @State private var audioPlayerSummary: AVAudioPlayer?
-    @State private var localSpeechSynthSummary: AVSpeechSynthesizer?
-    @StateObject private var soundDelegateSummary = SoundDelegate()
-    @State private var nextAudioChunkSummary: Data? = nil
-    @State private var localTTSTaskSummary: Task<Void, Never>? = nil
+    // voice picker removed; using system default
     #elseif os(macOS)
-    @State private var audioPlayerSummary: NSSound?
-    @State private var localSpeechSynthSummary: NSSpeechSynthesizer?
-    @StateObject private var soundDelegateSummary = SoundDelegate()
-    @State private var nextAudioChunkSummary: Data? = nil
-    @State private var localTTSTaskSummary: Task<Void, Never>? = nil
+    @State private var selectedMacVoiceID: String = (UserDefaults.standard.string(forKey: "LocalTTS.Mac.SelectedVoiceID") ?? (preferredMacVoiceIdentifier() ?? ""))
     #endif
-
-    // Voice picker state removed for macOS shortcut-driven TTS
     
     // This is a key optimization - adding an ID to the view itself
     // forces the view to refresh when the post ID changes
@@ -139,149 +188,168 @@ struct RedditDetailView: View {
     
     // Track the view's creation time to help with debugging
     private let viewCreationTime = Date()
-
-    private var formattedAnswerText: Text {
-        Text(verbatim: answerText)
-    }
-
     
     var body: some View {
-        ScrollViewReader { proxy in
-            Group {
-                if let post = appState.selectedRedditPost {
+        Group {
+            if let post = appState.selectedRedditPost {
+                ScrollViewReader { proxy in
                     postDetailView(for: post, proxy: proxy)
-                        .onAppear {
-                            // Load comments when view appears
-                            loadComments(for: post)
-                            answerParagraphs = nil
-                            commentsSentToLLMCount = nil
-                            print("📱 RedditDetailView: View appeared")
-                        }
-                        .onDisappear {
-                            // Clean up when view disappears
-                            cancellables.removeAll()
-                            commentLoadTask?.cancel()
-                            print("📱 RedditDetailView: View disappeared, canceling all requests")
-                        }
-                } else {
-                    // Empty view when no post is selected - this allows ContentView to handle navigation
-                    EmptyView()
                 }
-            }
-            .onChange(of: appState.selectedRedditPost?.id) { newPostId in
-                // Reload comments when selectedRedditPost changes
-                if let newPostId = newPostId, let post = appState.selectedRedditPost {
-                    print("📱 RedditDetailView: Post selection changed to ID: \(newPostId)")
-                    
-                    // Reset all state
-                    self.comments = []
-                    self.commentSummary = nil
-                    self.showCommentSummary = false
-                    self.showQAInterface = false
-                    self.questionText = ""
-                    self.answerText = "Ask a question about this post or its comments..."
-                    self.answerParagraphs = nil
-                    self.commentsSentToLLMCount = nil
-                    
-                    // Cancel previous requests
-                    cancellables.removeAll()
-                    commentLoadTask?.cancel()
-                    
-                    // Load the new post's comments
+                .onAppear {
+                    // Load comments when view appears
                     loadComments(for: post)
-                    
-                    // Scroll back to the top when switching posts
-                    withAnimation(.easeInOut) {
-                        proxy.scrollTo(redditTopAnchor, anchor: .top)
-                    }
+                    // Reset summary state to avoid doubles
+                    commentSummary = nil
+                    showCommentSummary = false
+                    commentsSentToLLMCount = nil
+                    print("📱 RedditDetailView: View appeared, resetting comment summary and count")
                 }
+                .onDisappear {
+                    // Clean up when view disappears
+                    cancellables.removeAll()
+                    print("📱 RedditDetailView: View disappeared, canceling all requests")
+                }
+            } else {
+                // Empty view when no post is selected - this allows ContentView to handle navigation
+                EmptyView()
             }
         }
-        .sheet(isPresented: $showSelectionAskAIResponse) {
+        .onChange(of: appState.selectedRedditPost?.id) { newPostId in
+            // Reload comments when selectedRedditPost changes
+            if let newPostId = newPostId, let post = appState.selectedRedditPost {
+                print("📱 RedditDetailView: Post selection changed to ID: \(newPostId)")
+                
+                // Reset all state
+                self.comments = []
+                self.commentSummary = nil
+                self.showCommentSummary = false
+                self.showQAInterface = false
+                self.questionText = ""
+                self.answerText = "Ask a question about this post or its comments..."
+                self.commentsSentToLLMCount = nil
+                
+                // Cancel previous requests
+                cancellables.removeAll()
+                
+                // Load the new post's comments
+                loadComments(for: post)
+            }
+        }
+        .askAILoadingOverlay(isAskingSelectionAI)
+        .sheet(isPresented: $showSelectionAskAISheet) {
             AskAIResponseSheet(
-                isLoading: isSelectionAskAIInFlight,
-                response: selectionAskAIResponse,
-                errorMessage: selectionAskAIError,
-                onClose: { showSelectionAskAIResponse = false },
-                onCopy: copySelectionAskAIResponse
+                question: selectionAskAIPrompt,
+                answer: selectionAskAIResponse,
+                onCopy: {
+                    #if os(iOS)
+                    UIPasteboard.general.string = selectionAskAIResponse
+                    #elseif os(macOS)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(selectionAskAIResponse, forType: .string)
+                    #endif
+                }
             )
-        }
-        .confirmationDialog(
-            "Local request is too large",
-            isPresented: Binding(
-                get: { appState.pendingLocalReroute?.presentationScope == .deepAnalysis },
-                set: {
-                    if !$0, appState.pendingLocalReroute?.presentationScope == .deepAnalysis {
-                        appState.dismissPendingLocalReroute()
-                    }
-                }
-            ),
-            titleVisibility: .visible,
-            presenting: appState.pendingLocalReroute
-        ) { _ in
-            ForEach(LocalRerouteProvider.allCases) { provider in
-                Button(provider.displayName) {
-                    appState.reroutePendingLocalRequest(to: provider)
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                appState.dismissPendingLocalReroute()
-            }
-        } message: { request in
-            Text(request.message)
+            #if os(iOS)
+            .presentationDetents([.medium, .large])
+            .presentationCornerRadius(32)
+            #endif
         }
     }
+
+    #if os(iOS)
+    private var isCompactWidth: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+    }
+
+    private func usesCompactDetailLayout(availableWidth: CGFloat) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .phone ||
+            horizontalSizeClass == .compact ||
+            availableWidth < 700
+    }
+
+    private func detailContentWidth(in geometry: GeometryProxy) -> CGFloat? {
+        usesCompactDetailLayout(availableWidth: geometry.size.width)
+            ? max(0, geometry.size.width - (iphoneDetailHorizontalInset * 2))
+            : nil
+    }
+
+    private func detailTopPadding(in geometry: GeometryProxy) -> CGFloat {
+        // Overlay bar is 60pt in ContentView; align content directly below it.
+        return 60
+    }
+    #endif
     
     private func postDetailView(for post: RedditPost, proxy: ScrollViewProxy) -> some View {
-        let visiblePostSummary = post.summary
-        return ZStack {
-            // Reddit gets a true black base in dark mode.
-            if colorScheme == .dark {
-                Color.black
-                    .ignoresSafeArea()
-            } else {
-                AppColors.redditBackground(for: colorScheme)
-                    .ignoresSafeArea()
-            }
+        ZStack {
+            // Keep detail background truly black in dark mode.
+            detailBackground
+                .ignoresSafeArea()
             
-            // Material overlay for glass effect
-            if colorScheme == .dark {
-                Color.black
-                    .ignoresSafeArea()
+            // Material overlay for glass effect:
+            // Remove on iPhone to eliminate any chance of scroll/touch interference.
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom == .phone || !shouldShowMaterialOverlay {
+                EmptyView()
             } else {
                 Color.clear
                     .background(.regularMaterial)
                     .ignoresSafeArea()
             }
+            #else
+            if shouldShowMaterialOverlay {
+                Color.clear
+                    .background(.regularMaterial)
+                    .ignoresSafeArea()
+            } else {
+                EmptyView()
+            }
+            #endif
             
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Color.clear
-                        .frame(height: 0)
-                        .id(redditTopAnchor)
-                    Button {
-                        openPostLink(post)
-                    } label: {
-                        Text(post.title)
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .foregroundColor(.primary)
-                            .multilineTextAlignment(.leading)
+            GeometryReader { geometry in
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Color.clear
+                            .frame(height: 0)
+                            .id(redditTopAnchor)
+                    Button(action: {
+                    if let url = post.url {
+                        #if os(macOS)
+                        NSWorkspace.shared.open(url)
+                        #else
+                        UIApplication.shared.open(url)
+                        #endif
+                    } else {
+                        // Construct Reddit URL if direct URL is not available
+                        let redditURL = URL(string: "https://www.reddit.com/r/\(post.subreddit)/comments/\(post.id)")!
+                        #if os(macOS)
+                        NSWorkspace.shared.open(redditURL)
+                        #else
+                        UIApplication.shared.open(redditURL)
+                        #endif
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    HStack {
-                        Text("r/\(post.subreddit)")
-                            .font(.subheadline)
-                        Spacer()
-                        Text(post.publishDate, style: .date)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Text("Posted by u/\(post.author)")
+                }) {
+                    Text(post.title)
+                        .font(postTitleFont)
+                        .foregroundColor(.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                HStack {
+                    Text("r/\(post.subreddit)")
+                        .font(.subheadline)
+                    Spacer()
+                    Text(post.publishDate, style: .date)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                }
+                
+                Text("Posted by u/\(post.author)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
                 
                 HStack {
                     Label("\(post.score)", systemImage: "arrow.up")
@@ -292,15 +360,26 @@ struct RedditDetailView: View {
                 
                 Divider()
                 
-                if appState.isLoading && visiblePostSummary == nil {
+                if appState.isSummarizingRedditPost(post) && post.summary == nil {
                     VStack(spacing: 16) {
                         HStack {
                             Text("Summary")
                                 .font(.headline)
+                            activeSummaryProviderBadge
                             Spacer()
+                            if shouldShowExplicitWebAIControls {
+                                Button {
+                                    appState.requestWebSummary(for: post, comments: comments)
+                                } label: {
+                                    Image(systemName: "globe")
+                                        .font(.subheadline)
+                                }
+                                .buttonStyle(LiquidGlassButtonStyle())
+                                .help("Generate Reddit summary with \(appState.settings.selectedWebAIProvider.displayName)")
+                            }
                         }
                         let summaryStreamText = appState.mlxStreamingText
-                        if (appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !summaryStreamText.isEmpty {
+                        if (appState.settings.selectedSummaryProvider == .appleLocal || appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !summaryStreamText.isEmpty {
                             ScrollView {
                                 Text(summaryStreamText)
                                     .font(.body)
@@ -308,142 +387,48 @@ struct RedditDetailView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding()
                             }
-                            .background(colorScheme == .dark ? Color.black : AppColors.systemGray6)
+                            .background(AppColors.systemGray6)
                             .cornerRadius(10)
                         } else {
                             VStack(spacing: 8) {
                                 ProgressView()
-                                Text("Summarizing post...")
+                                Text(appState.isWaitingForAppleIntelligence
+                                     ? appState.appleIntelligenceWaitProgress
+                                     : "Summarizing post...")
                                     .foregroundColor(.secondary)
                                     .font(.caption)
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(colorScheme == .dark ? Color.black : AppColors.systemGray6)
+                            .background(AppColors.systemGray6)
                             .cornerRadius(10)
                         }
                     }
                     Divider()
-                } else if appState.isWaitingForAppleIntelligence && visiblePostSummary == nil {
-                    VStack(spacing: 16) {
-                        HStack {
-                            Text("Summary")
+                } else if let summary = post.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+	                    VStack(alignment: .leading, spacing: 8) {
+	                        HStack {
+	                            Text("Summary")
                                 .font(.headline)
+                            activeSummaryProviderBadge
                             Spacer()
-                        }
-                        VStack(spacing: 8) {
-                            ProgressView()
-                            Text(appState.appleIntelligenceWaitProgress)
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(colorScheme == .dark ? Color.black : AppColors.systemGray6)
-                        .cornerRadius(10)
-                    }
-                    Divider()
-                } else if let summary = visiblePostSummary,
-                          !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Summary")
-                                .font(.headline)
-                            Spacer()
-                            
-                            // TTS Controls with LiquidGlassButtonStyle
-                            HStack(spacing: 12) {
-                                // Cloud TTS button
+                            if shouldShowExplicitWebAIControls {
                                 Button {
-                                    speakPostSummary(summary)
+                                    appState.requestWebSummary(for: post, comments: comments)
                                 } label: {
-                                    Image(systemName: "speaker.wave.2")
+                                    Image(systemName: "globe")
                                         .font(.subheadline)
                                 }
                                 .buttonStyle(LiquidGlassButtonStyle())
-                                .ttsActiveGlow(isSynthesizingSpeechSummary, color: .blue)
-                                .help("Read aloud (Cloud)")
-                                .disabled(isSynthesizingSpeechSummary || isSpeakingLocallySummary || summary.isEmpty)
-                                
-                                // Stop speech
-                                Button {
-                                    stopPostSummarySpeech()
-                                } label: {
-                                    Image(systemName: "stop.fill")
-                                        .font(.subheadline)
-                                }
-                                .buttonStyle(LiquidGlassButtonStyle())
-                                .help("Stop speech")
-                                
-                                // Local TTS button
-                                Button {
-                                    speakPostSummaryLocally(summary)
-                                } label: {
-                                    Image(systemName: "speaker.wave.2.circle")
-                                        .font(.subheadline)
-                                }
-                                .buttonStyle(LiquidGlassButtonStyle())
-                                .ttsActiveGlow(isSpeakingLocallySummary, color: .green)
-                                .help("Read aloud (Local)")
-                                .disabled(isSynthesizingSpeechSummary || summary.isEmpty)
+                                .help("Generate Reddit summary with \(appState.settings.selectedWebAIProvider.displayName)")
                             }
                         }
-                        
-                        // Directly render markdown content
-                        if colorScheme == .dark {
-                            SelectableText(.init(summary))
-                                .font(.body)
-                                .onAskAI { selection in
-                                    askAIFromRedditSelection(selection, post: post, action: .standard)
-                                }
-                                .onAskAIWeb { selection in
-                                    askAIFromRedditSelection(selection, post: post, action: .web)
-                                }
-                                .padding()
-                                .background(Color.black)
-                                .cornerRadius(10)
-                        } else {
-                            SelectableText(.init(summary))
-                                .font(.body)
-                                .onAskAI { selection in
-                                    askAIFromRedditSelection(selection, post: post, action: .standard)
-                                }
-                                .onAskAIWeb { selection in
-                                    askAIFromRedditSelection(selection, post: post, action: .web)
-                                }
-                                .padding()
-                                .background(.regularMaterial)
-                                .cornerRadius(10)
-                        }
-                        
-                        // TTS status indicators
-                        if isSynthesizingSpeechSummary {
-                            HStack {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .padding(.trailing, 5)
-                                Text("Reading summary...")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else if isSpeakingLocallySummary {
-                            HStack {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .padding(.trailing, 5)
-                                Text("Reading with local TTS...")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        
-                        if let error = speechSynthesisErrorSummary {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundColor(.red)
-                        }
-
-                        // Throughput badge for on-device providers (post summary)
+                        GlassySummary(
+                            summary: summary,
+                            onAskAISelection: handleAskAISelection(selectedText:context:),
+                            onAskAIWebSelection: handleAskAIWebSelection(selectedText:context:)
+                        )
+                        // Throughput badge for on-device providers (summary)
                         let _redditSummaryProvider = appState.settings.selectedSummaryProvider
                         if (_redditSummaryProvider == .mlxLocal || _redditSummaryProvider == .coreAIMLXLocal || _redditSummaryProvider == .appleLocal || _redditSummaryProvider == .applePCCGateway || _redditSummaryProvider == .summarizeDaemon),
                            !appState.mlxLastThroughput.isEmpty {
@@ -454,12 +439,12 @@ struct RedditDetailView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 4)
                         }
-                    }
-                    Divider()
-                }
-
-                // Display post content if available
-                if !post.content.isEmpty {
+	                    }
+	                    Divider()
+	                }
+	                
+	                // Display post content if available
+	                if !post.content.isEmpty {
                     redditBodyView(for: post.content)
                     .padding(.bottom, 8)
                 }
@@ -468,7 +453,6 @@ struct RedditDetailView: View {
                 if let mainImageURL = post.bestImageURL {
                     Button(action: {
                         selectedImageURL = mainImageURL
-                        showingImagePopup = true
                     }) {
                         KFImage(mainImageURL)
                             .placeholder {
@@ -510,7 +494,6 @@ struct RedditDetailView: View {
                                 ForEach(additionalImages, id: \.absoluteString) { url in
                                     Button(action: {
                                         selectedImageURL = url
-                                        showingImagePopup = true
                                     }) {
                                         KFImage(url)
                                             .placeholder {
@@ -578,22 +561,24 @@ struct RedditDetailView: View {
                                     }
                                 }
                 
-                if isLoadingComments && commentSummary == nil && !comments.isEmpty {
+                // Show loading indicator while summarizing
+                if isLoadingComments && commentSummary == nil {
                     VStack(spacing: 16) {
                         HStack {
                             Text("Comment Summary")
                                 .font(.headline)
+                            activeSummaryProviderBadge
                             Spacer()
                         }
                         VStack(spacing: 8) {
                             ProgressView()
-                            Text("Summarizing \(comments.count) comments...")
+                            Text("Analyzing \(comments.count) comments...")
                                 .foregroundColor(.secondary)
                                 .font(.caption)
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(colorScheme == .dark ? Color.black : AppColors.systemGray6)
+                        .background(AppColors.systemGray6)
                         .cornerRadius(10)
                     }
                     Divider()
@@ -602,6 +587,7 @@ struct RedditDetailView: View {
                         HStack {
                             Text("Comment Summary")
                                 .font(.headline)
+                            activeSummaryProviderBadge
                             Spacer()
                         }
                         VStack(spacing: 8) {
@@ -612,7 +598,7 @@ struct RedditDetailView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(colorScheme == .dark ? Color.black : AppColors.systemGray6)
+                        .background(AppColors.systemGray6)
                         .cornerRadius(10)
                     }
                     Divider()
@@ -621,8 +607,9 @@ struct RedditDetailView: View {
                         HStack {
                             Text("Comment Summary")
                                 .font(.headline)
+                            activeSummaryProviderBadge
                             Spacer()
-                            Button(action: { 
+                            Button(action: {
                                 showCommentSummary.toggle()
                                 print("📱 RedditDetailView: Comment summary visibility toggled to \(showCommentSummary)")
                             }) {
@@ -630,32 +617,11 @@ struct RedditDetailView: View {
                             }
                         }
                         if showCommentSummary {
-                            // Directly render markdown content
-                            if colorScheme == .dark {
-                                SelectableText(.init(summary.summary))
-                                    .font(.body)
-                                    .onAskAI { selection in
-                                        askAIFromRedditSelection(selection, post: post, action: .standard)
-                                    }
-                                    .onAskAIWeb { selection in
-                                        askAIFromRedditSelection(selection, post: post, action: .web)
-                                    }
-                                    .padding()
-                                    .background(Color.black)
-                                    .cornerRadius(10)
-                            } else {
-                                SelectableText(.init(summary.summary))
-                                    .font(.body)
-                                    .onAskAI { selection in
-                                        askAIFromRedditSelection(selection, post: post, action: .standard)
-                                    }
-                                    .onAskAIWeb { selection in
-                                        askAIFromRedditSelection(selection, post: post, action: .web)
-                                    }
-                                    .padding()
-                                    .background(.regularMaterial)
-                                    .cornerRadius(10)
-                            }
+                            GlassyCommentSummary(
+                                summary: summary,
+                                onAskAISelection: handleAskAISelection(selectedText:context:),
+                                onAskAIWebSelection: handleAskAIWebSelection(selectedText:context:)
+                            )
                         }
                         // Throughput badge for on-device providers (comment summary)
                         let _redditCommentSummaryProvider = appState.settings.selectedSummaryProvider
@@ -671,102 +637,10 @@ struct RedditDetailView: View {
                     }
                     Divider()
                 }
-
+                
                 // Display comments section
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text(isLoadingComments ? "Comments" : "\(comments.count) Comments")
-                            .font(.system(size: 20, weight: .semibold))
-                        
-                        if isLoadingComments {
-                            ProgressView()
-                                .padding(.leading, 8)
-                        }
-                        
-                        Spacer()
-                        
-                        if !comments.isEmpty {
-                            Menu {
-                                ForEach(RedditService.CommentSortOption.allCases) { sortOption in
-                                    Button {
-                                        selectCommentSort(sortOption, for: post)
-                                    } label: {
-                                        Label(
-                                            sortOption.displayName,
-                                            systemImage: sortOption == selectedCommentSort ? "checkmark" : "arrow.up.arrow.down"
-                                        )
-                                    }
-                                    .disabled(sortOption == selectedCommentSort)
-                                }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(selectedCommentSort.displayName)
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                }
-                            }
-                            .font(.subheadline.weight(.medium))
-                            .foregroundColor(.secondary)
-                            .padding(.trailing, 4)
-                            .disabled(isLoadingComments)
-                            .accessibilityLabel("Comment sort")
-
-                            // Add Deep Analysis Button
-                            Button {
-                                analyticsProviderOverride = nil
-                                isShowingAnalytics = true
-                            } label: {
-                                Image(systemName: "chart.pie.fill")
-                                    .font(.subheadline)
-                            }
-                            .accessibilityLabel("Deep Analysis")
-                            .buttonStyle(LiquidGlassButtonStyle())
-
-                            if shouldShowExplicitWebAIControls {
-                                Menu {
-                                    Button {
-                                        summarizeComments(for: post, forceWebAI: true)
-                                    } label: {
-                                        Label("Comment Summary", systemImage: "text.redaction")
-                                    }
-
-                                    Button {
-                                        analyticsProviderOverride = .webAI
-                                        isShowingAnalytics = true
-                                    } label: {
-                                        Label("Deep Analysis", systemImage: "chart.pie.fill")
-                                    }
-                                } label: {
-                                    Image(systemName: "globe")
-                                        .font(.subheadline)
-                                }
-                                .buttonStyle(LiquidGlassButtonStyle())
-                                .help("Send comment prompts to \(appState.settings.selectedWebAIProvider.displayName)")
-                            }
-                            
-                            Button(action: {
-                                print("📱 Summarize button pressed - clearing summary and calling summarizeComments")
-                                commentSummary = nil
-                                summarizeComments(for: post)
-                            }) {
-                                Image(systemName: "text.redaction")
-                                    .font(.subheadline)
-                            }
-                            .accessibilityLabel("Summarize")
-                            .disabled(isLoadingComments)
-                            .buttonStyle(LiquidGlassButtonStyle())
-                            
-                            Button(action: {
-                                showQAInterface.toggle()
-                            }) {
-                                Image(systemName: showQAInterface ? "xmark.circle" : "questionmark.circle")
-                                    .font(.subheadline)
-                            }
-                            .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
-                            .disabled(isLoadingComments)
-                            .buttonStyle(LiquidGlassButtonStyle())
-                        }
-                    }
+                    commentsSectionHeader(for: post, availableWidth: geometry.size.width)
                     
                     if isLoadingComments && comments.isEmpty {
                         VStack(spacing: 16) {
@@ -776,253 +650,35 @@ struct RedditDetailView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(20)
-                    } else if let banner = commentBanner, comments.isEmpty {
-                        RedditRateLimitBanner(status: banner)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                    } else if let errorMessage = commentLoadError, comments.isEmpty {
-                        Text(errorMessage)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(20)
                     } else if comments.isEmpty {
-                        Text("No comments available.")
-                            .foregroundColor(.secondary)
-                            .italic()
-                            .padding(20)
+                        VStack(alignment: .leading, spacing: 12) {
+                            if let statusMessage = commentLoadStatusMessage {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                    Text(statusMessage)
+                                        .font(.footnote)
+                                        .foregroundColor(.primary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            } else {
+                                Text("No comments available.")
+                                    .foregroundColor(.secondary)
+                                    .italic()
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(20)
                     } else {
                         // Display the toggled Q&A interface
                         if showQAInterface {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Ask a question about this post:")
-                                    .font(.headline)
-                                
-                                if #available(iOS 26.0, *) {
-                                    TextField("Type your question...", text: $questionText)
-                                        .textFieldStyle(LiquidGlassTextFieldStyle())
-                                        .disabled(isProcessingQuestion)
-                                        .onSubmit {
-                                            if !questionText.isEmpty && !isProcessingQuestion {
-                                                askQuestion(post: post)
-                                            }
-                                        }
-                                        .onAppear {
-                                            print("📱 RedditDetailView: Q&A interface appeared")
-                                        }
-                                } else {
-                                    TextField("Type your question...", text: $questionText)
-                                        .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(cornerRadius: 12, tintColor: .blue.opacity(0.3)))
-                                        .disabled(isProcessingQuestion)
-                                        .onSubmit {
-                                            if !questionText.isEmpty && !isProcessingQuestion {
-                                                askQuestion(post: post)
-                                            }
-                                        }
-                                        .onAppear {
-                                            print("📱 RedditDetailView: Q&A interface appeared")
-                                        }
-                                }
-                                
-                                HStack {
-                                    Button(action: {
-                                        if !questionText.isEmpty {
-                                            askQuestion(post: post)
-                                        }
-                                    }) {
-                                        Image(systemName: "questionmark.circle")
-                                            .font(.subheadline)
-                                    }
-                                    .accessibilityLabel("Ask")
-                                    .buttonStyle(LiquidGlassButtonStyle())
-                                    .disabled(questionText.isEmpty || isProcessingQuestion)
-
-                                    if shouldShowExplicitWebAIControls {
-                                        Button(action: {
-                                            askWebQuestion(post: post)
-                                        }) {
-                                            Image(systemName: "globe")
-                                                .font(.subheadline)
-                                        }
-                                        .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
-                                        .buttonStyle(LiquidGlassButtonStyle())
-                                        .disabled(questionText.isEmpty || isProcessingQuestion)
-                                    }
-                                    
-                                    Button(action: {
-                                        showQAInterface = false
-                                        questionText = ""
-                                        answerText = "Ask a question about this post or its comments..."
-                                        answerParagraphs = nil
-                                        commentsSentToLLMCount = nil
-                                        print("📱 RedditDetailView: Q&A interface canceled by user")
-                                    }) {
-                                        Image(systemName: "xmark.circle")
-                                            .font(.subheadline)
-                                    }
-                                    .accessibilityLabel("Cancel")
-                                    .buttonStyle(LiquidGlassButtonStyle())
-                                    
-                                    Spacer()
-                                }
-                                
-                                let qaStreamText = appState.mlxStreamingText
-                                if isProcessingQuestion && (appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !qaStreamText.isEmpty {
-                                    Text(qaStreamText)
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                        .padding(.vertical, 16)
-                                        .padding(.horizontal, 20)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                } else if let paragraphs = answerParagraphs, !paragraphs.isEmpty {
-                                    SelectableText(paragraphs.joined(separator: "\n\n"))
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                        .onAskAI { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .standard)
-                                        }
-                                        .onAskAIWeb { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .web)
-                                        }
-                                        .padding(.vertical, 16)
-                                        .padding(.horizontal, 20)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                } else {
-                                    // Fallback to markdown rendering if JSON decoding fails
-                                    SelectableText(answerText)
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                        .onAskAI { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .standard)
-                                        }
-                                        .onAskAIWeb { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .web)
-                                        }
-                                        .padding(.vertical, 16)
-                                        .padding(.horizontal, 20)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                HStack(spacing: 12) {
-                                    // Cloud TTS button
-                                    Button {
-                                        speakAnswerQA(answerText)
-                                    } label: {
-                                        Image(systemName: "speaker.wave.2")
-                                            .font(.subheadline)
-                                    }
-                                    .buttonStyle(LiquidGlassButtonStyle())
-                                    .ttsActiveGlow(isSynthesizingSpeechQA, color: .blue)
-                                    .help("Read aloud (Cloud)")
-                                    .disabled(isSynthesizingSpeechQA || isSpeakingLocallyQA || answerText.isEmpty || answerText == "Ask a question about this post or its comments...")
-                                    
-                                    // Stop speech
-                                    Button {
-                                        stopQASpeech()
-                                    } label: {
-                                        Image(systemName: "stop.fill")
-                                            .font(.subheadline)
-                                    }
-                                    .buttonStyle(LiquidGlassButtonStyle())
-                                    .help("Stop speech")
-                                    
-                                    // Local TTS button
-                                    Button {
-                                        speakAnswerLocallyQA(answerText)
-                                    } label: {
-                                        Image(systemName: "speaker.wave.2.circle")
-                                            .font(.subheadline)
-                                    }
-                                    .buttonStyle(LiquidGlassButtonStyle())
-                                    .ttsActiveGlow(isSpeakingLocallyQA, color: .green)
-                                    .help("Read aloud (Local)")
-                                    .disabled(isSynthesizingSpeechQA || answerText.isEmpty || answerText == "Ask a question about this post or its comments...")
-                                    
-                                    // Copy button
-                                    Button(action: {
-                                        #if os(iOS)
-                                        UIPasteboard.general.string = answerText
-                                        #elseif os(macOS)
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(answerText, forType: .string)
-                                        #endif
-                                    }) {
-                                        Image(systemName: "doc.on.doc")
-                                            .font(.subheadline)
-                                    }
-                                    .buttonStyle(LiquidGlassButtonStyle())
-                                    .help("Copy answer")
-                                    .disabled(answerText.isEmpty || answerText == "Ask a question about this post or its comments...")
-                                }
-                                .padding(.top, 5)
-                                
-                                // TTS status indicators
-                                if isSynthesizingSpeechQA {
-                                    HStack {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                            .padding(.trailing, 5)
-                                        Text("Reading answer...")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.top, 4)
-                                } else if isSpeakingLocallyQA {
-                                    HStack {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                            .padding(.trailing, 5)
-                                        Text("Reading with local TTS...")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.top, 4)
-                                } else if appState.isWaitingForRedditQA {
-                                    HStack {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                            .padding(.trailing, 5)
-                                        Text(appState.redditQAWaitProgress)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .padding(.top, 4)
-                                }
-                                
-                                if let error = speechSynthesisErrorQA {
-                                    Text(error)
-                                        .font(.caption)
-                                        .foregroundColor(.red)
-                                        .padding(.top, 4)
-                                }
-                                
-                                // Display the comment count used for the answer
-                                if let count = commentsSentToLLMCount, !isProcessingQuestion, answerText != "Ask a question about this post or its comments..." {
-                                    Text("Answer based on \(count) comments")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .padding(.top, 4)
-                                }
-
-                                // Throughput badge for on-device providers (Q&A only)
-                                let _redditQAProvider = appState.settings.selectedSummaryProvider
-                                if (_redditQAProvider == .mlxLocal || _redditQAProvider == .coreAIMLXLocal || _redditQAProvider == .appleLocal || _redditQAProvider == .applePCCGateway || _redditQAProvider == .summarizeDaemon),
-                                   !appState.mlxLastQAThroughput.isEmpty,
-                                   !isProcessingQuestion,
-                                   answerText != "Ask a question about this post or its comments..." {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "cpu").font(.caption2)
-                                        Text(appState.mlxLastQAThroughput).font(.caption2).monospacedDigit()
-                                    }
-                                    .foregroundStyle(.secondary)
-                                    .padding(.top, 4)
-                                }
-                            }
-                            .padding()
-                            .modifier(AdaptiveGlassModifier(cornerRadius: 12, tintColor: .blue.opacity(0.1)))
-                            .padding(.bottom, 16)
+                            redditQASection(post: post)
                         }
                         
                         // Display limited comments with option to load more
-                        CommentThreadView(comments: displayedComments, post: post)
+                        CommentThreadView(comments: displayedComments, post: post) { parentCommentID, reply in
+                            handleReplyPosted(to: parentCommentID, reply: reply, post: post)
+                        }
                         
                         if hasMoreCommentsToLoad {
                             Button {
@@ -1052,6 +708,13 @@ struct RedditDetailView: View {
                 .padding(14)
                 .background {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        #if os(iOS)
+                        .fill(
+                            colorScheme == .dark
+                                ? Color(red: 0.045, green: 0.047, blue: 0.075).opacity(0.96)
+                                : Color.white.opacity(0.94)
+                        )
+                        #else
                         .fill(.ultraThinMaterial)
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -1061,6 +724,7 @@ struct RedditDetailView: View {
                                         : Color.white.opacity(0.82)
                                 )
                         )
+                        #endif
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -1074,62 +738,38 @@ struct RedditDetailView: View {
                         .stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.45), lineWidth: 1)
                         .blendMode(.screen)
                 }
+                #if os(macOS)
                 .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.34 : 0.1), radius: 24, x: 0, y: 12)
-            }
-            .padding()
-            #if os(iOS)
-            // Add top padding for navigation overlay - balanced for iPhone and iPad
-            .padding(.top, UIDevice.current.userInterfaceIdiom == .phone ? 120 : 180)
-            #endif
-            // No extra top padding needed on macOS since there's no overlay navigation
-            #if os(iOS)
-            // Apply enhanced swipe back only for iPad
-            .modifier(ConditionalEnhancedSwipeBack(isEnabled: UIDevice.current.userInterfaceIdiom != .phone, appState: appState))
-            #else
-            .enhancedSwipeBack {
-                appState.navigateBack()
-            }
-            #endif
-        }
-        
-        .overlay(alignment: .bottomTrailing) {
-            #if os(iOS)
-            if UIDevice.current.userInterfaceIdiom != .phone {
-                Button(action: {
-                    withAnimation(.easeInOut) {
-                        proxy.scrollTo(redditTopAnchor, anchor: .top)
-                    }
-                }) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2.weight(.semibold))
+                #else
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.16 : 0.045), radius: 6, x: 0, y: 3)
+                #endif
                 }
-                .buttonStyle(LiquidGlassButtonStyle())
-                .padding(.trailing, 24)
-                .padding(.bottom, 24)
-            }
-            #else
-            Button(action: {
-                withAnimation(.easeInOut) {
-                    proxy.scrollTo(redditTopAnchor, anchor: .top)
+                #if os(iOS)
+                .frame(
+                    width: detailContentWidth(in: geometry),
+                    alignment: .leading
+                )
+                #endif
+                .padding(.horizontal)
+                .padding(.bottom)
+                .zIndex(1) // ensure ScrollView sits above any background layers for proper gesture hit-testing
+                #if os(iOS)
+                .padding(.top, usesCompactDetailLayout(availableWidth: geometry.size.width) ? 16 : detailTopPadding(in: geometry))
+                #else
+                .padding(.top, 180) // Add extra top padding to account for overlay navigation bar and safe area
+                #endif
+                // iPhone: use system edge swipe from ContentView overlay to avoid gesture conflicts here
                 }
-            }) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2.weight(.semibold))
             }
-            .buttonStyle(LiquidGlassButtonStyle())
-            .padding(.trailing, 24)
-            .padding(.bottom, 24)
-            #endif
-        }
         
-        
+        } // Close ZStack
         // Use this key view ID to ensure proper reconstruction when post changes
         .id("reddit-detail-\(post.id)")
         #if os(iOS)
         // On iPhone, use standard navigation bar
         .navigationBarHidden(UIDevice.current.userInterfaceIdiom != .phone)
         #endif
-        // Fallback notification overlay
+        // Fallback notification overlay (non-interactive so it doesn't block scroll/taps)
         .overlay(
             VStack {
                 if appState.showFallbackNotification {
@@ -1154,6 +794,7 @@ struct RedditDetailView: View {
                 }
                 Spacer()
             }
+            .allowsHitTesting(false) // critical: don't intercept gestures
         )
         // Add sheet for Analytics View
         .sheet(isPresented: $isShowingAnalytics, onDismiss: {
@@ -1174,121 +815,1023 @@ struct RedditDetailView: View {
                     .presentationBackground(.ultraThinMaterial) // Ultra translucent background
                     .presentationBackgroundInteraction(.enabled)
                     #endif
-            } else {
-                // Provide a fallback view to satisfy the ViewBuilder type checker
-                EmptyView()
             }
         }
         // Add sheet for image popup (consistent with comment images)
-        #if os(iOS)
-        .fullScreenCover(isPresented: $showingImagePopup) {
-            if let imageURL = selectedImageURL {
-                ImagePopupView(imageURL: imageURL)
-                    .onAppear {
-                        print("Showing Reddit post image popup with URL: \(imageURL)")
+        .sheet(item: $selectedImageURL) { imageURL in
+            ImagePopupView(imageURL: imageURL)
+                .onAppear {
+                    print("Showing Reddit post image popup with URL: \(imageURL)")
+                }
+        }
+        // Add floating loading indicator overlay for iPhone
+        .overlay {
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                ZStack {
+                    // Show spinner for POST summary
+                    if appState.isSummarizingRedditPost(post) && post.summary == nil {
+                        VStack {
+                            Spacer()
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text(appState.isWaitingForAppleIntelligence
+                                     ? appState.appleIntelligenceWaitProgress
+                                     : "Summarizing post...")
+                                    .foregroundColor(.white)
+                                    .font(.subheadline)
+                            }
+                            .padding()
+                            .background(.black.opacity(0.8))
+                            .cornerRadius(10)
+                            .padding(.bottom, 100) // Position above bottom bar
+                        }
                     }
-            } else {
-                EmptyView()
+                    
+                    // Show spinner for COMMENT summary
+                    if isLoadingComments && commentSummary == nil {
+                        VStack {
+                            Spacer()
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("Analyzing comments...")
+                                    .foregroundColor(.white)
+                                    .font(.subheadline)
+                            }
+                            .padding()
+                            .background(.black.opacity(0.8))
+                            .cornerRadius(10)
+                            .padding(.bottom, 100) // Position above bottom bar
+                        }
+                    }
+                    
+                    if isProcessingQuestion {
+                        VStack {
+                            Spacer()
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("Processing question...")
+                                    .foregroundColor(.white)
+                                    .font(.subheadline)
+                            }
+                            .padding()
+                            .background(.black.opacity(0.8))
+                            .cornerRadius(10)
+                            .padding(.bottom, 100) // Position above bottom bar
+                        }
+                    }
+                }
+            }
+            #endif
+        }
+#if os(iOS)
+        .overlay(alignment: .bottomTrailing) {
+            if UIDevice.current.userInterfaceIdiom != .phone {
+                Button(action: {
+                    withAnimation(.easeInOut) {
+                        proxy.scrollTo(redditTopAnchor, anchor: .top)
+                    }
+                }) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2.weight(.semibold))
+                }
+                .buttonStyle(LiquidGlassButtonStyle())
+                .padding(.trailing, 24)
+                .padding(.bottom, 24)
             }
         }
-        #else
-        .sheet(isPresented: $showingImagePopup) {
-            if let imageURL = selectedImageURL {
-                let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? .zero
-                let preferredWidth = max(min(screen.width * 0.55, 820), 460)
-                let preferredHeight = max(min(screen.height * 0.65, 820), 420)
-                ImagePopupView(imageURL: imageURL)
-                    .frame(width: preferredWidth, height: preferredHeight)
-                    .background(Color.black.opacity(0.9))
-                    .cornerRadius(20)
-                    .onAppear {
-                        print("Showing Reddit post image popup with URL: \(imageURL)")
+#endif
+        // Add toolbar with buttons for non-phone layouts only.
+        .toolbar {
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom != .phone {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    HStack(spacing: 12) {
+                        Button(action: {
+                            withAnimation(.easeInOut) {
+                                proxy.scrollTo(redditTopAnchor, anchor: .top)
+                            }
+                        }) {
+                            Label("Scroll to Top", systemImage: "arrow.up.circle.fill")
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(LiquidGlassButtonStyle())
+
+                        Button(action: {
+                            // Ask AI button - toggle Q&A interface 
+                            withAnimation { 
+                                showQAInterface.toggle()
+                            }
+                            if !showQAInterface { // Reset count and state if Q&A closed
+                                commentsSentToLLMCount = nil
+                                questionText = ""
+                                answerText = "Ask a question about this post or its comments..."
+                                isProcessingQuestion = false // Ensure processing stops
+                            }
+                            print("📱 RedditDetailView: Ask AI button \(showQAInterface ? "enabled" : "disabled")")
+                        }) {
+                            Image(systemName: showQAInterface ? "xmark.circle.fill" : "questionmark.circle.fill")
+                                .font(.subheadline)
+                        }
+                        .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
+                        .buttonStyle(LiquidGlassButtonStyle())
+                        
+                        Spacer()
+                        
+                        Button(action: { 
+                            // Only show if there are comments to summarize
+                            if !comments.isEmpty {
+                                // Clear any existing summary first
+                                commentSummary = nil
+                                summarizeComments(for: post)
+                            }
+                        }) {
+                            Image(systemName: "text.quote")
+                                .font(.subheadline)
+                        }
+                        .accessibilityLabel("Summarize")
+                        .buttonStyle(LiquidGlassButtonStyle())
+                        .disabled(comments.isEmpty)
                     }
-            } else {
-                // Provide a fallback view to satisfy the ViewBuilder type checker
-                EmptyView()
+                }
             }
+            #else
+            ToolbarItemGroup(placement: .primaryAction) {
+                HStack(spacing: 12) {
+                    Button(action: {
+                        withAnimation(.easeInOut) {
+                            proxy.scrollTo(redditTopAnchor, anchor: .top)
+                        }
+                    }) {
+                        Label("Scroll to Top", systemImage: "arrow.up.circle.fill")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(LiquidGlassButtonStyle())
+
+                    Button(action: {
+                        // Ask AI button - toggle Q&A interface 
+                        withAnimation { 
+                            showQAInterface.toggle()
+                        }
+                        if !showQAInterface { // Reset count and state if Q&A closed
+                            commentsSentToLLMCount = nil
+                            questionText = ""
+                            answerText = "Ask a question about this post or its comments..."
+                            isProcessingQuestion = false // Ensure processing stops
+                        }
+                        print("📱 RedditDetailView: Ask AI button \(showQAInterface ? "enabled" : "disabled")")
+                    }) {
+                        Image(systemName: showQAInterface ? "xmark.circle.fill" : "questionmark.circle.fill")
+                            .font(.subheadline)
+                    }
+                    .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
+                    .buttonStyle(LiquidGlassButtonStyle())
+                    
+                    Spacer()
+                    
+                    Button(action: { 
+                        // Only show if there are comments to summarize
+                        if !comments.isEmpty {
+                            // Clear any existing summary first
+                            commentSummary = nil
+                            summarizeComments(for: post)
+                        }
+                    }) {
+                        Image(systemName: "text.quote")
+                            .font(.subheadline)
+                    }
+                    .accessibilityLabel("Summarize")
+                    .buttonStyle(LiquidGlassButtonStyle())
+                    .disabled(comments.isEmpty)
+                }
+            }
+            #endif
         }
-        #endif
-    }
     }
 
-    private func openPostLink(_ post: RedditPost) {
-        if let directURL = post.url {
-            #if os(macOS)
-            NSWorkspace.shared.open(directURL)
-            #else
-            UIApplication.shared.open(directURL)
-            #endif
-            return
+    private var redditQAAccentColor: Color {
+        Color.orange
+    }
+
+    private func redditQASection(post: RedditPost) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            redditQAHeader(post: post)
+            redditQAPromptField(post: post)
+            redditQAAnswerContent()
+            if !qaAnswerUnavailable {
+                redditQAUtilityButtons()
+            }
+            redditQAStatusIndicators()
         }
-        
-        guard let fallbackURL = URL(string: "https://www.reddit.com/r/\(post.subreddit)/comments/\(post.id)") else {
-            return
+        .padding(24)
+        .background(redditQACardBackground)
+        .padding(.bottom, 16)
+    }
+
+    private func redditQAHeader(post: RedditPost) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(AppColors.redditCardBorder(for: colorScheme))
+                    .shadow(color: redditQAAccentColor.opacity(0.36), radius: 12, x: 0, y: 0)
+
+                Image(systemName: "sparkles")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Ask a question about these comments")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text("Get quick answers based on the post and comment thread.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                if shouldShowExplicitWebAIControls {
+                    redditQAHeaderActionButton(
+                        systemName: "globe",
+                        accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+                        isDisabled: questionText.isEmpty || isProcessingQuestion
+                    ) {
+                        askWebQuestion(post: post)
+                    }
+                }
+
+                redditQAHeaderActionButton(systemName: "xmark", accessibilityLabel: "Cancel") {
+                    showQAInterface = false
+                    questionText = ""
+                    answerText = "Ask a question about this post or its comments..."
+                    commentsSentToLLMCount = nil
+                    print("📱 RedditDetailView: Q&A interface canceled by user")
+                }
+            }
         }
-        
-        #if os(macOS)
-        NSWorkspace.shared.open(fallbackURL)
+    }
+
+    private func redditQAPromptField(post: RedditPost) -> some View {
+        HStack(spacing: 12) {
+            redditQAInputField(post: post)
+
+            Button(action: {
+                if !questionText.isEmpty {
+                    askQuestion(post: post)
+                }
+            }) {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(Circle().fill(redditQAAccentColor))
+                    .shadow(color: redditQAAccentColor.opacity(0.45), radius: 10, x: 0, y: 0)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Ask")
+            .disabled(questionText.isEmpty || isProcessingQuestion)
+            .opacity(questionText.isEmpty || isProcessingQuestion ? 0.45 : 1)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.74))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppColors.redditCardBorder(for: colorScheme), lineWidth: 1.2)
+        )
+        .shadow(color: redditQAAccentColor.opacity(colorScheme == .dark ? 0.22 : 0.12), radius: 10, x: 0, y: 0)
+    }
+
+    private func redditQAInputField(post: RedditPost) -> some View {
+        TextField("Type your question...", text: $questionText)
+            .textFieldStyle(PlainTextFieldStyle())
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(.primary)
+            .submitLabel(.send)
+            .disabled(isProcessingQuestion)
+            .onSubmit {
+                if !questionText.isEmpty && !isProcessingQuestion {
+                    askQuestion(post: post)
+                }
+            }
+            .onAppear {
+                print("📱 RedditDetailView: Q&A interface appeared")
+            }
+    }
+
+    private func redditQAHeaderActionButton(
+        systemName: String,
+        accessibilityLabel: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isDisabled ? Color.secondary : redditQAAccentColor)
+                .frame(width: 40, height: 34)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.035))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(redditQAAccentColor.opacity(isDisabled ? 0.16 : 0.32), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1)
+    }
+
+    @ViewBuilder
+    private func redditQAAnswerContent() -> some View {
+        if isProcessingQuestion {
+            let qaStreamText = appState.mlxStreamingText
+            if (appState.settings.selectedSummaryProvider == .appleLocal || appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !qaStreamText.isEmpty {
+                Text(qaStreamText)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Thinking...")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 16)
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else if !qaAnswerUnavailable {
+            SelectableText(
+                text: answerText,
+                onAskAI: handleAskAISelection(selectedText:context:),
+                onAskAIWeb: handleAskAIWebSelection(selectedText:context:),
+                textIsPrecleaned: true
+            )
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func redditQAUtilityButtons() -> some View {
+        HStack(spacing: 12) {
+            Button {
+                speakAnswerQA(answerText)
+            } label: {
+                Image(systemName: "speaker.wave.2")
+                    .font(.subheadline)
+            }
+            .buttonStyle(LiquidGlassButtonStyle())
+            .ttsActiveGlow(isSynthesizingSpeechQA, color: redditQAAccentColor)
+            .help("Read aloud (Cloud)")
+            .disabled(isSynthesizingSpeechQA || isSpeakingLocallyQA)
+
+            Button {
+                stopQASpeech()
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.subheadline)
+            }
+            .buttonStyle(LiquidGlassButtonStyle())
+            .help("Stop speech")
+
+            Button {
+                speakAnswerLocallyQA(answerText)
+            } label: {
+                Image(systemName: "speaker.wave.2.circle")
+                    .font(.subheadline)
+            }
+            .buttonStyle(LiquidGlassButtonStyle())
+            .ttsActiveGlow(isSpeakingLocallyQA, color: .green)
+            .help("Read aloud (Local)")
+            .disabled(isSynthesizingSpeechQA)
+
+            Button(action: {
+                #if os(iOS)
+                UIPasteboard.general.string = answerText
+                #elseif os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(answerText, forType: .string)
+                #endif
+            }) {
+                Image(systemName: "doc.on.doc")
+                    .font(.subheadline)
+            }
+            .buttonStyle(LiquidGlassButtonStyle())
+            .help("Copy answer")
+        }
+        .padding(.top, 5)
+    }
+
+    @ViewBuilder
+    private func redditQAStatusIndicators() -> some View {
+        if isSynthesizingSpeechQA {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.trailing, 5)
+                Text("Reading answer...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top, 4)
+        } else if isSpeakingLocallyQA {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.trailing, 5)
+                Text("Reading with local TTS...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top, 4)
+        } else if appState.isWaitingForRedditQA {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.trailing, 5)
+                Text(appState.redditQAWaitProgress)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top, 4)
+        }
+
+        if let error = speechSynthesisErrorQA {
+            Text(error)
+                .font(.caption)
+                .foregroundColor(.red)
+                .padding(.top, 4)
+        }
+
+        if let count = commentsSentToLLMCount, !isProcessingQuestion, answerText != "Ask a question about this post or its comments..." {
+            Text("Answer based on \(count) comments")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 4)
+        }
+
+        let redditQAProvider = appState.settings.selectedSummaryProvider
+        if (redditQAProvider == .mlxLocal || redditQAProvider == .coreAIMLXLocal || redditQAProvider == .appleLocal || redditQAProvider == .applePCCGateway || redditQAProvider == .summarizeDaemon),
+           !appState.mlxLastQAThroughput.isEmpty,
+           !isProcessingQuestion,
+           answerText != "Ask a question about this post or its comments..." {
+            HStack(spacing: 4) {
+                Image(systemName: "cpu").font(.caption2)
+                Text(appState.mlxLastQAThroughput).font(.caption2).monospacedDigit()
+            }
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+        }
+    }
+
+    private var redditQACardBackground: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .fill(colorScheme == .dark ? Color(red: 0.035, green: 0.035, blue: 0.04) : Color.orange.opacity(0.055))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(AppColors.redditCardBorder(for: colorScheme), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 12, x: 0, y: 8)
+    }
+
+    @ViewBuilder
+    private func commentsSectionHeader(for post: RedditPost, availableWidth: CGFloat) -> some View {
+        #if os(iOS)
+        if usesCompactDetailLayout(availableWidth: availableWidth) {
+            compactCommentsSectionHeader(for: post)
+        } else {
+            regularCommentsSectionHeader(for: post)
+        }
         #else
-        UIApplication.shared.open(fallbackURL)
+        regularCommentsSectionHeader(for: post)
         #endif
+    }
+
+    private var commentsHeaderTitle: some View {
+        HStack(spacing: 8) {
+            Text(isLoadingComments ? "Comments" : "\(comments.count) Comments")
+                .font(.system(size: 20, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .fixedSize(horizontal: true, vertical: false)
+
+            if isLoadingComments {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .layoutPriority(1)
+    }
+
+    private func regularCommentsSectionHeader(for post: RedditPost) -> some View {
+        HStack(spacing: 10) {
+            commentsHeaderTitle
+
+            Spacer(minLength: 12)
+
+            commentsHeaderActions(for: post)
+        }
+    }
+
+    private func compactCommentsSectionHeader(for post: RedditPost) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                commentsHeaderTitle
+                Spacer(minLength: 8)
+            }
+
+            HStack(spacing: 8) {
+                compactCommentsHeaderActions(for: post)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .sheet(isPresented: $showPostCommentSheet) {
+            postCommentSheet(for: post)
+        }
+    }
+
+    private func compactCommentsHeaderActions(for post: RedditPost) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                compactAddCommentButton
+                if !comments.isEmpty {
+                    compactCommentSortMenu(for: post)
+                    compactAnalysisButton
+                    if shouldShowExplicitWebAIControls {
+                        compactWebActionsMenu(for: post)
+                    }
+                    compactSummarizeButton(for: post)
+                    compactAskButton
+                }
+            }
+
+            HStack(spacing: 6) {
+                compactAddCommentButton
+                if !comments.isEmpty {
+                    compactCommentSortMenu(for: post)
+                    compactSummarizeButton(for: post)
+                    compactAskButton
+                    compactOverflowMenu(for: post, includesSummary: false)
+                }
+            }
+
+            HStack(spacing: 6) {
+                compactAddCommentButton
+                if !comments.isEmpty {
+                    compactCommentSortMenu(for: post)
+                    compactAskButton
+                    compactOverflowMenu(for: post, includesSummary: true)
+                }
+            }
+        }
+    }
+
+    private var compactAddCommentButton: some View {
+        Button {
+            showPostCommentSheet = true
+        } label: {
+            compactHeaderIcon(systemName: "square.and.pencil")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add comment")
+        .disabled(isLoadingComments)
+    }
+
+    private func compactCommentSortMenu(for post: RedditPost) -> some View {
+        Menu {
+            ForEach(RedditService.CommentSortOption.allCases) { sortOption in
+                Button {
+                    selectCommentSort(sortOption, for: post)
+                } label: {
+                    Label(
+                        sortOption.displayName,
+                        systemImage: sortOption == selectedCommentSort ? "checkmark" : "arrow.up.arrow.down"
+                    )
+                }
+                .disabled(sortOption == selectedCommentSort)
+            }
+        } label: {
+            compactHeaderControl(width: 82) {
+                HStack(spacing: 4) {
+                    Text(selectedCommentSort.displayName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .bold))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoadingComments)
+        .accessibilityLabel("Comment sort")
+    }
+
+    private var compactAnalysisButton: some View {
+        Button {
+            analyticsProviderOverride = nil
+            isShowingAnalytics = true
+        } label: {
+            compactHeaderIcon(systemName: "chart.pie.fill")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Deep Analysis")
+    }
+
+    private func compactWebActionsMenu(for post: RedditPost) -> some View {
+        Menu {
+            Button {
+                requestWebCommentSummary(for: post)
+            } label: {
+                Label("Comment Summary", systemImage: "text.redaction")
+            }
+
+            Button {
+                analyticsProviderOverride = .webAI
+                isShowingAnalytics = true
+            } label: {
+                Label("Deep Analysis", systemImage: "chart.pie.fill")
+            }
+        } label: {
+            compactHeaderIcon(systemName: "globe")
+        }
+        .buttonStyle(.plain)
+        .help("Send comment prompts to \(appState.settings.selectedWebAIProvider.displayName)")
+    }
+
+    private func compactSummarizeButton(for post: RedditPost) -> some View {
+        Button(action: {
+            print("📱 Summarize button pressed - clearing summary and calling summarizeComments")
+            commentSummary = nil
+            summarizeComments(for: post)
+        }) {
+            compactHeaderIcon(systemName: "text.redaction")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Summarize")
+        .disabled(isLoadingComments)
+    }
+
+    private var compactAskButton: some View {
+        Button(action: {
+            showQAInterface.toggle()
+        }) {
+            compactHeaderIcon(systemName: showQAInterface ? "xmark.circle" : "questionmark.circle")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
+        .disabled(isLoadingComments)
+    }
+
+    private func compactOverflowMenu(for post: RedditPost, includesSummary: Bool) -> some View {
+        Menu {
+            Button {
+                analyticsProviderOverride = nil
+                isShowingAnalytics = true
+            } label: {
+                Label("Deep Analysis", systemImage: "chart.pie.fill")
+            }
+
+            if shouldShowExplicitWebAIControls {
+                Button {
+                    requestWebCommentSummary(for: post)
+                } label: {
+                    Label("Web Summary", systemImage: "globe")
+                }
+
+                Button {
+                    analyticsProviderOverride = .webAI
+                    isShowingAnalytics = true
+                } label: {
+                    Label("Web Analysis", systemImage: "chart.pie.fill")
+                }
+            }
+
+            if includesSummary {
+                Button {
+                    print("📱 Summarize button pressed - clearing summary and calling summarizeComments")
+                    commentSummary = nil
+                    summarizeComments(for: post)
+                } label: {
+                    Label("Summarize", systemImage: "text.redaction")
+                }
+                .disabled(isLoadingComments)
+            }
+        } label: {
+            compactHeaderIcon(systemName: "ellipsis")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("More comment actions")
+    }
+
+    private func compactHeaderIcon(systemName: String) -> some View {
+        compactHeaderControl {
+            Image(systemName: systemName)
+                .font(.system(size: 19, weight: .semibold))
+        }
+    }
+
+    private func compactHeaderControl<Content: View>(
+        width: CGFloat = 42,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .foregroundStyle(.primary)
+            .frame(width: width, height: 42)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.42 : 0.28), lineWidth: 1)
+                    }
+            }
+            .contentShape(Capsule(style: .continuous))
+    }
+
+    @ViewBuilder
+    private func commentsHeaderActions(for post: RedditPost) -> some View {
+        Button {
+            showPostCommentSheet = true
+        } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.subheadline)
+        }
+        .accessibilityLabel("Add comment")
+        .disabled(isLoadingComments)
+        .buttonStyle(LiquidGlassButtonStyle())
+        .sheet(isPresented: $showPostCommentSheet) {
+            postCommentSheet(for: post)
+        }
+
+        if !comments.isEmpty {
+            Menu {
+                ForEach(RedditService.CommentSortOption.allCases) { sortOption in
+                    Button {
+                        selectCommentSort(sortOption, for: post)
+                    } label: {
+                        Label(
+                            sortOption.displayName,
+                            systemImage: sortOption == selectedCommentSort ? "checkmark" : "arrow.up.arrow.down"
+                        )
+                    }
+                    .disabled(sortOption == selectedCommentSort)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedCommentSort.displayName)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundColor(.secondary)
+            .padding(.trailing, 4)
+            .disabled(isLoadingComments)
+            .accessibilityLabel("Comment sort")
+
+            Button {
+                analyticsProviderOverride = nil
+                isShowingAnalytics = true
+            } label: {
+                Image(systemName: "chart.pie.fill")
+                    .font(.subheadline)
+            }
+            .accessibilityLabel("Deep Analysis")
+            .buttonStyle(LiquidGlassButtonStyle())
+
+            if shouldShowExplicitWebAIControls {
+                Menu {
+                    Button {
+                        requestWebCommentSummary(for: post)
+                    } label: {
+                        Label("Comment Summary", systemImage: "text.redaction")
+                    }
+
+                    Button {
+                        analyticsProviderOverride = .webAI
+                        isShowingAnalytics = true
+                    } label: {
+                        Label("Deep Analysis", systemImage: "chart.pie.fill")
+                    }
+                } label: {
+                    Image(systemName: "globe")
+                        .font(.subheadline)
+                }
+                .buttonStyle(LiquidGlassButtonStyle())
+                .help("Send comment prompts to \(appState.settings.selectedWebAIProvider.displayName)")
+            }
+
+            Button(action: {
+                print("📱 Summarize button pressed - clearing summary and calling summarizeComments")
+                commentSummary = nil
+                summarizeComments(for: post)
+            }) {
+                Image(systemName: "text.redaction")
+                    .font(.subheadline)
+            }
+            .accessibilityLabel("Summarize")
+            .disabled(isLoadingComments)
+            .buttonStyle(LiquidGlassButtonStyle())
+
+            Button(action: {
+                showQAInterface.toggle()
+            }) {
+                Image(systemName: showQAInterface ? "xmark.circle" : "questionmark.circle")
+                    .font(.subheadline)
+            }
+            .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
+            .disabled(isLoadingComments)
+            .buttonStyle(LiquidGlassButtonStyle())
+        }
+    }
+
+    private func postCommentSheet(for post: RedditPost) -> some View {
+        RedditCommentReplySheet(post: post) { body in
+            let postedComment = try await appState.redditService.commentOnPost(postID: post.id, body: body)
+            let visibleComment = RedditCommentModel(
+                id: postedComment.id,
+                author: postedComment.author,
+                body: postedComment.body,
+                score: postedComment.score,
+                createdUtc: postedComment.createdUtc,
+                replies: postedComment.replies,
+                indentationLevel: 0
+            )
+            await MainActor.run {
+                handleTopLevelCommentPosted(visibleComment, post: post)
+            }
+        }
+    }
+
+    private func handleTopLevelCommentPosted(_ comment: RedditCommentModel, post: RedditPost) {
+        guard post.id == appState.selectedRedditPost?.id else { return }
+
+        appState.redditService.invalidateCommentCache(for: post.id, in: post.subreddit)
+
+        guard !containsComment(withID: comment.id, in: comments) else { return }
+
+        comments.insert(comment, at: 0)
+        displayedComments.insert(comment, at: 0)
+        if displayedComments.count > maxDisplayComments {
+            displayedComments = Array(displayedComments.prefix(maxDisplayComments))
+        }
+        hasMoreCommentsToLoad = displayedComments.count < comments.count
+        commentLoadStatusMessage = nil
+
+        commentSummary = nil
+        showCommentSummary = false
+        commentsSentToLLMCount = nil
+    }
+
+    private func handleReplyPosted(to parentCommentID: String, reply: RedditCommentModel, post: RedditPost) {
+        guard post.id == appState.selectedRedditPost?.id else { return }
+
+        appState.redditService.invalidateCommentCache(for: post.id, in: post.subreddit)
+
+        let fullUpdate = commentsByAppendingReply(reply, toParentID: parentCommentID, in: comments)
+        if fullUpdate.didInsert {
+            comments = fullUpdate.comments
+        }
+
+        let visibleUpdate = commentsByAppendingReply(reply, toParentID: parentCommentID, in: displayedComments)
+        if visibleUpdate.didInsert {
+            displayedComments = visibleUpdate.comments
+        } else if fullUpdate.didInsert {
+            displayedComments = Array(comments.prefix(maxDisplayComments))
+            hasMoreCommentsToLoad = displayedComments.count < comments.count
+        }
+
+        commentSummary = nil
+        showCommentSummary = false
+        commentsSentToLLMCount = nil
+    }
+
+    private func commentsByAppendingReply(
+        _ reply: RedditCommentModel,
+        toParentID parentCommentID: String,
+        in commentList: [RedditCommentModel]
+    ) -> (comments: [RedditCommentModel], didInsert: Bool) {
+        var didInsert = false
+
+        let updatedComments = commentList.map { comment -> RedditCommentModel in
+            if comment.id == parentCommentID {
+                didInsert = true
+                guard !containsComment(withID: reply.id, in: comment.replies) else {
+                    return comment
+                }
+
+                return RedditCommentModel(
+                    id: comment.id,
+                    author: comment.author,
+                    body: comment.body,
+                    score: comment.score,
+                    createdUtc: comment.createdUtc,
+                    replies: comment.replies + [reply],
+                    indentationLevel: comment.indentationLevel
+                )
+            }
+
+            let nestedUpdate = commentsByAppendingReply(reply, toParentID: parentCommentID, in: comment.replies)
+            if nestedUpdate.didInsert {
+                didInsert = true
+                return RedditCommentModel(
+                    id: comment.id,
+                    author: comment.author,
+                    body: comment.body,
+                    score: comment.score,
+                    createdUtc: comment.createdUtc,
+                    replies: nestedUpdate.comments,
+                    indentationLevel: comment.indentationLevel
+                )
+            }
+
+            return comment
+        }
+
+        return (updatedComments, didInsert)
+    }
+
+    private func containsComment(withID id: String, in commentList: [RedditCommentModel]) -> Bool {
+        commentList.contains { comment in
+            comment.id == id || containsComment(withID: id, in: comment.replies)
+        }
     }
     
     private func loadComments(for post: RedditPost) {
+        // Cancel any existing subscriptions
         cancellables.removeAll()
-        commentLoadTask?.cancel()
-
+        
+        // Set loading state
         isLoadingComments = true
-        commentBanner = nil
-        commentLoadError = nil
+        commentLoadStatusMessage = nil
         comments = []
         displayedComments = []
         hasMoreCommentsToLoad = false
-
+        
+        // Adding a small delay helps prevent navigation issues
+        // by ensuring the view is fully stable before network calls
         print("📱 RedditDetailView: Preparing to load \(selectedCommentSort.displayName) comments for post ID: \(post.id) in r/\(post.subreddit)")
 
-        commentLoadTask = Task(priority: .userInitiated) {
-            let result = await appState.redditService.fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: 1000, depth: 10, sortOption: selectedCommentSort)
-            if Task.isCancelled { return }
-            await MainActor.run {
-                applyCommentResult(result, for: post)
+        // Use shared redditService from appState for proper OAuth token handling
+        appState.redditService.fetchCommentsDetailed(for: post.id, in: post.subreddit, sortOption: selectedCommentSort)
+            .receive(on: RunLoop.main)
+            .sink { result in
+                // Double-check that we're still looking at the same post
+                guard post.id == appState.selectedRedditPost?.id else { 
+                    print("⚠️ RedditDetailView: Discarding comments - post changed")
+                    return
+                }
+                
+                if let error = result.error {
+                    if result.httpStatusCode == 429 {
+                        commentLoadStatusMessage = "Reddit is rate limiting comment requests right now. Comments may be unavailable for a short time."
+                    } else {
+                        commentLoadStatusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    }
+                    print("⚠️ RedditDetailView: Comment fetch warning for \(post.id): \(commentLoadStatusMessage ?? error.localizedDescription)")
+                    self.isLoadingComments = false
+                    return
+                }
+                
+                // Filter out AutoModerator comments
+                self.comments = result.comments
+                    .filter { $0.author.lowercased() != "automoderator" }
+                
+                // Set displayed comments (limited number)
+                if self.comments.count > self.maxDisplayComments {
+                    self.displayedComments = Array(self.comments.prefix(self.maxDisplayComments))
+                    self.hasMoreCommentsToLoad = true
+                    print("📱 RedditDetailView: Limiting displayed comments to \(self.displayedComments.count) of \(self.comments.count) total")
+                } else {
+                    self.displayedComments = self.comments
+                    self.hasMoreCommentsToLoad = false
+                }
+                
+                print("✅ RedditDetailView: Loaded \(self.comments.count) \(self.selectedCommentSort.displayName) comments for post ID: \(post.id)")
+                self.commentLoadStatusMessage = nil
+                self.isLoadingComments = false
             }
-        }
-    }
-
-    @MainActor
-    private func applyCommentResult(_ result: RedditCommentFetchResult, for post: RedditPost) {
-        guard post.id == appState.selectedRedditPost?.id else {
-            print("⚠️ RedditDetailView: Skipping comment update – post changed mid-flight")
-            return
-        }
-
-        commentBanner = nil
-        commentLoadError = nil
-
-        if let status = result.rateLimit, status.isRateLimited {
-            commentBanner = buildRateLimitMessage(for: post, status: status)
-            print("⚠️ RedditDetailView: Rate limited while loading comments – statusCode=\(status.statusCode)")
-        } else if let error = result.errorDescription, !error.isEmpty, result.comments.isEmpty {
-            commentLoadError = error
-            print("❌ RedditDetailView: Comment load error – \(error)")
-        }
-
-        let filtered = result.comments.filter { $0.author.lowercased() != "automoderator" }
-        comments = filtered
-
-        if filtered.count > maxDisplayComments {
-            displayedComments = Array(filtered.prefix(maxDisplayComments))
-            hasMoreCommentsToLoad = true
-            print("📱 RedditDetailView: Limiting displayed comments to \(displayedComments.count) of \(filtered.count) total")
-        } else {
-            displayedComments = filtered
-            hasMoreCommentsToLoad = false
-        }
-
-        isLoadingComments = false
-        print("✅ RedditDetailView: Loaded \(filtered.count) comments for post ID: \(post.id)")
-        commentLoadTask = nil
+            .store(in: &cancellables)
     }
 
     private func selectCommentSort(_ sortOption: RedditService.CommentSortOption, for post: RedditPost) {
@@ -1296,41 +1839,12 @@ struct RedditDetailView: View {
 
         selectedCommentSort = sortOption
         commentSummary = nil
+        showCommentSummary = false
         commentsSentToLLMCount = nil
         answerText = "Ask a question about this post or its comments..."
-        answerParagraphs = nil
+        questionText = ""
 
         loadComments(for: post)
-    }
-
-    private func buildRateLimitMessage(for post: RedditPost, status: RedditRateLimitStatus) -> RedditStatusMessage {
-        var parts: [String] = []
-        if let rawMessage = status.message?.trimmingCharacters(in: .whitespacesAndNewlines), !rawMessage.isEmpty {
-            parts.append(rawMessage)
-        } else {
-            parts.append("Reddit temporarily rate limited this thread.")
-        }
-
-        if let remaining = status.remaining {
-            parts.append("Remaining quota: \(Int(remaining.rounded()))")
-        }
-
-        if let resetDate = status.approximateResetDate {
-            let seconds = max(Int(resetDate.timeIntervalSinceNow.rounded()), 0)
-            if seconds > 0 {
-                parts.append("Resets in ~\(seconds)s")
-            }
-        }
-
-        let text = "r/\(post.subreddit): " + parts.joined(separator: " • ")
-        return RedditStatusMessage(
-            subreddit: post.subreddit,
-            text: text,
-            statusCode: status.statusCode,
-            resetDate: status.approximateResetDate,
-            remaining: status.remaining,
-            capturedAt: status.capturedAt
-        )
     }
     
     private func loadMoreComments() {
@@ -1379,10 +1893,11 @@ struct RedditDetailView: View {
         }
     }
     
-    private func summarizeComments(for post: RedditPost, forceWebAI: Bool = false) {
+    private func summarizeComments(for post: RedditPost) {
         guard !comments.isEmpty else { return }
         
         print("⚙️ RedditDetailView: Summarizing \(comments.count) comments for post ID: \(post.id)")
+        let promptCommentCount = appState.flattenedCommentCountForSummary(comments: comments)
         
         // Ensure we're not already generating a summary
         if isProcessingQuestion {
@@ -1390,59 +1905,35 @@ struct RedditDetailView: View {
             return
         }
         
-                // Check if we should use Apple Intelligence instead
-        if forceWebAI {
-            let prompt = appState.commentSummaryPrompt(comments: comments)
-
+        // Set loading state immediately to show progress indicator
+        print("📱 Setting isLoadingComments = true")
+        withAnimation {
             isLoadingComments = true
-            self.commentsSentToLLMCount = comments.count
-
-            appState.performWebAIRequest(
-                title: "Comment Summary",
-                prompt: prompt,
-                onSuccess: { summaryText in
-                    guard shouldAcceptCommentSummaryResult(for: post) else {
-                        print("⚠️ RedditDetailView: Post selection changed before explicit Web AI summary completed, discarding results")
-                        self.isLoadingComments = false
-                        return
-                    }
-                    self.commentSummary = CommentSummary(
-                        postId: post.id,
-                        subreddit: post.subreddit,
-                        summary: appState.cleanMarkdownArtifactsForDisplay(summaryText),
-                        commentCount: comments.count,
-                        topCommenters: [],
-                        mainTopics: [],
-                        sentiment: .neutral,
-                        createdDate: Date()
-                    )
-                    self.showCommentSummary = true
-                    self.isLoadingComments = false
-                },
-                onFailure: { _ in
-                    self.isLoadingComments = false
-                }
-            )
-            return
-        } else if appState.settings.selectedSummaryProvider == .appleLocal {
+        }
+        commentSummary = nil
+        showCommentSummary = false
+        
+                // Check if we should use Apple Intelligence instead
+        if appState.settings.selectedSummaryProvider == .appleLocal {
             // Use on-device AI for comment summary with Gemini fallback
             let prompt = appState.commentSummaryPrompt(comments: comments)
             
             // Set loading state
             isLoadingComments = true
-            self.commentsSentToLLMCount = comments.count
+            self.commentsSentToLLMCount = promptCommentCount
             
             appState.performLocalWithGeminiFallbackPublic(prompt: prompt, taskName: "Reddit Comment Summary") { summaryText in
-                guard shouldAcceptCommentSummaryResult(for: post) else {
+                guard appState.selectedRedditPost?.id == post.id else {
                     print("⚠️ RedditDetailView: Post selection changed before Apple Local summary completed, discarding results")
                     self.isLoadingComments = false
                     return
                 }
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
                 self.commentSummary = CommentSummary(
                     postId: post.id,
                     subreddit: post.subreddit,
-                    summary: appState.cleanMarkdownArtifactsForDisplay(summaryText),
-                    commentCount: comments.count,
+                    summary: cleanedSummaryText,
+                    commentCount: promptCommentCount,
                     topCommenters: [],
                     mainTopics: [],
                     sentiment: .neutral,
@@ -1455,25 +1946,55 @@ struct RedditDetailView: View {
         } else if appState.settings.selectedSummaryProvider == .appleCloud {
             // Use Apple Cloud via Private Cloud Compute
             print("📱 RedditDetailView: Using Apple Cloud for comment summary")
-            
             let prompt = appState.commentSummaryPrompt(comments: comments)
             
             // Set loading state
             isLoadingComments = true
-            self.commentsSentToLLMCount = comments.count
+            self.commentsSentToLLMCount = promptCommentCount
             
             appState.launchCloudRequest(for: prompt, type: .commentSummary) { summaryText in
-                guard shouldAcceptCommentSummaryResult(for: post) else {
+                guard appState.selectedRedditPost?.id == post.id else {
                     print("⚠️ RedditDetailView: Post selection changed before Apple Cloud summary completed, discarding results")
                     self.isLoadingComments = false
                     return
                 }
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
                 // Create summary with the result
                 self.commentSummary = CommentSummary(
                     postId: post.id,
                     subreddit: post.subreddit,
-                    summary: appState.cleanMarkdownArtifactsForDisplay(summaryText),
-                    commentCount: comments.count,
+                    summary: cleanedSummaryText,
+                    commentCount: promptCommentCount,
+                    topCommenters: [],
+                    mainTopics: [],
+                    sentiment: .neutral,
+                    createdDate: Date()
+                )
+                self.showCommentSummary = true
+                self.isLoadingComments = false
+            }
+            return
+        } else if appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal {
+            // Use MLX Local model for comment summary
+            print("🧠 RedditDetailView: Using MLX Local for comment summary")
+            let prompt = appState.commentSummaryPrompt(comments: comments)
+
+            // Set loading state
+            isLoadingComments = true
+            self.commentsSentToLLMCount = promptCommentCount
+
+            appState.performMLXLocalSummaryPublic(prompt: prompt) { summaryText in
+                guard appState.selectedRedditPost?.id == post.id else {
+                    print("⚠️ RedditDetailView: Post selection changed before MLX summary completed, discarding results")
+                    self.isLoadingComments = false
+                    return
+                }
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
+                self.commentSummary = CommentSummary(
+                    postId: post.id,
+                    subreddit: post.subreddit,
+                    summary: cleanedSummaryText,
+                    commentCount: promptCommentCount,
                     topCommenters: [],
                     mainTopics: [],
                     sentiment: .neutral,
@@ -1484,55 +2005,27 @@ struct RedditDetailView: View {
             }
             return
         } else if appState.settings.selectedSummaryProvider == .webAI {
-            let prompt = appState.commentSummaryPrompt(comments: comments)
-
-            isLoadingComments = true
-            self.commentsSentToLLMCount = comments.count
-
-            appState.performWebAIRequest(
-                title: "Comment Summary",
-                prompt: prompt,
-                onSuccess: { summaryText in
-                    guard shouldAcceptCommentSummaryResult(for: post) else {
-                        print("⚠️ RedditDetailView: Post selection changed before Web AI summary completed, discarding results")
-                        self.isLoadingComments = false
-                        return
-                    }
-                    self.commentSummary = CommentSummary(
-                        postId: post.id,
-                        subreddit: post.subreddit,
-                        summary: appState.cleanMarkdownArtifactsForDisplay(summaryText),
-                        commentCount: comments.count,
-                        topCommenters: [],
-                        mainTopics: [],
-                        sentiment: .neutral,
-                        createdDate: Date()
-                    )
-                    self.showCommentSummary = true
-                    self.isLoadingComments = false
-                },
-                onFailure: { _ in
-                    self.isLoadingComments = false
-                }
-            )
+            requestWebCommentSummary(for: post)
             return
         } else if appState.settings.selectedSummaryProvider == .applePCCGateway {
+            print("☁️ RedditDetailView: Using Apple PCC Gateway for comment summary")
             let prompt = appState.commentSummaryPrompt(comments: comments)
 
             isLoadingComments = true
-            self.commentsSentToLLMCount = comments.count
+            self.commentsSentToLLMCount = promptCommentCount
 
             appState.performPCCGatewaySummaryPublic(prompt: prompt, taskName: "Reddit Comment Summary") { summaryText in
-                guard shouldAcceptCommentSummaryResult(for: post) else {
-                    print("⚠️ RedditDetailView: Post selection changed before Apple PCC summary completed, discarding results")
+                guard appState.selectedRedditPost?.id == post.id else {
+                    print("⚠️ RedditDetailView: Post selection changed before Apple PCC Gateway summary completed, discarding results")
                     self.isLoadingComments = false
                     return
                 }
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
                 self.commentSummary = CommentSummary(
                     postId: post.id,
                     subreddit: post.subreddit,
-                    summary: appState.cleanMarkdownArtifactsForDisplay(summaryText),
-                    commentCount: comments.count,
+                    summary: cleanedSummaryText,
+                    commentCount: promptCommentCount,
                     topCommenters: [],
                     mainTopics: [],
                     sentiment: .neutral,
@@ -1543,22 +2036,24 @@ struct RedditDetailView: View {
             }
             return
         } else if appState.settings.selectedSummaryProvider == .summarizeDaemon {
+            print("⚡ RedditDetailView: Using Codex / Summarize for comment summary")
             let prompt = appState.commentSummaryPrompt(comments: comments)
 
             isLoadingComments = true
-            self.commentsSentToLLMCount = comments.count
+            self.commentsSentToLLMCount = promptCommentCount
 
             appState.performSummarizeSummaryPublic(prompt: prompt, taskName: "Reddit Comment Summary") { summaryText in
-                guard shouldAcceptCommentSummaryResult(for: post) else {
+                guard appState.selectedRedditPost?.id == post.id else {
                     print("⚠️ RedditDetailView: Post selection changed before Summarize summary completed, discarding results")
                     self.isLoadingComments = false
                     return
                 }
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
                 self.commentSummary = CommentSummary(
                     postId: post.id,
                     subreddit: post.subreddit,
-                    summary: appState.cleanMarkdownArtifactsForDisplay(summaryText),
-                    commentCount: comments.count,
+                    summary: cleanedSummaryText,
+                    commentCount: promptCommentCount,
                     topCommenters: [],
                     mainTopics: [],
                     sentiment: .neutral,
@@ -1569,20 +2064,27 @@ struct RedditDetailView: View {
             }
             return
         }
-        
+
         // Original Gemini code
-        // Set a state flag to indicate we're generating a summary
-        isLoadingComments = true
-        
-        // Use appState's commentSummaryService that already has the API key configured
+        // Keep Gemini capped to avoid overflowing its request size while local providers
+        // use full input plus explicit reroute handling.
         let commentsToSummarize = self.comments
-        self.commentsSentToLLMCount = commentsToSummarize.count
+        let geminiCommentPromptLimit = 800
+        let geminiPromptCommentCount = appState.flattenedCommentCountForSummary(
+            comments: commentsToSummarize,
+            maxComments: geminiCommentPromptLimit
+        )
+        let prompt = appState.commentSummaryPrompt(
+            comments: commentsToSummarize,
+            maxComments: geminiCommentPromptLimit
+        )
+        self.commentsSentToLLMCount = geminiPromptCommentCount
         
-        appState.commentSummaryService.summarizeComments(commentsToSummarize)
+        appState.summaryService.summarizeText("", customPrompt: prompt)
             .receive(on: RunLoop.main)
-            .sink { summary in
+            .sink { summaryText in
                 // Make sure we're still on the same post
-                guard shouldAcceptCommentSummaryResult(for: post) else {
+                guard appState.selectedRedditPost?.id == post.id else {
                     print("⚠️ RedditDetailView: Post selection changed before summary completed, discarding results")
                     return
                 }
@@ -1591,12 +2093,12 @@ struct RedditDetailView: View {
                 let updatedSummary = CommentSummary(
                     postId: post.id,
                     subreddit: post.subreddit,
-                    summary: summary.summary,
-                    commentCount: summary.commentCount,
-                    topCommenters: summary.topCommenters,
-                    mainTopics: summary.mainTopics,
-                    sentiment: summary.sentiment,
-                    createdDate: summary.createdDate
+                    summary: cleanAndFormatCommentSummaryForDisplay(summaryText),
+                    commentCount: geminiPromptCommentCount,
+                    topCommenters: [],
+                    mainTopics: [],
+                    sentiment: .neutral,
+                    createdDate: Date()
                 )
                 
                 // Update state with the new summary and show it
@@ -1608,69 +2110,81 @@ struct RedditDetailView: View {
             .store(in: &cancellables)
     }
 
-    private func summarizePost(post: RedditPost, proxy: ScrollViewProxy) {
-        let currentComments = comments
-        appState.requestSummary(for: nil, redditPost: post, redditComments: currentComments)
-    }
+    private func requestWebCommentSummary(for post: RedditPost) {
+        guard !comments.isEmpty else { return }
 
-    private func shouldAcceptCommentSummaryResult(for post: RedditPost) -> Bool {
-        guard let selectedPostID = appState.selectedRedditPost?.id else {
-            return false
-        }
-        return selectedPostID == post.id
-    }
+        let commentsToSummarize = comments
+        let prompt = appState.commentSummaryPrompt(comments: commentsToSummarize)
+        let promptCommentCount = appState.flattenedCommentCountForSummary(comments: commentsToSummarize)
 
+        isLoadingComments = true
+        commentsSentToLLMCount = promptCommentCount
+        commentSummary = nil
+        showCommentSummary = false
+
+        appState.performWebAIRequest(
+            title: "Comment Summary",
+            prompt: prompt,
+            onSuccess: { summaryText in
+                DispatchQueue.main.async {
+                    guard appState.selectedRedditPost?.id == post.id else {
+                        print("⚠️ RedditDetailView: Post selection changed before Web AI summary completed, discarding results")
+                        self.isLoadingComments = false
+                        return
+                    }
+
+                    let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
+                    self.commentSummary = CommentSummary(
+                        postId: post.id,
+                        subreddit: post.subreddit,
+                        summary: cleanedSummaryText,
+                        commentCount: promptCommentCount,
+                        topCommenters: [],
+                        mainTopics: [],
+                        sentiment: .neutral,
+                        createdDate: Date()
+                    )
+                    self.showCommentSummary = true
+                    self.isLoadingComments = false
+                }
+            },
+            onFailure: { _ in
+                DispatchQueue.main.async {
+                    self.isLoadingComments = false
+                }
+            }
+        )
+    }
+    
     private func askQuestion(post: RedditPost) {
         guard !questionText.isEmpty && !comments.isEmpty else { return }
 
         print("📱 RedditDetailView: Asking question: \"\(questionText)\" about post \(post.id)")
 
         // Set loading state
-        isProcessingQuestion = true
-        answerParagraphs = nil
-        answerText = "Thinking..."
+        print("📱 Setting isProcessingQuestion = true")
+        withAnimation {
+            isProcessingQuestion = true
+            answerText = "" // Clear text so progress indicator shows
+        }
         let currentComments = self.comments
         self.commentsSentToLLMCount = currentComments.count
 
-        // Local models (Apple Local, MLX) work better with plain questions.
-        // JSON format instructions confuse Apple Intelligence and produce garbled output.
-        let provider = appState.settings.selectedSummaryProvider
-        let questionToSend: String
-        if provider == .appleLocal || provider == .mlxLocal || provider == .coreAIMLXLocal || provider == .applePCCGateway || provider == .summarizeDaemon {
-            questionToSend = questionText
-        } else {
-            questionToSend = """
-\(questionText)
-
-FORMAT: Return ONLY a compact JSON array of paragraph strings.
-No Markdown, no headings, no bullet points, no code fences, no prose outside JSON.
-Example: ["First paragraph.", "Second paragraph."].
-Each item ≤ 2–3 sentences.
-"""
-        }
-
         // Use AppState's askQuestionAboutRedditPost which handles both Gemini and Apple Intelligence
-        appState.askQuestionAboutRedditPost(post: post, comments: currentComments, question: questionToSend) { answer in
-            if let paragraphs = decodeParagraphArray(from: answer), !paragraphs.isEmpty {
-                self.answerParagraphs = paragraphs
-                self.answerText = paragraphs.joined(separator: "\n\n")
-            } else {
-                self.answerParagraphs = nil
-                // Insert paragraph breaks before bold section headers (e.g. **General Positive:**)
-                // that MLX outputs inline without newlines, and at sentence boundaries if still one block
-                var processed = answer
-                // Insert \n\n before bold headers (**Capital...) that follow non-whitespace text
-                // Catches `:`, `.`, `)` etc. even with no space before **
+        appState.askQuestionAboutRedditPost(post: post, comments: currentComments, question: questionText) { answer in
+            // Insert paragraph breaks before bold headers before stripping markdown
+            var processed = answer
+            // Insert \n\n before bold headers (**Capital...) that follow non-whitespace text
+            // Catches `:`, `.`, `)` etc. even with no space before **
+            processed = processed.replacingOccurrences(
+                of: #"(\S)[ \t]*(\*\*[A-Z])"#, with: "$1\n\n$2", options: .regularExpression)
+            if !processed.contains("\n\n") && processed.count > 300 {
+                // Fallback: split at sentence boundaries (lowercase + . ! ? + optional spaces + Capital)
+                // Catches both zero-space (discussions.Suggestions) and spaced (text. Next) forms
                 processed = processed.replacingOccurrences(
-                    of: #"(\S)[ \t]*(\*\*[A-Z])"#, with: "$1\n\n$2", options: .regularExpression)
-                if !processed.contains("\n\n") && processed.count > 300 {
-                    // Fallback: split at sentence boundaries (lowercase + . ! ? + optional spaces + Capital)
-                    // Catches both zero-space (discussions.Suggestions) and spaced (text. Next) forms
-                    processed = processed.replacingOccurrences(
-                        of: #"([a-z][.!?])[ \t]*([A-Z])"#, with: "$1\n\n$2", options: .regularExpression)
-                }
-                self.answerText = formatAskAIResponseForDisplay(processed)
+                    of: #"([a-z][.!?])[ \t]*([A-Z])"#, with: "$1\n\n$2", options: .regularExpression)
             }
+            self.answerText = formatAskAIResponseForDisplay(processed)
             self.isProcessingQuestion = false
             // Update previous question for next time
             self.previousQuestionText = self.questionText
@@ -1683,9 +2197,10 @@ Each item ≤ 2–3 sentences.
 
         print("📱 RedditDetailView: Asking WebAI question: \"\(questionText)\" about post \(post.id)")
 
-        isProcessingQuestion = true
-        answerParagraphs = nil
-        answerText = "Thinking..."
+        withAnimation {
+            isProcessingQuestion = true
+            answerText = ""
+        }
         let currentComments = self.comments
         self.commentsSentToLLMCount = currentComments.count
 
@@ -1697,83 +2212,46 @@ Each item ≤ 2–3 sentences.
         }
     }
 
-    private func askAIFromRedditSelection(_ selection: String, post: RedditPost, action: AskAISelectionAction) {
-        let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+    private func handleAskAISelection(selectedText: String, context: String) {
+        runSelectionAskAI(selectedText: selectedText, context: context, useWebPath: false)
+    }
 
-        selectionAskAITask?.cancel()
-        isSelectionAskAIInFlight = true
-        selectionAskAIResponse = nil
-        selectionAskAIError = nil
-        showSelectionAskAIResponse = true
+    private func handleAskAIWebSelection(selectedText: String, context: String) {
+        runSelectionAskAI(selectedText: selectedText, context: context, useWebPath: true)
+    }
 
-        let prompt = appState.redditQAPrompt(
-            post: post,
-            comments: comments,
-            question: "What is said about \(trimmed)?"
+    private func runSelectionAskAI(selectedText: String, context: String, useWebPath: Bool) {
+        guard !isAskingSelectionAI else { return }
+        let sourceContext = appState.selectedRedditPost.map {
+            appState.redditSelectionSourceContext(post: $0, comments: comments)
+        }
+        let prompt = buildAskAISelectionPrompt(
+            selectedText: selectedText,
+            extractedContext: context,
+            sourceContext: sourceContext?.text ?? "",
+            sourceLabel: sourceContext?.label ?? ""
         )
+        guard !prompt.isEmpty else { return }
 
-        selectionAskAITask = Task {
-            let answer = await withCheckedContinuation { continuation in
-                switch action {
-                case .standard:
-                    appState.askQuestionAboutSelection(prompt: prompt) { response in
-                        continuation.resume(returning: response)
-                    }
-                case .web:
-                    appState.askWebQuestionAboutSelection(prompt: prompt, title: "Reddit Ask AI Web") { response in
-                        continuation.resume(returning: response)
-                    }
-                }
-            }
+        selectionAskAIPrompt = prompt
+        selectionAskAIResponse = ""
+        isAskingSelectionAI = true
 
-            await MainActor.run {
+        let finish: (String) -> Void = { answer in
+            DispatchQueue.main.async {
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
-                self.isSelectionAskAIInFlight = false
+                self.isAskingSelectionAI = false
+                self.showSelectionAskAISheet = true
             }
         }
-    }
 
-    private func copySelectionAskAIResponse() {
-        guard let selectionAskAIResponse, !selectionAskAIResponse.isEmpty else { return }
-        #if os(iOS)
-        UIPasteboard.general.string = selectionAskAIResponse
-        #elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(selectionAskAIResponse, forType: .string)
-        #endif
+        if useWebPath {
+            appState.askWebQuestionAboutSelection(prompt: prompt, completion: finish)
+        } else {
+            appState.askQuestionAboutSelection(prompt: prompt, completion: finish)
+        }
     }
-
     
-   private func decodeParagraphArray(from text: String) -> [String]? {
-       var payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-       if payload.hasPrefix("```json") {
-           payload = String(payload.dropFirst(7))
-       } else if payload.hasPrefix("```") {
-           payload = String(payload.dropFirst(3))
-       }
-
-       if payload.hasSuffix("```") {
-           payload = String(payload.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-       }
-
-       guard let data = payload.data(using: .utf8) else { return nil }
-       do {
-           let raw = try JSONSerialization.jsonObject(with: data, options: [])
-           guard let array = raw as? [Any] else { return nil }
-           let paragraphs = array.compactMap { element -> String? in
-               guard let paragraph = element as? String else { return nil }
-               let trimmed = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
-               return trimmed.isEmpty ? nil : trimmed
-           }
-           return paragraphs.isEmpty ? nil : paragraphs
-       } catch {
-           print("⚠️ RedditDetailView: Failed to decode paragraph array - \(error.localizedDescription)")
-           return nil
-       }
-   }
-
     private func sentimentColor(_ sentiment: CommentSummary.CommentSentiment) -> Color {
         switch sentiment {
         case .positive: return .green
@@ -1788,13 +2266,15 @@ Each item ≤ 2–3 sentences.
     private func stopQASpeech() {
         ttsCanceledQA = true
         #if os(iOS)
+        localTTSTaskQA?.cancel()
+        localTTSTaskQA = nil
+        KokoroTTSService.shared.cancelPlayback()
         audioPlayerQA?.stop()
         audioPlayerQA = nil
         localSpeechSynthQA?.stopSpeaking(at: .immediate)
         #elseif os(macOS)
         audioPlayerQA?.stop()
         audioPlayerQA = nil
-        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynthQA?.stopSpeaking()
         #endif
         nextAudioChunkQA = nil
@@ -1860,6 +2340,7 @@ Each item ≤ 2–3 sentences.
     
     private func playAudioQA(data: Data) {
         #if os(iOS)
+        ensureBackgroundTTSReady()
         // Stop any existing playback
         audioPlayerQA?.stop()
         
@@ -1942,43 +2423,52 @@ Each item ≤ 2–3 sentences.
     
     private func speakAnswerLocallyQA(_ text: String) {
         #if os(iOS)
-        // Check if Kokoro engine is selected
-        let settingsQA = PersistenceManager.shared.loadSettings()
-        if settingsQA.localTTSEngine == .kokoro {
+        // Toggle off if already speaking
+        if isSpeakingLocallyQA {
+            localTTSTaskQA?.cancel()
+            localTTSTaskQA = nil
+            KokoroTTSService.shared.cancelPlayback()
+            localSpeechSynthQA?.stopSpeaking(at: .immediate)
+            isSpeakingLocallyQA = false
+            return
+        }
+        
+        guard !text.isEmpty && text != "Ask a question about this post or its comments..." else {
+            speechSynthesisErrorQA = "No answer available to read."
+            return
+        }
+        
+        // Stop any other audio playing
+        audioPlayerQA?.stop()
+        localSpeechSynthQA?.stopSpeaking(at: .immediate)
+        ensureBackgroundTTSReady()
+
+        let localEngine = appState.summaryService.getLocalTTSEngine()
+        if localEngine == .kokoro {
             guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocallyQA = false
                 speechSynthesisErrorQA = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocallyQA {
-                localTTSTaskQA?.cancel()
-                localTTSTaskQA = nil
-                audioPlayerQA?.stop()
-                localSpeechSynthQA?.stopSpeaking(at: .immediate)
-                isSpeakingLocallyQA = false
-                return
-            }
-            guard !text.isEmpty && text != "Ask a question about this post or its comments..." else {
-                speechSynthesisErrorQA = "No answer available to read."
-                return
-            }
-            audioPlayerQA?.stop()
             isSpeakingLocallyQA = true
             isSynthesizingSpeechQA = false
-            startKokoroPlaybackRedditQA(
+            speechSynthesisErrorQA = nil
+            let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
+            startKokoroPlayback(
                 text: text,
-                voice: settingsQA.kokoroVoice,
-                speed: settingsQA.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayerQA = player },
+                voice: appState.summaryService.getKokoroVoice(),
+                speed: appState.summaryService.getKokoroSpeed(),
+                allowCaching: allowCaching,
+                precacheEnabled: allowCaching,
+                setAudioPlayer: { [self] player in audioPlayerQA = player },
                 soundDelegate: soundDelegateQA,
                 taskStore: &localTTSTaskQA,
                 onCompleted: {
-                    isSpeakingLocallyQA = false
-                    localTTSTaskQA = nil
+                    self.isSpeakingLocallyQA = false
+                    self.localTTSTaskQA = nil
                 },
                 onError: { message in
-                    speechSynthesisErrorQA = message
-                    isSpeakingLocallyQA = false
+                    self.speechSynthesisErrorQA = message
+                    self.isSpeakingLocallyQA = false
                 }
             )
             return
@@ -1993,48 +2483,24 @@ Each item ≤ 2–3 sentences.
                 return
             }
 
-            guard !text.isEmpty && text != "Ask a question about this post or its comments..." else {
-                speechSynthesisErrorQA = "No answer available to read."
-                return
-            }
-
-            // Stop any other audio playing
-            audioPlayerQA?.stop()
-            
             // Start speaking via Shortcuts
             isSpeakingLocallyQA = true
             isSynthesizingSpeechQA = false
-            
+
             let success = ShortcutsTTS.shared.speakText(text) {
                 // Completion handler - called when speech ends (estimated)
                 DispatchQueue.main.async {
                     self.isSpeakingLocallyQA = false
                 }
             }
-            
+
             if !success {
                 isSpeakingLocallyQA = false
                 speechSynthesisErrorQA = "Failed to start Shortcuts TTS"
             }
-            
+
             return
         }
-        
-        // Original iOS code for real devices
-        // Toggle off if already speaking
-        if isSpeakingLocallyQA {
-            localSpeechSynthQA?.stopSpeaking(at: .immediate)
-            isSpeakingLocallyQA = false
-            return
-        }
-        
-        guard !text.isEmpty && text != "Ask a question about this post or its comments..." else {
-            speechSynthesisErrorQA = "No answer available to read."
-            return
-        }
-        
-        // Stop any other audio playing
-        audioPlayerQA?.stop()
         
         // Initialize speech synthesizer
         if localSpeechSynthQA == nil {
@@ -2106,78 +2572,38 @@ Each item ≤ 2–3 sentences.
             speechSynthesisErrorQA = "Failed to initialize speech synthesizer."
         }
         #elseif os(macOS)
-        // Check if Kokoro engine is selected
-        let settingsQA = PersistenceManager.shared.loadSettings()
-        if settingsQA.localTTSEngine == .kokoro {
-            guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocallyQA = false
-                speechSynthesisErrorQA = "MLX TTS is not available. Add the MLXAudio package and model access."
-                return
-            }
-            if isSpeakingLocallyQA {
-                localTTSTaskQA?.cancel()
-                localTTSTaskQA = nil
-                audioPlayerQA?.stop()
-                isSpeakingLocallyQA = false
-                return
-            }
-            guard !text.isEmpty && text != "Ask a question about this post or its comments..." else {
-                speechSynthesisErrorQA = "No answer available to read."
-                return
-            }
-            audioPlayerQA?.stop()
-            isSpeakingLocallyQA = true
-            isSynthesizingSpeechQA = false
-            startKokoroPlaybackRedditQA(
-                text: text,
-                voice: settingsQA.kokoroVoice,
-                speed: settingsQA.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayerQA = player },
-                soundDelegate: soundDelegateQA,
-                taskStore: &localTTSTaskQA,
-                onCompleted: {
-                    isSpeakingLocallyQA = false
-                    localTTSTaskQA = nil
-                },
-                onError: { message in
-                    speechSynthesisErrorQA = message
-                    isSpeakingLocallyQA = false
-                }
-            )
-            return
-        }
-
-        // Toggle off if already speaking (CLI shortcut cannot truly stop mid-stream)
+        // Toggle off if already speaking
         if isSpeakingLocallyQA {
-            ShortcutsTTS.shared.stopSpeaking()
+            localSpeechSynthQA?.stopSpeaking()
             isSpeakingLocallyQA = false
             return
         }
-
+        
         guard !text.isEmpty && text != "Ask a question about this post or its comments..." else {
             speechSynthesisErrorQA = "No answer available to read."
             return
         }
-
+        
         // Stop all other audio
         audioPlayerQA?.stop()
-
+        
+        let synth = NSSpeechSynthesizer()
+        let overrideQA = UserDefaults.standard.string(forKey: "LocalTTS.Mac.SelectedVoiceID") ?? selectedMacVoiceID
+        if !overrideQA.isEmpty { _ = setMacSpeechVoice(synth, identifier: overrideQA) }
+        else if let voiceID = preferredMacVoiceIdentifier() { _ = setMacSpeechVoice(synth, identifier: voiceID) }
+        synth.delegate = soundDelegateQA
+        
         isSpeakingLocallyQA = true
         isSynthesizingSpeechQA = false
-
-        let success = ShortcutsTTS.shared.speakText(text) {
-            DispatchQueue.main.async {
-                self.isSpeakingLocallyQA = false
-            }
-        }
-
-        if !success {
+        if !synth.startSpeaking(text) {
             isSpeakingLocallyQA = false
-            speechSynthesisErrorQA = "Failed to start Shortcuts TTS on macOS."
+            speechSynthesisErrorQA = "Failed to start local speech synthesis."
+        } else {
+            localSpeechSynthQA = synth
         }
         #endif
     }
-
+    
     @ViewBuilder
     private func redditBodyView(for content: String) -> some View {
         let blocks = redditBodyDisplayBlocks(from: content)
@@ -2516,644 +2942,6 @@ Each item ≤ 2–3 sentences.
         value = value.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    
-    // MARK: - Post Summary TTS Functions
-    
-    private func speakPostSummary(_ text: String) {
-        ttsCanceledSummary = false
-        guard !text.isEmpty else {
-            speechSynthesisErrorSummary = "No summary available to read."
-            return
-        }
-        
-        // Stop any currently playing sounds before starting a new one
-        #if os(iOS)
-        audioPlayerSummary?.stop()
-        audioPlayerSummary = nil
-        localSpeechSynthSummary?.stopSpeaking(at: .immediate)
-        #elseif os(macOS)
-        audioPlayerSummary?.stop()
-        audioPlayerSummary = nil
-        localSpeechSynthSummary?.stopSpeaking()
-        #endif
-        
-        isSynthesizingSpeechSummary = true
-        isSpeakingLocallySummary = false
-        speechSynthesisErrorSummary = nil
-        
-        Task {
-            await appState.summaryService.synthesizeSpeechFastStartSplit(
-                text: text,
-                onFirstChunk: { data in
-                    DispatchQueue.main.async {
-                        if !self.ttsCanceledSummary { self.playAudioSummary(data: data) }
-                    }
-                },
-                onRemainingReady: { data in
-                    DispatchQueue.main.async {
-                        if self.ttsCanceledSummary { return }
-                        #if os(iOS)
-                        if let player = self.audioPlayerSummary, player.isPlaying {
-                            self.nextAudioChunkSummary = data
-                        } else {
-                            self.playAudioSummary(data: data)
-                        }
-                        #elseif os(macOS)
-                        if let player = self.audioPlayerSummary, player.isPlaying {
-                            self.nextAudioChunkSummary = data
-                        } else {
-                            self.playAudioSummary(data: data)
-                        }
-                        #endif
-                    }
-                },
-                onComplete: {
-                    // handled by delegate chain
-                },
-                onError: { error in
-                    DispatchQueue.main.async {
-                        self.speechSynthesisErrorSummary = "Speech synthesis failed: \(error.localizedDescription)"
-                        self.isSynthesizingSpeechSummary = false
-                        self.nextAudioChunkSummary = nil
-                    }
-                }
-            )
-        }
-    }
-    
-    private func stopPostSummarySpeech() {
-        ttsCanceledSummary = true
-        #if os(iOS)
-        audioPlayerSummary?.stop()
-        audioPlayerSummary = nil
-        localSpeechSynthSummary?.stopSpeaking(at: .immediate)
-        #elseif os(macOS)
-        audioPlayerSummary?.stop()
-        audioPlayerSummary = nil
-        ShortcutsTTS.shared.stopSpeaking()
-        localSpeechSynthSummary?.stopSpeaking()
-        #endif
-        nextAudioChunkSummary = nil
-        isSynthesizingSpeechSummary = false
-        isSpeakingLocallySummary = false
-    }
-    
-    private func playAudioSummary(data: Data) {
-        #if os(iOS)
-        audioPlayerSummary?.stop()
-        
-        let audioData: Data
-        if isMP3Data(data) || isAACData(data) {
-            audioData = data
-        } else {
-            audioData = createWavData(from: data, sampleRate: 24000, channels: 1, bitsPerSample: 16)
-        }
-        
-        do {
-            audioPlayerSummary = try AVAudioPlayer(data: audioData)
-            if let player = audioPlayerSummary {
-                player.prepareToPlay()
-                player.delegate = soundDelegateSummary
-                soundDelegateSummary.onPlaybackFinished = { [self] in
-                    DispatchQueue.main.async {
-                        if let next = self.nextAudioChunkSummary {
-                            self.nextAudioChunkSummary = nil
-                            self.playAudioSummary(data: next)
-                        } else {
-                            self.isSynthesizingSpeechSummary = false
-                        }
-                    }
-                }
-                if !player.play() {
-                    speechSynthesisErrorSummary = "Failed to start audio playback."
-                    isSynthesizingSpeechSummary = false
-                }
-            }
-        } catch {
-            speechSynthesisErrorSummary = "Failed to initialize audio player: \(error.localizedDescription)"
-            isSynthesizingSpeechSummary = false
-        }
-        #elseif os(macOS)
-        audioPlayerSummary?.stop()
-        
-        let audioData: Data
-        if isMP3Data(data) || isAACData(data) {
-            audioData = data
-        } else {
-            audioData = createWavData(from: data, sampleRate: 24000, channels: 1, bitsPerSample: 16)
-        }
-        
-        audioPlayerSummary = NSSound(data: audioData)
-        if let player = audioPlayerSummary {
-            player.delegate = soundDelegateSummary
-            soundDelegateSummary.onPlaybackFinished = { [self] in
-                DispatchQueue.main.async {
-                    if let next = self.nextAudioChunkSummary {
-                        self.nextAudioChunkSummary = nil
-                        self.playAudioSummary(data: next)
-                    } else {
-                        self.isSynthesizingSpeechSummary = false
-                    }
-                }
-            }
-            if !player.play() {
-                speechSynthesisErrorSummary = "Failed to start audio playback."
-                isSynthesizingSpeechSummary = false
-            }
-        } else {
-            speechSynthesisErrorSummary = "Failed to initialize audio player with data."
-            isSynthesizingSpeechSummary = false
-        }
-        #endif
-    }
-    
-    private func speakPostSummaryLocally(_ text: String) {
-        #if os(iOS)
-        // Check if Kokoro engine is selected
-        let settingsSummary = PersistenceManager.shared.loadSettings()
-        if settingsSummary.localTTSEngine == .kokoro {
-            guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocallySummary = false
-                speechSynthesisErrorSummary = "MLX TTS is not available. Add the MLXAudio package and model access."
-                return
-            }
-            if isSpeakingLocallySummary {
-                localTTSTaskSummary?.cancel()
-                localTTSTaskSummary = nil
-                audioPlayerSummary?.stop()
-                localSpeechSynthSummary?.stopSpeaking(at: .immediate)
-                isSpeakingLocallySummary = false
-                return
-            }
-            guard !text.isEmpty else {
-                speechSynthesisErrorSummary = "No summary available to read."
-                return
-            }
-            audioPlayerSummary?.stop()
-            isSpeakingLocallySummary = true
-            isSynthesizingSpeechSummary = false
-            startKokoroPlaybackRedditSummary(
-                text: text,
-                voice: settingsSummary.kokoroVoice,
-                speed: settingsSummary.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayerSummary = player },
-                soundDelegate: soundDelegateSummary,
-                taskStore: &localTTSTaskSummary,
-                onCompleted: {
-                    isSpeakingLocallySummary = false
-                    localTTSTaskSummary = nil
-                },
-                onError: { message in
-                    speechSynthesisErrorSummary = message
-                    isSpeakingLocallySummary = false
-                }
-            )
-            return
-        }
-
-        // Check if running on Mac as iPad app - use Shortcuts instead
-        if ProcessInfo.processInfo.isiOSAppOnMac {
-            if isSpeakingLocallySummary {
-                ShortcutsTTS.shared.stopSpeaking()
-                isSpeakingLocallySummary = false
-                return
-            }
-
-            guard !text.isEmpty else {
-                speechSynthesisErrorSummary = "No summary available to read."
-                return
-            }
-
-            audioPlayerSummary?.stop()
-
-            isSpeakingLocallySummary = true
-            isSynthesizingSpeechSummary = false
-            
-            let success = ShortcutsTTS.shared.speakText(text) {
-                DispatchQueue.main.async {
-                    self.isSpeakingLocallySummary = false
-                }
-            }
-            
-            if !success {
-                isSpeakingLocallySummary = false
-                speechSynthesisErrorSummary = "Failed to start Shortcuts TTS"
-            }
-            
-            return
-        }
-        
-        // Original iOS code for real devices
-        if isSpeakingLocallySummary {
-            localSpeechSynthSummary?.stopSpeaking(at: .immediate)
-            isSpeakingLocallySummary = false
-            return
-        }
-        
-        guard !text.isEmpty else {
-            speechSynthesisErrorSummary = "No summary available to read."
-            return
-        }
-        
-        audioPlayerSummary?.stop()
-        
-        if localSpeechSynthSummary == nil {
-            localSpeechSynthSummary = AVSpeechSynthesizer()
-            localSpeechSynthSummary?.delegate = soundDelegateSummary
-        }
-        
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = 0.52
-        utterance.pitchMultiplier = 1.0
-        utterance.volume = 1.0
-        utterance.preUtteranceDelay = 0.0
-        utterance.postUtteranceDelay = 0.0
-
-        if let savedVoiceID = UserDefaults.standard.string(forKey: "LocalTTS.iOSOnMac.SelectedVoiceID"),
-           !savedVoiceID.isEmpty,
-           let savedVoice = AVSpeechSynthesisVoice(identifier: savedVoiceID) {
-            if ProcessInfo.processInfo.isiOSAppOnMac && savedVoice.identifier.contains("com.apple.voice") {
-                print("🔊 [Post Summary] Skipping com.apple.voice on Mac")
-            } else {
-                utterance.voice = savedVoice
-            }
-        }
-        
-        if utterance.voice == nil {
-            let currentLang = AVSpeechSynthesisVoice.currentLanguageCode()
-            let allVoices = AVSpeechSynthesisVoice.speechVoices()
-            
-            let availableVoices: [AVSpeechSynthesisVoice]
-            if ProcessInfo.processInfo.isiOSAppOnMac {
-                availableVoices = allVoices.filter { 
-                    $0.language == currentLang && !$0.identifier.contains("com.apple.voice")
-                }
-            } else {
-                availableVoices = allVoices.filter { $0.language == currentLang }
-            }
-            
-            let premiumVoices = availableVoices.filter { $0.quality == .premium }
-            let enhancedVoices = availableVoices.filter { $0.quality == .enhanced }
-            
-            if let premium = premiumVoices.first {
-                utterance.voice = premium
-            } else if let enhanced = enhancedVoices.first {
-                utterance.voice = enhanced
-            } else {
-                utterance.voice = AVSpeechSynthesisVoice(language: currentLang)
-            }
-        }
-        
-        isSpeakingLocallySummary = true
-        isSynthesizingSpeechSummary = false
-        if let synth = localSpeechSynthSummary {
-            DispatchQueue.main.async { synth.speak(utterance) }
-        } else {
-            isSpeakingLocallySummary = false
-            speechSynthesisErrorSummary = "Failed to initialize speech synthesizer."
-        }
-        #elseif os(macOS)
-        // Check if Kokoro engine is selected
-        let settingsSummary = PersistenceManager.shared.loadSettings()
-        if settingsSummary.localTTSEngine == .kokoro {
-            guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocallySummary = false
-                speechSynthesisErrorSummary = "MLX TTS is not available. Add the MLXAudio package and model access."
-                return
-            }
-            if isSpeakingLocallySummary {
-                localTTSTaskSummary?.cancel()
-                localTTSTaskSummary = nil
-                audioPlayerSummary?.stop()
-                isSpeakingLocallySummary = false
-                return
-            }
-            guard !text.isEmpty else {
-                speechSynthesisErrorSummary = "No summary available to read."
-                return
-            }
-            audioPlayerSummary?.stop()
-            isSpeakingLocallySummary = true
-            isSynthesizingSpeechSummary = false
-            startKokoroPlaybackRedditQA(
-                text: text,
-                voice: settingsSummary.kokoroVoice,
-                speed: settingsSummary.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayerSummary = player },
-                soundDelegate: soundDelegateSummary,
-                taskStore: &localTTSTaskSummary,
-                onCompleted: {
-                    isSpeakingLocallySummary = false
-                    localTTSTaskSummary = nil
-                },
-                onError: { message in
-                    speechSynthesisErrorSummary = message
-                    isSpeakingLocallySummary = false
-                }
-            )
-            return
-        }
-
-        if isSpeakingLocallySummary {
-            ShortcutsTTS.shared.stopSpeaking()
-            isSpeakingLocallySummary = false
-            return
-        }
-
-        guard !text.isEmpty else {
-            speechSynthesisErrorSummary = "No summary available to read."
-            return
-        }
-
-        audioPlayerSummary?.stop()
-
-        isSpeakingLocallySummary = true
-        isSynthesizingSpeechSummary = false
-
-        let success = ShortcutsTTS.shared.speakText(text) {
-            DispatchQueue.main.async {
-                self.isSpeakingLocallySummary = false
-            }
-        }
-
-        if !success {
-            isSpeakingLocallySummary = false
-            speechSynthesisErrorSummary = "Failed to start Shortcuts TTS on macOS."
-        }
-        #endif
-    }
-
-    private func startKokoroPlaybackRedditQA(
-        text: String,
-        voice: String,
-        speed: Double,
-        setAudioPlayer: @escaping (KokoroAudioPlayer?) -> Void,
-        soundDelegate: SoundDelegate,
-        taskStore: inout Task<Void, Never>?,
-        onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
-    ) {
-        _ = soundDelegate
-        taskStore?.cancel()
-        taskStore = Task {
-            defer {
-                if !PersistenceManager.shared.loadSettings().kokoroPrecacheEnabled {
-                    KokoroTTSService.shared.unloadIfAllowed()
-                }
-                Task { @MainActor in onCompleted() }
-            }
-            do {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-
-                func makeKokoroChunks(from input: String) -> [String] {
-                    let firstSize = min(240, input.count)
-                    let firstChunk = String(input.prefix(firstSize))
-                    let remaining = String(input.dropFirst(firstSize)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !remaining.isEmpty else { return [firstChunk] }
-                    var chunks: [String] = [firstChunk]
-                    let sentences = remaining.components(separatedBy: CharacterSet(charactersIn: ".!?"))
-                    var current = ""
-                    let maxChunkSize = 420
-                    for sentence in sentences {
-                        let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmedSentence.isEmpty { continue }
-                        let sentenceWithPunctuation = trimmedSentence + "."
-                        if current.count + sentenceWithPunctuation.count <= maxChunkSize {
-                            current += (current.isEmpty ? "" : " ") + sentenceWithPunctuation
-                        } else {
-                            if !current.isEmpty { chunks.append(current) }
-                            current = sentenceWithPunctuation
-                        }
-                    }
-                    if !current.isEmpty { chunks.append(current) }
-                    return chunks
-                }
-
-                let chunks = makeKokoroChunks(from: trimmed)
-                guard let firstChunk = chunks.first else { return }
-
-                func playChunk(_ data: Data) async throws -> TimeInterval {
-                    try await MainActor.run {
-                        #if os(iOS)
-                        do {
-                            let player = try AVAudioPlayer(data: data)
-                            player.delegate = nil
-                            player.prepareToPlay()
-                            setAudioPlayer(player)
-                            if player.play() == false {
-                                onError("Failed to start audio playback.")
-                                throw NSError(domain: "KokoroPlayback", code: -1)
-                            }
-                            return player.duration
-                        } catch {
-                            onError("Failed to initialize audio player: \(error.localizedDescription)")
-                            throw error
-                        }
-                        #elseif os(macOS)
-                        guard let player = NSSound(data: data) else {
-                            onError("Failed to initialize audio player.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        setAudioPlayer(player)
-                        if player.play() == false {
-                            onError("Failed to start audio playback.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        return player.duration
-                        #endif
-                    }
-                }
-
-                enum KokoroPlaybackError: Error { case timeout }
-
-                func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
-                        group.addTask {
-                            try await KokoroTTSService.shared.synthesize(text: text, voice: voice, speed: Float(speed))
-                        }
-                        group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
-                            throw KokoroPlaybackError.timeout
-                        }
-                        let result = try await group.next()!
-                        group.cancelAll()
-                        return result
-                    }
-                }
-
-                let firstData = try await synthesizeWithTimeout(firstChunk)
-                if Task.isCancelled { return }
-                var currentDuration = try await playChunk(firstData)
-                if chunks.count == 1 { return }
-
-                var nextIndex = 1
-                var nextTask: Task<Data, Error>? = Task { try await synthesizeWithTimeout(chunks[nextIndex]) }
-                defer { nextTask?.cancel() }
-
-                while nextIndex < chunks.count {
-                    try await Task.sleep(nanoseconds: UInt64(currentDuration * 1_000_000_000))
-                    if Task.isCancelled { return }
-                    guard let task = nextTask else { return }
-                    let data = try await task.value
-                    nextIndex += 1
-                    if nextIndex < chunks.count {
-                        nextTask = Task { try await synthesizeWithTimeout(chunks[nextIndex]) }
-                    } else { nextTask = nil }
-                    currentDuration = try await playChunk(data)
-                }
-            } catch {
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    let message: String
-                    if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
-                        message = "MLX TTS is not available. Add the MLXAudio package and model access."
-                    } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
-                    } else {
-                        message = "Kokoro TTS failed: \(error.localizedDescription)"
-                    }
-                    onError(message)
-                }
-            }
-        }
-    }
-
-    private func startKokoroPlaybackRedditSummary(
-        text: String,
-        voice: String,
-        speed: Double,
-        setAudioPlayer: @escaping (KokoroAudioPlayer?) -> Void,
-        soundDelegate: SoundDelegate,
-        taskStore: inout Task<Void, Never>?,
-        onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
-    ) {
-        _ = soundDelegate
-        taskStore?.cancel()
-        taskStore = Task {
-            defer {
-                if !PersistenceManager.shared.loadSettings().kokoroPrecacheEnabled {
-                    KokoroTTSService.shared.unloadIfAllowed()
-                }
-                Task { @MainActor in onCompleted() }
-            }
-            do {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-
-                func makeKokoroChunks(from input: String) -> [String] {
-                    let firstSize = min(240, input.count)
-                    let firstChunk = String(input.prefix(firstSize))
-                    let remaining = String(input.dropFirst(firstSize)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !remaining.isEmpty else { return [firstChunk] }
-                    var chunks: [String] = [firstChunk]
-                    let sentences = remaining.components(separatedBy: CharacterSet(charactersIn: ".!?"))
-                    var current = ""
-                    let maxChunkSize = 420
-                    for sentence in sentences {
-                        let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmedSentence.isEmpty { continue }
-                        let sentenceWithPunctuation = trimmedSentence + "."
-                        if current.count + sentenceWithPunctuation.count <= maxChunkSize {
-                            current += (current.isEmpty ? "" : " ") + sentenceWithPunctuation
-                        } else {
-                            if !current.isEmpty { chunks.append(current) }
-                            current = sentenceWithPunctuation
-                        }
-                    }
-                    if !current.isEmpty { chunks.append(current) }
-                    return chunks
-                }
-
-                let chunks = makeKokoroChunks(from: trimmed)
-                guard let firstChunk = chunks.first else { return }
-
-                func playChunk(_ data: Data) async throws -> TimeInterval {
-                    try await MainActor.run {
-                        #if os(iOS)
-                        do {
-                            let player = try AVAudioPlayer(data: data)
-                            player.delegate = nil
-                            player.prepareToPlay()
-                            setAudioPlayer(player)
-                            if player.play() == false {
-                                onError("Failed to start audio playback.")
-                                throw NSError(domain: "KokoroPlayback", code: -1)
-                            }
-                            return player.duration
-                        } catch {
-                            onError("Failed to initialize audio player: \(error.localizedDescription)")
-                            throw error
-                        }
-                        #elseif os(macOS)
-                        guard let player = NSSound(data: data) else {
-                            onError("Failed to initialize audio player.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        setAudioPlayer(player)
-                        if player.play() == false {
-                            onError("Failed to start audio playback.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        return player.duration
-                        #endif
-                    }
-                }
-
-                enum KokoroPlaybackError: Error { case timeout }
-
-                func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
-                        group.addTask {
-                            try await KokoroTTSService.shared.synthesize(text: text, voice: voice, speed: Float(speed))
-                        }
-                        group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
-                            throw KokoroPlaybackError.timeout
-                        }
-                        let result = try await group.next()!
-                        group.cancelAll()
-                        return result
-                    }
-                }
-
-                let firstData = try await synthesizeWithTimeout(firstChunk)
-                if Task.isCancelled { return }
-                var currentDuration = try await playChunk(firstData)
-                if chunks.count == 1 { return }
-
-                var nextIndex = 1
-                var nextTask: Task<Data, Error>? = Task { try await synthesizeWithTimeout(chunks[nextIndex]) }
-                defer { nextTask?.cancel() }
-
-                while nextIndex < chunks.count {
-                    try await Task.sleep(nanoseconds: UInt64(currentDuration * 1_000_000_000))
-                    if Task.isCancelled { return }
-                    guard let task = nextTask else { return }
-                    let data = try await task.value
-                    nextIndex += 1
-                    if nextIndex < chunks.count {
-                        nextTask = Task { try await synthesizeWithTimeout(chunks[nextIndex]) }
-                    } else { nextTask = nil }
-                    currentDuration = try await playChunk(data)
-                }
-            } catch {
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    let message: String
-                    if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
-                        message = "MLX TTS is not available. Add the MLXAudio package and model access."
-                    } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
-                    } else {
-                        message = "Kokoro TTS failed: \(error.localizedDescription)"
-                    }
-                    onError(message)
-                }
-            }
-        }
-    }
 }
 
 
@@ -3163,23 +2951,25 @@ Each item ≤ 2–3 sentences.
 fileprivate struct AnalyticsColors { // Make fileprivate to avoid polluting global scope
     static var background: Color {
         #if os(iOS)
-        return Color(UIColor.systemBackground)
+        Color(uiColor: .systemBackground)
         #else
-        return Color(NSColor.windowBackgroundColor)
+        AppColors.background
         #endif
     }
+
     static var systemGray5: Color {
         #if os(iOS)
-        return Color(UIColor.systemGray5)
+        Color(uiColor: .systemGray5)
         #else
-        return Color(NSColor.systemGray)
+        Color(NSColor.systemGray)
         #endif
     }
+
     static var systemGray6: Color {
         #if os(iOS)
-        return Color(UIColor.systemGray6)
+        Color(uiColor: .systemGray6)
         #else
-        return Color(NSColor.systemGray)
+        Color(NSColor.controlBackgroundColor)
         #endif
     }
     static var neutralGray: Color { .gray }
@@ -3314,6 +3104,30 @@ struct CommentAnalyticsViewIntegrated: View {
                 await generateAnalytics()
             }
         }
+        .confirmationDialog(
+            "Local request is too large",
+            isPresented: Binding(
+                get: { appState.pendingLocalReroute?.presentationScope == .deepAnalysis },
+                set: {
+                    if !$0, appState.pendingLocalReroute?.presentationScope == .deepAnalysis {
+                        appState.dismissPendingLocalReroute()
+                    }
+                }
+            ),
+            titleVisibility: .visible,
+            presenting: appState.pendingLocalReroute
+        ) { _ in
+            ForEach(LocalRerouteProvider.allCases) { provider in
+                Button(provider.displayName) {
+                    appState.reroutePendingLocalRequest(to: provider)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                appState.dismissPendingLocalReroute()
+            }
+        } message: { request in
+            Text(request.message)
+        }
     }
     
     // MARK: - Subviews for Sections
@@ -3426,6 +3240,7 @@ struct CommentAnalyticsViewIntegrated: View {
     
     @ViewBuilder
     private func thematicAnalysisSection() -> some View {
+        // Only show Gemini key error if Gemini is the selected provider
         let needsGeminiKey = effectiveSummaryProvider == .gemini && appState.settings.geminiApiKey.isEmpty
         VStack(alignment: .leading, spacing: 15) {
             Text("Thematic Analysis (AI)")
@@ -3436,10 +3251,10 @@ struct CommentAnalyticsViewIntegrated: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
-            
+
             if isThematicAnalysisLoading {
                 let thematicStreamText = appState.mlxStreamingText
-                if (effectiveSummaryProvider == .mlxLocal || effectiveSummaryProvider == .coreAIMLXLocal) && !thematicStreamText.isEmpty {
+                if (effectiveSummaryProvider == .appleLocal || effectiveSummaryProvider == .mlxLocal || effectiveSummaryProvider == .coreAIMLXLocal) && !thematicStreamText.isEmpty {
                     ScrollView {
                         Text(thematicStreamText)
                             .font(.body)
@@ -3474,7 +3289,7 @@ struct CommentAnalyticsViewIntegrated: View {
             } else if let thematicAnalysis = thematicAnalysis, !thematicAnalysis.isEmpty {
                 GlassySummary(summary: thematicAnalysis)
                     .padding(.horizontal)
-                // Throughput badge for on-device providers (deep analysis)
+                // Throughput badge for on-device providers
                 let _deepAnalysisProvider = effectiveSummaryProvider
                 if (_deepAnalysisProvider == .mlxLocal || _deepAnalysisProvider == .coreAIMLXLocal || _deepAnalysisProvider == .appleLocal || _deepAnalysisProvider == .applePCCGateway || _deepAnalysisProvider == .summarizeDaemon),
                    !appState.mlxLastThroughput.isEmpty {
@@ -3646,7 +3461,7 @@ struct CommentAnalyticsViewIntegrated: View {
             
             switch self.effectiveSummaryProvider {
             case .appleLocal, .appleCloud, .applePCCGateway, .mlxLocal, .coreAIMLXLocal, .webAI, .summarizeDaemon:
-                // These providers do not need API keys for this flow.
+                // Apple providers and MLX Local don't need API keys
                 canProceed = true
                 errorMessage = nil
             case .gemini:
@@ -3667,6 +3482,22 @@ struct CommentAnalyticsViewIntegrated: View {
             }
         }
     }
+
+    private func isLocalAnalysisError(_ text: String) -> Bool {
+        let lowercased = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lowercased.hasPrefix("litert error:")
+            || lowercased.hasPrefix("coreai mlx error:")
+            || lowercased.hasPrefix("mlx local error:")
+            || lowercased.hasPrefix("choose a cloud or remote provider")
+            || lowercased.contains("model id is not configured")
+    }
+
+    private func prepareForRoutedThematicAnalysis() {
+        thematicAnalysis = nil
+        thematicAnalysisError = nil
+        isThematicAnalysisLoading = true
+        appState.mlxStreamingText = ""
+    }
     
     // Modified to use Combine .sink instead of async/await
     private func generateThematicAnalysis(commentsToAnalyze: [RedditCommentModel]) {
@@ -3680,27 +3511,39 @@ struct CommentAnalyticsViewIntegrated: View {
             self.analyzedCommentCount = commentsToAnalyze.count
         }
         
-        let formattedCommentsString = formatCommentsForAnalysis(comments: commentsToAnalyze)
-        
-        let prompt = """
-        Summarize the following Reddit discussion thread, highlighting key opinions, consensus views, and any significant disagreements. Focus on the main topics being discussed. Output plain text only (no markdown symbols like #, *, _, or `):
-
-        \(formattedCommentsString)
-        """
+        let prompt = appState.thematicAnalysisPrompt(comments: commentsToAnalyze)
         
         // Check if we should use Apple Intelligence instead
         if effectiveSummaryProvider == .appleLocal {
-            // Use on-device AI only — no Gemini fallback for deep analysis
+            // Use on-device AI only — no Gemini fallback
             let t0 = Date()
-            appState.performAppleLocalOnlyPublic(prompt: prompt, taskName: "Reddit Thematic Analysis") { analysisText in
-                let elapsed = Date().timeIntervalSince(t0)
-                Task { @MainActor in appState.recordAppleLocalThroughputPublic(text: analysisText, elapsed: elapsed) }
-                DispatchQueue.main.async {
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(analysisText)
-                    self.thematicAnalysisError = nil
-                    self.isThematicAnalysisLoading = false
-                }
-            }
+            appState.performAppleLocalOnlyPublic(
+                prompt: prompt,
+                taskName: "Reddit Thematic Analysis",
+                appleRequestType: .commentSummary,
+                completion: { analysisText in
+                    let elapsed = Date().timeIntervalSince(t0)
+                    Task { @MainActor in appState.recordAppleLocalThroughputPublic(text: analysisText, elapsed: elapsed) }
+                    DispatchQueue.main.async {
+                        self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
+                        self.thematicAnalysisError = nil
+                        self.isThematicAnalysisLoading = false
+                    }
+                },
+                onCancel: {
+                    DispatchQueue.main.async {
+                        self.thematicAnalysis = nil
+                        self.thematicAnalysisError = "Local analysis was cancelled."
+                        self.isThematicAnalysisLoading = false
+                    }
+                },
+                onRouteStart: { _ in
+                    DispatchQueue.main.async {
+                        self.prepareForRoutedThematicAnalysis()
+                    }
+                },
+                presentationScope: .deepAnalysis
+            )
             return
         } else if effectiveSummaryProvider == .appleCloud {
             // Use Apple Cloud via Private Cloud Compute
@@ -3708,42 +3551,55 @@ struct CommentAnalyticsViewIntegrated: View {
 
             appState.launchCloudRequest(for: prompt, type: .commentSummary) { analysisText in
                 DispatchQueue.main.async {
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(analysisText)
-                    self.thematicAnalysisError = nil
-                    self.isThematicAnalysisLoading = false
-                }
-            }
-            return
-        } else if effectiveSummaryProvider == .applePCCGateway {
-            print("☁️ CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using Apple PCC fm CLI.")
-            appState.performPCCGatewaySummaryPublic(prompt: prompt, taskName: "Reddit Thematic Analysis") { analysisText in
-                DispatchQueue.main.async {
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(analysisText)
+                    self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
                     self.thematicAnalysisError = nil
                     self.isThematicAnalysisLoading = false
                 }
             }
             return
         } else if effectiveSummaryProvider == .mlxLocal || effectiveSummaryProvider == .coreAIMLXLocal {
-            // Use MLX Local model for thematic analysis with higher token limit (2048)
+            // Use MLX Local model for thematic analysis with higher token limit
             print("🧠 CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using MLX Local.")
 
-            appState.performMLXLocalAnalysisPublic(prompt: prompt) { analysisText in
-                DispatchQueue.main.async {
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(analysisText)
-                    self.thematicAnalysisError = nil
-                    self.isThematicAnalysisLoading = false
-                }
-            }
+            appState.performMLXLocalAnalysisPublic(
+                prompt: prompt,
+                completion: { analysisText in
+                    DispatchQueue.main.async {
+                        let cleaned = cleanMarkdownArtifactsForDisplay(analysisText)
+                        if self.isLocalAnalysisError(cleaned) {
+                            self.thematicAnalysis = nil
+                            self.thematicAnalysisError = cleaned
+                        } else {
+                            self.thematicAnalysis = cleaned
+                            self.thematicAnalysisError = nil
+                        }
+                        self.isThematicAnalysisLoading = false
+                    }
+                },
+                onCancel: {
+                    DispatchQueue.main.async {
+                        self.thematicAnalysis = nil
+                        self.thematicAnalysisError = "Local analysis was cancelled."
+                        self.isThematicAnalysisLoading = false
+                    }
+                },
+                onRouteStart: { _ in
+                    DispatchQueue.main.async {
+                        self.prepareForRoutedThematicAnalysis()
+                    }
+                },
+                presentationScope: .deepAnalysis
+            )
             return
         } else if effectiveSummaryProvider == .webAI {
             print("🌐 CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using Web AI.")
+            appState.isWebAIHandoffMinimized = true
             appState.performWebAIRequest(
                 title: "Reddit Thematic Analysis",
                 prompt: prompt,
                 onSuccess: { analysisText in
                     DispatchQueue.main.async {
-                        self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(analysisText)
+                        self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
                         self.thematicAnalysisError = nil
                         self.isThematicAnalysisLoading = false
                     }
@@ -3757,11 +3613,21 @@ struct CommentAnalyticsViewIntegrated: View {
                 }
             )
             return
+        } else if effectiveSummaryProvider == .applePCCGateway {
+            print("☁️ CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using Apple PCC Gateway.")
+            appState.performPCCGatewaySummaryPublic(prompt: prompt, taskName: "Reddit Thematic Analysis") { analysisText in
+                DispatchQueue.main.async {
+                    self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
+                    self.thematicAnalysisError = nil
+                    self.isThematicAnalysisLoading = false
+                }
+            }
+            return
         } else if effectiveSummaryProvider == .summarizeDaemon {
-            print("⚙️ CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using Codex / Summarize.")
+            print("⚡ CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using Codex / Summarize.")
             appState.performSummarizeSummaryPublic(prompt: prompt, taskName: "Reddit Thematic Analysis") { analysisText in
                 DispatchQueue.main.async {
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(analysisText)
+                    self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
                     self.thematicAnalysisError = nil
                     self.isThematicAnalysisLoading = false
                 }
@@ -3780,10 +3646,10 @@ struct CommentAnalyticsViewIntegrated: View {
                     self.thematicAnalysis = nil
                 } else if summaryResult == "No summary available" {
                     self.thematicAnalysisError = nil
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(summaryResult)
+                    self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(summaryResult) // Or set to a more user-friendly message
                 } else {
                     // Success case
-                    self.thematicAnalysis = self.appState.cleanMarkdownArtifactsForDisplay(summaryResult)
+                    self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(summaryResult)
                     self.thematicAnalysisError = nil
                 }
                 self.isThematicAnalysisLoading = false
@@ -3840,12 +3706,46 @@ struct GlassyBackgroundModifier: ViewModifier {
     }
 }
 
+// Adaptive glass modifier for general use
+struct AdaptiveGlassModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let tintColor: Color?
+    
+    init(cornerRadius: CGFloat = 12, tintColor: Color? = nil) {
+        self.cornerRadius = cornerRadius
+        self.tintColor = tintColor
+    }
+    
+    func body(content: Content) -> some View {
+        if #available(iOS 15.0, macOS 12.0, *) {
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(tintColor?.opacity(0.3) ?? Color.white.opacity(0.2), lineWidth: 1)
+                )
+        } else {
+            // Fallback for older OS versions
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(tintColor ?? Color.gray.opacity(0.2))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(tintColor?.opacity(0.3) ?? Color.gray.opacity(0.3), lineWidth: 1)
+                )
+        }
+    }
+}
+
 // Update GlassyCommentSummary with enhanced styling and TTS
 struct GlassyCommentSummary: View {
     let summary: CommentSummary
-    var onAskAI: ((String) -> Void)? = nil
-    var onAskAIWeb: ((String) -> Void)? = nil
+    var onAskAISelection: ((String, String) -> Void)? = nil
+    var onAskAIWebSelection: ((String, String) -> Void)? = nil
     @EnvironmentObject var appState: AppState
+    
     // TTS state variables
     @State private var isSynthesizingSpeech: Bool = false
     @State private var isSpeakingLocally: Bool = false
@@ -3862,8 +3762,11 @@ struct GlassyCommentSummary: View {
     @State private var localSpeechSynth: NSSpeechSynthesizer?
     @StateObject private var soundDelegate = SoundDelegate()
     @State private var nextAudioChunk: Data? = nil
-    @State private var localTTSTask: Task<Void, Never>? = nil
 #endif
+
+    private var displaySummaryText: String {
+        cleanAndFormatCommentSummaryForDisplay(summary.summary)
+    }
     
     var body: some View {
 VStack(alignment: .leading, spacing: 14) {
@@ -3871,34 +3774,33 @@ VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 Spacer()
                 
+                // Mac voice picker removed (avoids cross-scope state). TTS uses current system voice.
+                
                 // Cloud TTS button
                 Button {
                     speakSummary()
                 } label: {
                     Image(systemName: "speaker.wave.2")
-                        .font(.subheadline)
                 }
                 .buttonStyle(LiquidGlassButtonStyle())
                 .ttsActiveGlow(isSynthesizingSpeech, color: .blue)
                 .help("Read aloud (Cloud)")
                 .disabled(isSynthesizingSpeech || isSpeakingLocally)
-                
+
                 // Stop speech
                 Button {
                     stopRedditSummarySpeech()
                 } label: {
                     Image(systemName: "stop.fill")
-                        .font(.subheadline)
                 }
                 .buttonStyle(LiquidGlassButtonStyle())
                 .help("Stop speech")
-                
+
                 // Local TTS button
                 Button {
                     speakSummaryLocally()
                 } label: {
                     Image(systemName: "speaker.wave.2.circle")
-                        .font(.subheadline)
                 }
                 .buttonStyle(LiquidGlassButtonStyle())
                 .ttsActiveGlow(isSpeakingLocally, color: .green)
@@ -3908,14 +3810,25 @@ VStack(alignment: .leading, spacing: 14) {
             .padding(.horizontal, 20)
             .padding(.top, 16)
             
-            SelectableText(.init(summary.summary))
-                .font(.body)
-                .foregroundColor(.primary)
-                .onAskAI(onAskAI)
-                .onAskAIWeb(onAskAIWeb)
-                .padding(.vertical, 16)
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if onAskAISelection != nil || onAskAIWebSelection != nil {
+                    SelectableText(
+                        text: displaySummaryText,
+                        onAskAI: onAskAISelection,
+                        onAskAIWeb: onAskAIWebSelection,
+                        textIsPrecleaned: true
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(.init(displaySummaryText))
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
             
             // TTS status indicators
             if isSynthesizingSpeech {
@@ -3950,10 +3863,10 @@ VStack(alignment: .leading, spacing: 14) {
             // Add Copy button here
             Button(action: {
                 #if os(iOS)
-                UIPasteboard.general.string = summary.summary
+                UIPasteboard.general.string = displaySummaryText
                 #elseif os(macOS)
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(summary.summary, forType: .string)
+                NSPasteboard.general.setString(displaySummaryText, forType: .string)
                 #endif
             }) {
                 Label("Copy Summary", systemImage: "doc.on.doc")
@@ -4098,13 +4011,15 @@ VStack(alignment: .leading, spacing: 14) {
     private func stopRedditCommentSummarySpeech() {
         ttsCanceled = true
         #if os(iOS)
+        localTTSTask?.cancel()
+        localTTSTask = nil
+        KokoroTTSService.shared.cancelPlayback()
         audioPlayer?.stop()
         audioPlayer = nil
         localSpeechSynth?.stopSpeaking(at: .immediate)
         #elseif os(macOS)
         audioPlayer?.stop()
         audioPlayer = nil
-        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynth?.stopSpeaking()
         #endif
         nextAudioChunk = nil
@@ -4114,6 +4029,7 @@ VStack(alignment: .leading, spacing: 14) {
 
     private func playAudio(data: Data) {
         #if os(iOS)
+        ensureBackgroundTTSReady()
         // Stop any existing playback
         audioPlayer?.stop()
         
@@ -4176,13 +4092,15 @@ VStack(alignment: .leading, spacing: 14) {
     private func stopRedditSummarySpeech() {
         ttsCanceled = true
         #if os(iOS)
+        localTTSTask?.cancel()
+        localTTSTask = nil
+        KokoroTTSService.shared.cancelPlayback()
         audioPlayer?.stop()
         audioPlayer = nil
         localSpeechSynth?.stopSpeaking(at: .immediate)
         #elseif os(macOS)
         audioPlayer?.stop()
         audioPlayer = nil
-        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynth?.stopSpeaking()
         #endif
         nextAudioChunk = nil
@@ -4192,43 +4110,52 @@ VStack(alignment: .leading, spacing: 14) {
 
     private func speakSummaryLocally() {
         #if os(iOS)
-        // Check if Kokoro engine is selected
-        let settingsLocal = PersistenceManager.shared.loadSettings()
-        if settingsLocal.localTTSEngine == .kokoro {
+        // Toggle off if already speaking
+        if isSpeakingLocally {
+            localTTSTask?.cancel()
+            localTTSTask = nil
+            KokoroTTSService.shared.cancelPlayback()
+            localSpeechSynth?.stopSpeaking(at: .immediate)
+            isSpeakingLocally = false
+            return
+        }
+        
+        guard !summary.summary.isEmpty else {
+            speechSynthesisError = "No summary available to read."
+            return
+        }
+        
+        // Stop any other audio playing
+        audioPlayer?.stop()
+        localSpeechSynth?.stopSpeaking(at: .immediate)
+        ensureBackgroundTTSReady()
+
+        let localEngine = appState.summaryService.getLocalTTSEngine()
+        if localEngine == .kokoro {
             guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocally = false
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocally {
-                localTTSTask?.cancel()
-                localTTSTask = nil
-                audioPlayer?.stop()
-                localSpeechSynth?.stopSpeaking(at: .immediate)
-                isSpeakingLocally = false
-                return
-            }
-            guard !summary.summary.isEmpty else {
-                speechSynthesisError = "No summary available to read."
-                return
-            }
-            audioPlayer?.stop()
             isSpeakingLocally = true
             isSynthesizingSpeech = false
-            startKokoroPlaybackGlassy(
+            speechSynthesisError = nil
+            let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
+            startKokoroPlayback(
                 text: summary.summary,
-                voice: settingsLocal.kokoroVoice,
-                speed: settingsLocal.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayer = player },
+                voice: appState.summaryService.getKokoroVoice(),
+                speed: appState.summaryService.getKokoroSpeed(),
+                allowCaching: allowCaching,
+                precacheEnabled: allowCaching,
+                setAudioPlayer: { [self] player in audioPlayer = player },
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
-                    isSpeakingLocally = false
-                    localTTSTask = nil
+                    self.isSpeakingLocally = false
+                    self.localTTSTask = nil
                 },
                 onError: { message in
-                    speechSynthesisError = message
-                    isSpeakingLocally = false
+                    self.speechSynthesisError = message
+                    self.isSpeakingLocally = false
                 }
             )
             return
@@ -4243,48 +4170,24 @@ VStack(alignment: .leading, spacing: 14) {
                 return
             }
 
-            guard !summary.summary.isEmpty else {
-                speechSynthesisError = "No summary available to read."
-                return
-            }
-
-            // Stop any other audio playing
-            audioPlayer?.stop()
-            
             // Start speaking via Shortcuts
             isSpeakingLocally = true
             isSynthesizingSpeech = false
-            
+
             let success = ShortcutsTTS.shared.speakText(summary.summary) {
                 // Completion handler - called when speech ends (estimated)
                 DispatchQueue.main.async {
                     self.isSpeakingLocally = false
                 }
             }
-            
+
             if !success {
                 isSpeakingLocally = false
                 speechSynthesisError = "Failed to start Shortcuts TTS"
             }
-            
+
             return
         }
-        
-        // Original iOS code for real devices
-        // Toggle off if already speaking
-        if isSpeakingLocally {
-            localSpeechSynth?.stopSpeaking(at: .immediate)
-            isSpeakingLocally = false
-            return
-        }
-        
-        guard !summary.summary.isEmpty else {
-            speechSynthesisError = "No summary available to read."
-            return
-        }
-        
-        // Stop any other audio playing
-        audioPlayer?.stop()
         
         // Initialize speech synthesizer
         if localSpeechSynth == nil {
@@ -4356,239 +4259,46 @@ VStack(alignment: .leading, spacing: 14) {
             speechSynthesisError = "Failed to initialize speech synthesizer."
         }
         #elseif os(macOS)
-        // Check if Kokoro engine is selected
-        let settingsLocal = PersistenceManager.shared.loadSettings()
-        if settingsLocal.localTTSEngine == .kokoro {
-            guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocally = false
-                speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
-                return
-            }
-            if isSpeakingLocally {
-                localTTSTask?.cancel()
-                localTTSTask = nil
-                audioPlayer?.stop()
-                isSpeakingLocally = false
-                return
-            }
-            guard !summary.summary.isEmpty else {
-                speechSynthesisError = "No summary available to read."
-                return
-            }
-            audioPlayer?.stop()
-            isSpeakingLocally = true
-            isSynthesizingSpeech = false
-            startKokoroPlaybackGlassy(
-                text: summary.summary,
-                voice: settingsLocal.kokoroVoice,
-                speed: settingsLocal.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayer = player },
-                soundDelegate: soundDelegate,
-                taskStore: &localTTSTask,
-                onCompleted: {
-                    isSpeakingLocally = false
-                    localTTSTask = nil
-                },
-                onError: { message in
-                    speechSynthesisError = message
-                    isSpeakingLocally = false
-                }
-            )
-            return
-        }
-
-        // Toggle off if already speaking (CLI shortcut cannot truly stop mid-stream)
+        // Toggle off if already speaking
         if isSpeakingLocally {
-            ShortcutsTTS.shared.stopSpeaking()
+            localSpeechSynth?.stopSpeaking()
             isSpeakingLocally = false
             return
         }
-
+        
         guard !summary.summary.isEmpty else {
             speechSynthesisError = "No summary available to read."
             return
         }
-
+        
         // Stop all other audio
         audioPlayer?.stop()
-
+        
+        let synth = NSSpeechSynthesizer()
+        let override = UserDefaults.standard.string(forKey: "LocalTTS.Mac.SelectedVoiceID") ?? ""
+        if !override.isEmpty { _ = setMacSpeechVoice(synth, identifier: override) }
+        else if let voiceID = preferredMacVoiceIdentifier() { _ = setMacSpeechVoice(synth, identifier: voiceID) }
+        synth.delegate = soundDelegate
+        
         isSpeakingLocally = true
         isSynthesizingSpeech = false
-
-        let success = ShortcutsTTS.shared.speakText(summary.summary) {
-            DispatchQueue.main.async {
-                self.isSpeakingLocally = false
-            }
-        }
-
-        if !success {
+        if !synth.startSpeaking(summary.summary) {
             isSpeakingLocally = false
-            speechSynthesisError = "Failed to start Shortcuts TTS on macOS."
+            speechSynthesisError = "Failed to start local speech synthesis."
+        } else {
+            localSpeechSynth = synth
         }
         #endif
-    }
-
-    private func startKokoroPlaybackGlassy(
-        text: String,
-        voice: String,
-        speed: Double,
-        setAudioPlayer: @escaping (KokoroAudioPlayer?) -> Void,
-        soundDelegate: SoundDelegate,
-        taskStore: inout Task<Void, Never>?,
-        onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
-    ) {
-        _ = soundDelegate
-        taskStore?.cancel()
-        taskStore = Task {
-            defer {
-                if !PersistenceManager.shared.loadSettings().kokoroPrecacheEnabled {
-                    KokoroTTSService.shared.unloadIfAllowed()
-                }
-                Task { @MainActor in
-                    onCompleted()
-                }
-            }
-            do {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-
-                func makeKokoroChunks(from input: String) -> [String] {
-                    let firstSize = min(240, input.count)
-                    let firstChunk = String(input.prefix(firstSize))
-                    let remaining = String(input.dropFirst(firstSize)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !remaining.isEmpty else { return [firstChunk] }
-
-                    var chunks: [String] = [firstChunk]
-                    let sentences = remaining.components(separatedBy: CharacterSet(charactersIn: ".!?"))
-                    var current = ""
-                    let maxChunkSize = 420
-                    for sentence in sentences {
-                        let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmedSentence.isEmpty { continue }
-                        let sentenceWithPunctuation = trimmedSentence + "."
-                        if current.count + sentenceWithPunctuation.count <= maxChunkSize {
-                            current += (current.isEmpty ? "" : " ") + sentenceWithPunctuation
-                        } else {
-                            if !current.isEmpty { chunks.append(current) }
-                            current = sentenceWithPunctuation
-                        }
-                    }
-                    if !current.isEmpty { chunks.append(current) }
-                    return chunks
-                }
-
-                let chunks = makeKokoroChunks(from: trimmed)
-                guard let firstChunk = chunks.first else { return }
-
-                func playChunk(_ data: Data) async throws -> TimeInterval {
-                    try await MainActor.run {
-                        #if os(iOS)
-                        do {
-                            let player = try AVAudioPlayer(data: data)
-                            player.delegate = nil
-                            player.prepareToPlay()
-                            setAudioPlayer(player)
-                            if player.play() == false {
-                                onError("Failed to start audio playback.")
-                                throw NSError(domain: "KokoroPlayback", code: -1)
-                            }
-                            return player.duration
-                        } catch {
-                            onError("Failed to initialize audio player: \(error.localizedDescription)")
-                            throw error
-                        }
-                        #elseif os(macOS)
-                        guard let player = NSSound(data: data) else {
-                            onError("Failed to initialize audio player.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        setAudioPlayer(player)
-                        if player.play() == false {
-                            onError("Failed to start audio playback.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        return player.duration
-                        #endif
-                    }
-                }
-
-                enum KokoroPlaybackError: Error { case timeout }
-
-                func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
-                        group.addTask {
-                            try await KokoroTTSService.shared.synthesize(
-                                text: text,
-                                voice: voice,
-                                speed: Float(speed)
-                            )
-                        }
-                        group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
-                            throw KokoroPlaybackError.timeout
-                        }
-                        let result = try await group.next()!
-                        group.cancelAll()
-                        return result
-                    }
-                }
-
-                let firstData = try await synthesizeWithTimeout(firstChunk)
-                if Task.isCancelled { return }
-                var currentDuration = try await playChunk(firstData)
-
-                if chunks.count == 1 { return }
-
-                var nextIndex = 1
-                var nextTask: Task<Data, Error>? = Task {
-                    try await synthesizeWithTimeout(chunks[nextIndex])
-                }
-                defer { nextTask?.cancel() }
-
-                while nextIndex < chunks.count {
-                    try await Task.sleep(nanoseconds: UInt64(currentDuration * 1_000_000_000))
-                    if Task.isCancelled { return }
-
-                    guard let task = nextTask else { return }
-                    let data = try await task.value
-                    nextIndex += 1
-
-                    if nextIndex < chunks.count {
-                        nextTask = Task {
-                            try await synthesizeWithTimeout(chunks[nextIndex])
-                        }
-                    } else {
-                        nextTask = nil
-                    }
-
-                    currentDuration = try await playChunk(data)
-                }
-            } catch {
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    let message: String
-                    if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
-                        message = "MLX TTS is not available. Add the MLXAudio package and model access."
-                    } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
-                    } else {
-                        message = "Kokoro TTS failed: \(error.localizedDescription)"
-                    }
-                    onError(message)
-                }
-            }
-        }
     }
 }
 
 // Add this new component below GlassyCommentSummary
 struct GlassySummary: View {
     let summary: String
-    var onAskAI: ((String) -> Void)? = nil
-    var onAskAIWeb: ((String) -> Void)? = nil
+    var onAskAISelection: ((String, String) -> Void)? = nil
+    var onAskAIWebSelection: ((String, String) -> Void)? = nil
     @EnvironmentObject var appState: AppState
-
+    
     // TTS state variables
     @State private var isSynthesizingSpeech: Bool = false
     @State private var isSpeakingLocally: Bool = false
@@ -4605,8 +4315,38 @@ struct GlassySummary: View {
     @State private var localSpeechSynth: NSSpeechSynthesizer?
     @StateObject private var soundDelegate = SoundDelegate()
     @State private var nextAudioChunk: Data? = nil
-    @State private var localTTSTask: Task<Void, Never>? = nil
 #endif
+
+    private var displaySummary: String {
+        var value = summary
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return value }
+
+        if !value.contains("\n\n") {
+            let normalized = value
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let marked = normalized.replacingOccurrences(
+                of: "([\\.\\!\\?])\\s+(?=[A-Z0-9])",
+                with: "$1|||",
+                options: .regularExpression
+            )
+            let sentences = marked
+                .components(separatedBy: "|||")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if sentences.count >= 2 {
+                value = sentences.joined(separator: "\n\n")
+            } else {
+                value = normalized
+            }
+        }
+
+        value = value.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+        return value
+    }
     
     var body: some View {
 VStack(alignment: .leading) {
@@ -4617,29 +4357,26 @@ VStack(alignment: .leading) {
                     speakSummary()
                 } label: {
                     Image(systemName: "speaker.wave.2")
-                        .font(.subheadline)
                 }
                 .buttonStyle(LiquidGlassButtonStyle())
                 .ttsActiveGlow(isSynthesizingSpeech, color: .blue)
                 .help("Read aloud (Cloud)")
                 .disabled(isSynthesizingSpeech || isSpeakingLocally)
-                
+
                 // Stop speech
                 Button {
                     stopRedditSummarySpeech()
                 } label: {
                     Image(systemName: "stop.fill")
-                        .font(.subheadline)
                 }
                 .buttonStyle(LiquidGlassButtonStyle())
                 .help("Stop speech")
-                
+
                 // Local TTS button
                 Button {
                     speakSummaryLocally()
                 } label: {
                     Image(systemName: "speaker.wave.2.circle")
-                        .font(.subheadline)
                 }
                 .buttonStyle(LiquidGlassButtonStyle())
                 .ttsActiveGlow(isSpeakingLocally, color: .green)
@@ -4651,22 +4388,35 @@ VStack(alignment: .leading) {
                     copyToClipboard(summary)
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.subheadline)
+                        .padding(6)
+                        .background(Color.gray.opacity(0.2))
+                        .cornerRadius(8)
                 }
-                .buttonStyle(LiquidGlassButtonStyle())
+                .buttonStyle(PlainButtonStyle())
                 .help("Copy summary")
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
             
-            SelectableText(.init(summary))
-                .font(.body)
-                .foregroundColor(.primary)
-                .onAskAI(onAskAI)
-                .onAskAIWeb(onAskAIWeb)
-                .padding(.vertical, 16)
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if onAskAISelection != nil || onAskAIWebSelection != nil {
+                    SelectableText(
+                        text: displaySummary,
+                        onAskAI: onAskAISelection,
+                        onAskAIWeb: onAskAIWebSelection,
+                        textIsPrecleaned: true
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(.init(displaySummary))
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.vertical, 16)
+            .padding(.horizontal, 20)
             
             // TTS status indicators
             if isSynthesizingSpeech {
@@ -4808,7 +4558,6 @@ VStack(alignment: .leading) {
         #elseif os(macOS)
         audioPlayer?.stop()
         audioPlayer = nil
-        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynth?.stopSpeaking()
         #endif
         nextAudioChunk = nil
@@ -4818,6 +4567,7 @@ VStack(alignment: .leading) {
 
     private func playAudio(data: Data) {
         #if os(iOS)
+        ensureBackgroundTTSReady()
         // Stop any existing playback
         audioPlayer?.stop()
         
@@ -4880,13 +4630,15 @@ VStack(alignment: .leading) {
     private func stopRedditSummarySpeech() {
         ttsCanceled = true
         #if os(iOS)
+        localTTSTask?.cancel()
+        localTTSTask = nil
+        KokoroTTSService.shared.cancelPlayback()
         audioPlayer?.stop()
         audioPlayer = nil
         localSpeechSynth?.stopSpeaking(at: .immediate)
         #elseif os(macOS)
         audioPlayer?.stop()
         audioPlayer = nil
-        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynth?.stopSpeaking()
         #endif
         nextAudioChunk = nil
@@ -4896,43 +4648,52 @@ VStack(alignment: .leading) {
 
     private func speakSummaryLocally() {
         #if os(iOS)
-        // Check if Kokoro engine is selected
-        let settingsLocal = PersistenceManager.shared.loadSettings()
-        if settingsLocal.localTTSEngine == .kokoro {
+        // Toggle off if already speaking
+        if isSpeakingLocally {
+            localTTSTask?.cancel()
+            localTTSTask = nil
+            KokoroTTSService.shared.cancelPlayback()
+            localSpeechSynth?.stopSpeaking(at: .immediate)
+            isSpeakingLocally = false
+            return
+        }
+        
+        guard !summary.isEmpty else {
+            speechSynthesisError = "No summary available to read."
+            return
+        }
+        
+        // Stop any other audio playing
+        audioPlayer?.stop()
+        localSpeechSynth?.stopSpeaking(at: .immediate)
+        ensureBackgroundTTSReady()
+
+        let localEngine = appState.summaryService.getLocalTTSEngine()
+        if localEngine == .kokoro {
             guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocally = false
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocally {
-                localTTSTask?.cancel()
-                localTTSTask = nil
-                audioPlayer?.stop()
-                localSpeechSynth?.stopSpeaking(at: .immediate)
-                isSpeakingLocally = false
-                return
-            }
-            guard !summary.isEmpty else {
-                speechSynthesisError = "No summary available to read."
-                return
-            }
-            audioPlayer?.stop()
             isSpeakingLocally = true
             isSynthesizingSpeech = false
-            startKokoroPlaybackGlassy(
+            speechSynthesisError = nil
+            let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
+            startKokoroPlayback(
                 text: summary,
-                voice: settingsLocal.kokoroVoice,
-                speed: settingsLocal.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayer = player },
+                voice: appState.summaryService.getKokoroVoice(),
+                speed: appState.summaryService.getKokoroSpeed(),
+                allowCaching: allowCaching,
+                precacheEnabled: allowCaching,
+                setAudioPlayer: { [self] player in audioPlayer = player },
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
-                    isSpeakingLocally = false
-                    localTTSTask = nil
+                    self.isSpeakingLocally = false
+                    self.localTTSTask = nil
                 },
                 onError: { message in
-                    speechSynthesisError = message
-                    isSpeakingLocally = false
+                    self.speechSynthesisError = message
+                    self.isSpeakingLocally = false
                 }
             )
             return
@@ -4947,48 +4708,24 @@ VStack(alignment: .leading) {
                 return
             }
 
-            guard !summary.isEmpty else {
-                speechSynthesisError = "No summary available to read."
-                return
-            }
-
-            // Stop any other audio playing
-            audioPlayer?.stop()
-            
             // Start speaking via Shortcuts
             isSpeakingLocally = true
             isSynthesizingSpeech = false
-            
+
             let success = ShortcutsTTS.shared.speakText(summary) {
                 // Completion handler - called when speech ends (estimated)
                 DispatchQueue.main.async {
                     self.isSpeakingLocally = false
                 }
             }
-            
+
             if !success {
                 isSpeakingLocally = false
                 speechSynthesisError = "Failed to start Shortcuts TTS"
             }
-            
+
             return
         }
-        
-        // Original iOS code for real devices
-        // Toggle off if already speaking
-        if isSpeakingLocally {
-            localSpeechSynth?.stopSpeaking(at: .immediate)
-            isSpeakingLocally = false
-            return
-        }
-        
-        guard !summary.isEmpty else {
-            speechSynthesisError = "No summary available to read."
-            return
-        }
-        
-        // Stop any other audio playing
-        audioPlayer?.stop()
         
         // Initialize speech synthesizer
         if localSpeechSynth == nil {
@@ -5063,78 +4800,37 @@ VStack(alignment: .leading) {
             speechSynthesisError = "Failed to initialize speech synthesizer."
         }
         #elseif os(macOS)
-        // Check if Kokoro engine is selected
-        let settingsLocal = PersistenceManager.shared.loadSettings()
-        if settingsLocal.localTTSEngine == .kokoro {
-            guard KokoroTTSService.shared.isAvailable else {
-                isSpeakingLocally = false
-                speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
-                return
-            }
-            if isSpeakingLocally {
-                localTTSTask?.cancel()
-                localTTSTask = nil
-                audioPlayer?.stop()
-                isSpeakingLocally = false
-                return
-            }
-            guard !summary.isEmpty else {
-                speechSynthesisError = "No summary available to read."
-                return
-            }
-            audioPlayer?.stop()
-            isSpeakingLocally = true
-            isSynthesizingSpeech = false
-            startKokoroPlaybackGlassy(
-                text: summary,
-                voice: settingsLocal.kokoroVoice,
-                speed: settingsLocal.kokoroSpeed,
-                setAudioPlayer: { player in audioPlayer = player },
-                soundDelegate: soundDelegate,
-                taskStore: &localTTSTask,
-                onCompleted: {
-                    isSpeakingLocally = false
-                    localTTSTask = nil
-                },
-                onError: { message in
-                    speechSynthesisError = message
-                    isSpeakingLocally = false
-                }
-            )
-            return
-        }
-
         // Toggle off if already speaking
         if isSpeakingLocally {
             localSpeechSynth?.stopSpeaking()
             isSpeakingLocally = false
             return
         }
-
+        
         guard !summary.isEmpty else {
             speechSynthesisError = "No summary available to read."
             return
         }
-
+        
         // Stop all other audio
         audioPlayer?.stop()
-
+        
+        let synth = NSSpeechSynthesizer()
+        if let override = UserDefaults.standard.string(forKey: "LocalTTS.Mac.SelectedVoiceID"), !override.isEmpty { _ = setMacSpeechVoice(synth, identifier: override) }
+        else if let voiceID = preferredMacVoiceIdentifier() { _ = setMacSpeechVoice(synth, identifier: voiceID) }
+        synth.delegate = soundDelegate
+        
         isSpeakingLocally = true
         isSynthesizingSpeech = false
-
-        let success = ShortcutsTTS.shared.speakText(summary) {
-            DispatchQueue.main.async {
-                self.isSpeakingLocally = false
-            }
-        }
-
-        if !success {
+        if !synth.startSpeaking(summary) {
             isSpeakingLocally = false
-            speechSynthesisError = "Failed to start Shortcuts TTS on macOS."
+            speechSynthesisError = "Failed to start local speech synthesis."
+        } else {
+            localSpeechSynth = synth
         }
         #endif
     }
-
+    
     private func copyToClipboard(_ text: String) {
         #if os(iOS)
         UIPasteboard.general.string = text
@@ -5142,159 +4838,6 @@ VStack(alignment: .leading) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         #endif
-    }
-
-    private func startKokoroPlaybackGlassy(
-        text: String,
-        voice: String,
-        speed: Double,
-        setAudioPlayer: @escaping (KokoroAudioPlayer?) -> Void,
-        soundDelegate: SoundDelegate,
-        taskStore: inout Task<Void, Never>?,
-        onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
-    ) {
-        _ = soundDelegate
-        taskStore?.cancel()
-        taskStore = Task {
-            defer {
-                if !PersistenceManager.shared.loadSettings().kokoroPrecacheEnabled {
-                    KokoroTTSService.shared.unloadIfAllowed()
-                }
-                Task { @MainActor in
-                    onCompleted()
-                }
-            }
-            do {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-
-                func makeKokoroChunks(from input: String) -> [String] {
-                    let firstSize = min(240, input.count)
-                    let firstChunk = String(input.prefix(firstSize))
-                    let remaining = String(input.dropFirst(firstSize)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !remaining.isEmpty else { return [firstChunk] }
-
-                    var chunks: [String] = [firstChunk]
-                    let sentences = remaining.components(separatedBy: CharacterSet(charactersIn: ".!?"))
-                    var current = ""
-                    let maxChunkSize = 420
-                    for sentence in sentences {
-                        let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmedSentence.isEmpty { continue }
-                        let sentenceWithPunctuation = trimmedSentence + "."
-                        if current.count + sentenceWithPunctuation.count <= maxChunkSize {
-                            current += (current.isEmpty ? "" : " ") + sentenceWithPunctuation
-                        } else {
-                            if !current.isEmpty { chunks.append(current) }
-                            current = sentenceWithPunctuation
-                        }
-                    }
-                    if !current.isEmpty { chunks.append(current) }
-                    return chunks
-                }
-
-                let chunks = makeKokoroChunks(from: trimmed)
-                guard let firstChunk = chunks.first else { return }
-
-                func playChunk(_ data: Data) async throws -> TimeInterval {
-                    try await MainActor.run {
-                        #if os(iOS)
-                        do {
-                            let player = try AVAudioPlayer(data: data)
-                            player.delegate = nil
-                            player.prepareToPlay()
-                            setAudioPlayer(player)
-                            if player.play() == false {
-                                onError("Failed to start audio playback.")
-                                throw NSError(domain: "KokoroPlayback", code: -1)
-                            }
-                            return player.duration
-                        } catch {
-                            onError("Failed to initialize audio player: \(error.localizedDescription)")
-                            throw error
-                        }
-                        #elseif os(macOS)
-                        guard let player = NSSound(data: data) else {
-                            onError("Failed to initialize audio player.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        setAudioPlayer(player)
-                        if player.play() == false {
-                            onError("Failed to start audio playback.")
-                            throw NSError(domain: "KokoroPlayback", code: -1)
-                        }
-                        return player.duration
-                        #endif
-                    }
-                }
-
-                enum KokoroPlaybackError: Error { case timeout }
-
-                func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
-                        group.addTask {
-                            try await KokoroTTSService.shared.synthesize(
-                                text: text,
-                                voice: voice,
-                                speed: Float(speed)
-                            )
-                        }
-                        group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
-                            throw KokoroPlaybackError.timeout
-                        }
-                        let result = try await group.next()!
-                        group.cancelAll()
-                        return result
-                    }
-                }
-
-                let firstData = try await synthesizeWithTimeout(firstChunk)
-                if Task.isCancelled { return }
-                var currentDuration = try await playChunk(firstData)
-
-                if chunks.count == 1 { return }
-
-                var nextIndex = 1
-                var nextTask: Task<Data, Error>? = Task {
-                    try await synthesizeWithTimeout(chunks[nextIndex])
-                }
-                defer { nextTask?.cancel() }
-
-                while nextIndex < chunks.count {
-                    try await Task.sleep(nanoseconds: UInt64(currentDuration * 1_000_000_000))
-                    if Task.isCancelled { return }
-
-                    guard let task = nextTask else { return }
-                    let data = try await task.value
-                    nextIndex += 1
-
-                    if nextIndex < chunks.count {
-                        nextTask = Task {
-                            try await synthesizeWithTimeout(chunks[nextIndex])
-                        }
-                    } else {
-                        nextTask = nil
-                    }
-
-                    currentDuration = try await playChunk(data)
-                }
-            } catch {
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    let message: String
-                    if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
-                        message = "MLX TTS is not available. Add the MLXAudio package and model access."
-                    } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
-                    } else {
-                        message = "Kokoro TTS failed: \(error.localizedDescription)"
-                    }
-                    onError(message)
-                }
-            }
-        }
     }
 }
 
@@ -5319,8 +4862,7 @@ struct ClickablePostImage: View {
     var body: some View {
         Group {
             if isGIF {
-                // Use animated image for GIFs (iOS only); fallback to static on macOS
-                #if os(iOS)
+                // Use animated image for GIFs
                 KFAnimatedImage(url)
                     .placeholder {
                         Rectangle()
@@ -5344,29 +4886,6 @@ struct ClickablePostImage: View {
                     .onAppear {
                         print("🎬 Loading animated GIF in post: \(url.absoluteString)")
                     }
-                #else
-                KFImage(url)
-                    .placeholder {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.1))
-                            .frame(maxWidth: .infinity, maxHeight: 200)
-                            .cornerRadius(8)
-                            .overlay(
-                                VStack {
-                                    ProgressView()
-                                    Text("Loading image...")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                            )
-                    }
-                    .fade(duration: 0.25)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: 300)
-                    .cornerRadius(8)
-                    .clipped()
-                #endif
             } else {
                 // Use regular image for non-GIFs
                 KFImage(url)

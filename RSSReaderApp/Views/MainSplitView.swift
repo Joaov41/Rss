@@ -18,54 +18,53 @@ struct MainSplitView: View {
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 250)
         .toolbar {
-            #if os(iOS)
-            ToolbarItem(placement: .navigationBarTrailing) {
-                settingsButton
+            #if os(macOS)
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gear")
+                }
             }
             #else
-            ToolbarItem(placement: .automatic) {
-                settingsButton
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gear")
+                }
             }
             #endif
         }
         .sheet(isPresented: $showSettings) {
-            settingsSheetContent
-        }
-    }
-}
-
-private extension MainSplitView {
-    var settingsButton: some View {
-        Button {
-            showSettings = true
-        } label: {
-            Image(systemName: "gear")
-        }
-    }
-
-    @ViewBuilder
-    var settingsSheetContent: some View {
-        #if os(iOS)
-        NavigationView {
-            SettingsView()
-                .environmentObject(appState)
-                .navigationTitle("Settings")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { showSettings = false }
+            #if os(macOS)
+            NavigationStack {
+                SettingsView()
+                    .environmentObject(appState)
+                    .navigationTitle("Settings")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showSettings = false }
+                        }
                     }
-                }
+            }
+            #else
+            NavigationView {
+                SettingsView()
+                    .environmentObject(appState)
+                    .navigationBarTitle("Settings", displayMode: .inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showSettings = false }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+            .presentationCornerRadius(40) // Balanced radius to prevent clipping
+            .presentationBackground(.ultraThinMaterial) // Use thin material for iOS 26
+            .presentationBackgroundInteraction(.enabled)
+            #endif
         }
-        .presentationDetents([.large])
-        .presentationCornerRadius(40)
-        .presentationBackground(.ultraThinMaterial)
-        .presentationBackgroundInteraction(.enabled)
-        #else
-        SettingsView()
-            .environmentObject(appState)
-            .frame(minWidth: 760, idealWidth: 860, minHeight: 640, idealHeight: 760)
-        #endif
     }
 }
 
@@ -95,24 +94,22 @@ struct SidebarView: View {
 struct ArticleListView: View {
     @EnvironmentObject var appState: AppState
     
-    var sortedArticles: [Article] {
-        appState.feeds.flatMap { $0.articles }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-    
     var body: some View {
         List {
-            ForEach(sortedArticles) { article in
-                NavigationLink(destination: ArticleDetailView()) {
-                    Text(article.title)
-                        .contentShape(Rectangle())
+            ForEach(appState.feeds.flatMap { $0.articles }
+                .sorted(by: { $0.publishDate > $1.publishDate })) { article in
+                    NavigationLink(destination: ArticleDetailView()) {
+                        Text(article.title)
+                            .contentShape(Rectangle())
+                    }
+                    .simultaneousGesture(TapGesture().onEnded {
+                        // Set article data on tap
+                        DispatchQueue.main.async {
+                            appState.selectedArticle = article
+                            appState.selectedArticleId = article.id
+                        }
+                    })
                 }
-                .simultaneousGesture(TapGesture().onEnded {
-                    // Set article data on tap
-                    appState.selectedArticle = article
-                    appState.selectedArticleId = article.id
-                })
-            }
         }
         .navigationTitle("Articles")
     }

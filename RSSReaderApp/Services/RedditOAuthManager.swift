@@ -12,7 +12,6 @@ import UIKit
 import AuthenticationServices
 #elseif os(macOS)
 import AppKit
-import AuthenticationServices
 #endif
 
 class RedditOAuthManager: NSObject, ObservableObject {
@@ -26,7 +25,10 @@ class RedditOAuthManager: NSObject, ObservableObject {
     }
     // MUST match your Reddit app's redirect URI exactly
     private let redirectURI = "redapp://auth"
-    private let scope = "read,identity,mysubreddits,history,vote,submit"
+    private let scopes = ["identity", "edit", "vote", "submit", "read", "mysubreddits", "history"]
+    private var scope: String {
+        scopes.joined(separator: " ")
+    }
 
     // OAuth endpoints - use standard authorize (not compact for mobile)
     private let authorizationURL = "https://www.reddit.com/api/v1/authorize"
@@ -36,6 +38,7 @@ class RedditOAuthManager: NSObject, ObservableObject {
 
     @Published var isAuthenticated = false
     @Published var username: String = ""
+    @Published var grantedScopes: String = ""
 
     private let persistenceManager = PersistenceManager.shared
     private var cancellables = Set<AnyCancellable>()
@@ -44,14 +47,8 @@ class RedditOAuthManager: NSObject, ObservableObject {
     private var isRefreshing = false
     private let refreshLock = NSLock()
 
-    #if os(iOS) || os(macOS)
+    #if os(iOS)
     private var authSession: ASWebAuthenticationSession?
-    #endif
-    
-    #if os(macOS)
-    // Store pending auth state for macOS callback handling
-    private var pendingAuthState: String?
-    private var pendingAuthCompletion: ((Result<Void, Error>) -> Void)?
     #endif
 
     // MARK: - Initialization
@@ -67,8 +64,15 @@ class RedditOAuthManager: NSObject, ObservableObject {
         let settings = persistenceManager.loadSettings()
 
         if !settings.redditAccessToken.isEmpty {
+            guard Self.hasReplyPermission(in: settings.redditGrantedScopes) else {
+                print("🔐 RedditOAuth: Stored token is missing reply scopes; requiring fresh Reddit sign-in")
+                clearStoredTokens()
+                return
+            }
+
             isAuthenticated = true
             username = settings.redditUsername
+            grantedScopes = settings.redditGrantedScopes
 
             // Check if token is expired
             if let expiry = settings.redditTokenExpiry, expiry < Date() {
@@ -80,6 +84,7 @@ class RedditOAuthManager: NSObject, ObservableObject {
     var hasValidToken: Bool {
         let settings = persistenceManager.loadSettings()
         guard !settings.redditAccessToken.isEmpty else { return false }
+        guard Self.hasReplyPermission(in: settings.redditGrantedScopes) else { return false }
 
         if let expiry = settings.redditTokenExpiry {
             return expiry > Date()
@@ -158,66 +163,12 @@ class RedditOAuthManager: NSObject, ObservableObject {
 
     #if os(macOS)
     private func startMacOSAuthFlow(authURL: URL, state: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Prefer ASWebAuthenticationSession for reliable callback handling on macOS.
-        authSession = ASWebAuthenticationSession(
-            url: authURL,
-            callbackURLScheme: "redapp"
-        ) { [weak self] callbackURL, error in
-            guard let self = self else { return }
-
-            if let error = error {
-                print("❌ RedditOAuth: Authentication failed: \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
-                return
-            }
-
-            guard let callbackURL = callbackURL else {
-                DispatchQueue.main.async {
-                    completion(.failure(NSError(domain: "RedditOAuth", code: -2, userInfo: [NSLocalizedDescriptionKey: "No callback URL received"])))
-                }
-                return
-            }
-
-            DispatchQueue.main.async {
-                self.handleCallback(url: callbackURL, expectedState: state, completion: completion)
-            }
-        }
-
-        authSession?.presentationContextProvider = self
-        authSession?.prefersEphemeralWebBrowserSession = false
-
-        let started = authSession?.start() ?? false
-        if started {
-            pendingAuthState = nil
-            pendingAuthCompletion = nil
-            print("🔐 RedditOAuth: Started ASWebAuthenticationSession for authentication")
-            return
-        }
-
-        // Fallback: open in default browser and handle URL scheme callback via onOpenURL.
-        authSession = nil
-        pendingAuthState = state
-        pendingAuthCompletion = completion
+        // For macOS, open in default browser and handle URL scheme callback
         NSWorkspace.shared.open(authURL)
-        print("🔐 RedditOAuth: Opened browser for authentication (fallback). Waiting for callback...")
-    }
-    
-    /// Handle the OAuth callback URL on macOS (called from RSSReaderApp.onOpenURL)
-    func handleMacOSCallback(url: URL) {
-        guard let state = pendingAuthState,
-              let completion = pendingAuthCompletion else {
-            print("❌ RedditOAuth: No pending auth state found for callback")
-            return
-        }
-        
-        // Clear the pending state
-        pendingAuthState = nil
-        pendingAuthCompletion = nil
-        
-        // Use the existing handleCallback method
-        handleCallback(url: url, expectedState: state, completion: completion)
+
+        // Note: You need to handle the URL callback in your AppDelegate
+        // Store the completion handler for when the callback comes
+        print("🔐 RedditOAuth: Opened browser for authentication. Waiting for callback...")
     }
     #endif
 
@@ -264,7 +215,6 @@ class RedditOAuthManager: NSObject, ObservableObject {
         let credentials = "\(clientId):".data(using: .utf8)!.base64EncodedString()
         request.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("RSS Reader App/1.0", forHTTPHeaderField: "User-Agent")
 
         // Build request body
         var bodyComponents = URLComponents()
@@ -305,8 +255,7 @@ class RedditOAuthManager: NSObject, ObservableObject {
 
                 print("✅ RedditOAuth: Successfully authenticated with Reddit")
             } catch {
-                let bodyPreview = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
-                print("❌ RedditOAuth: Failed to decode token response: \(error). Body: \(bodyPreview)")
+                print("❌ RedditOAuth: Failed to decode token response: \(error)")
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
@@ -335,7 +284,6 @@ class RedditOAuthManager: NSObject, ObservableObject {
         let credentials = "\(clientId):".data(using: .utf8)!.base64EncodedString()
         request.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("RSS Reader App/1.0", forHTTPHeaderField: "User-Agent")
 
         var bodyComponents = URLComponents()
         bodyComponents.queryItems = [
@@ -373,8 +321,7 @@ class RedditOAuthManager: NSObject, ObservableObject {
                     completion(.success(tokenResponse.access_token))
                 }
             } catch {
-                let bodyPreview = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
-                print("❌ RedditOAuth: Failed to decode refresh response: \(error). Body: \(bodyPreview)")
+                print("❌ RedditOAuth: Failed to decode refresh response: \(error)")
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
@@ -479,6 +426,10 @@ class RedditOAuthManager: NSObject, ObservableObject {
         if let refreshToken = tokenResponse.refresh_token {
             settings.redditRefreshToken = refreshToken
         }
+        settings.redditGrantedScopes = tokenResponse.scope
+        DispatchQueue.main.async {
+            self.grantedScopes = tokenResponse.scope
+        }
 
         // Calculate expiry time (Reddit tokens expire in 1 hour)
         let expiryDate = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in - 300)) // 5 min buffer
@@ -490,17 +441,37 @@ class RedditOAuthManager: NSObject, ObservableObject {
     // MARK: - Logout
 
     func logout() {
+        clearStoredTokens()
+
+        print("🔐 RedditOAuth: Logged out")
+    }
+
+    private func clearStoredTokens() {
         var settings = persistenceManager.loadSettings()
         settings.redditAccessToken = ""
         settings.redditRefreshToken = ""
         settings.redditTokenExpiry = nil
         settings.redditUsername = ""
+        settings.redditGrantedScopes = ""
         persistenceManager.saveSettings(settings)
 
         isAuthenticated = false
         username = ""
+        grantedScopes = ""
+    }
 
-        print("🔐 RedditOAuth: Logged out")
+    var hasReplyPermission: Bool {
+        Self.hasReplyPermission(in: grantedScopes)
+    }
+
+    private static func hasReplyPermission(in rawScopes: String) -> Bool {
+        let scopes = Set(
+            rawScopes
+                .components(separatedBy: CharacterSet(charactersIn: " ,"))
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        return scopes.contains("edit") && scopes.contains("submit")
     }
 
     // MARK: - Token Response Model
@@ -516,14 +487,10 @@ class RedditOAuthManager: NSObject, ObservableObject {
 
 // MARK: - ASWebAuthenticationPresentationContextProviding
 
-#if os(iOS) || os(macOS)
+#if os(iOS)
 extension RedditOAuthManager: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        #if os(iOS)
         return UIApplication.shared.windows.first { $0.isKeyWindow } ?? ASPresentationAnchor()
-        #elseif os(macOS)
-        return NSApp.keyWindow ?? NSApp.mainWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
-        #endif
     }
 }
 #endif

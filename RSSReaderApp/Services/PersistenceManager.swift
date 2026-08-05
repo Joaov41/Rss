@@ -14,6 +14,29 @@ final class PersistenceManager {
     private var cachedFavoriteRedditPosts: Set<String>?
     private var cachedSubscriptions: [Subscription]?
 
+    private final class TokenSetCacheEntry {
+        let tokens: Set<String>
+
+        init(tokens: Set<String>) {
+            self.tokens = tokens
+        }
+    }
+
+    // NSCache is thread-safe and keeps repeated article/post probes from
+    // re-running URL canonicalization and Reddit alias expansion.
+    private let expandedReadTokenCache: NSCache<NSString, TokenSetCacheEntry> = {
+        let cache = NSCache<NSString, TokenSetCacheEntry>()
+        cache.countLimit = 4_096
+        cache.totalCostLimit = 4 * 1024 * 1024
+        return cache
+    }()
+    private let normalizedTokenCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 4_096
+        cache.totalCostLimit = 1 * 1024 * 1024
+        return cache
+    }()
+
     // Keys for UserDefaults
     private enum Keys {
         static let subscriptions = "subscriptions"
@@ -29,37 +52,64 @@ final class PersistenceManager {
         performInitialCloudMerge()
     }
 
-	// MARK: - Cloud Sync Integration
+    struct CloudPollReadState {
+        let readArticleTokens: Set<String>
+        let readRedditTokens: Set<String>
+        let didArticleSetChange: Bool
+        let didRedditSetChange: Bool
+    }
 
-	/// Pull-only merge: reads from cloud and updates local cache, but does NOT write back to cloud.
-	/// Use this for polling to avoid race conditions that could overwrite other devices' changes.
-	func pullFromCloud() {
-		cloudSync.forceSynchronize()
+		// MARK: - Cloud Sync Integration
 
-		// Polling path: preserve local read marks immediately while incorporating cloud.
-		// Manual sync remains cloud-authoritative.
-		let localReadArticles = getLocalReadArticles()
-		let cloudReadArticles = normalizeIDs(cloudSync.getCloudReadArticles())
-		let effectiveReadArticles = normalizeIDs(localReadArticles.union(cloudReadArticles))
-		if effectiveReadArticles != localReadArticles {
-			saveLocalReadArticles(effectiveReadArticles)
+		/// Pull-only merge: reads from cloud and updates local cache, but does NOT write back to cloud.
+		/// Use this for polling to avoid race conditions that could overwrite other devices' changes.
+		func pullFromCloud() {
+			let readState = pullFromCloudReadState()
+			applyCloudPollReadState(readState)
 		}
-		cachedReadArticles = effectiveReadArticles
 
-		// Polling path: preserve local read marks immediately while incorporating cloud.
-		let localReadPosts = getLocalReadRedditPosts()
-		let cloudReadPosts = normalizeIDs(cloudSync.getCloudReadRedditPosts())
-		let effectiveReadPosts = normalizeIDs(localReadPosts.union(cloudReadPosts))
-		if effectiveReadPosts != localReadPosts {
-			saveLocalReadRedditPosts(effectiveReadPosts)
+    /// Computes read-state union for polling. Safe to call off the main thread.
+    /// This method does not mutate local cache/state; call `applyCloudPollReadState(_:)` on main to commit.
+    func pullFromCloudReadState() -> CloudPollReadState {
+        cloudSync.forceSynchronize()
+
+        let normalizedLocalReadArticles = normalizeIDs(getLocalReadArticles())
+        let cloudReadArticles = normalizeIDs(cloudSync.getCloudReadArticles())
+        let effectiveReadArticles = normalizeIDs(normalizedLocalReadArticles.union(cloudReadArticles))
+
+        let normalizedLocalReadPosts = normalizeIDs(getLocalReadRedditPosts())
+        let cloudReadPosts = normalizeIDs(cloudSync.getCloudReadRedditPosts())
+        let effectiveReadPosts = normalizeIDs(normalizedLocalReadPosts.union(cloudReadPosts))
+
+        return CloudPollReadState(
+            readArticleTokens: effectiveReadArticles,
+            readRedditTokens: effectiveReadPosts,
+            didArticleSetChange: effectiveReadArticles != normalizedLocalReadArticles,
+            didRedditSetChange: effectiveReadPosts != normalizedLocalReadPosts
+        )
+    }
+
+    /// Applies a previously computed poll read-state snapshot.
+    func applyCloudPollReadState(_ readState: CloudPollReadState) {
+        if readState.didArticleSetChange {
+            saveLocalReadArticles(readState.readArticleTokens)
+        }
+        cachedReadArticles = readState.readArticleTokens
+
+        if readState.didRedditSetChange {
+            saveLocalReadRedditPosts(readState.readRedditTokens)
+        }
+        cachedReadRedditPosts = readState.readRedditTokens
+    }
+
+    /// User-initiated "Sync Now": pull latest cloud state and reapply locally.
+    /// Read-state is cloud-authoritative so all devices converge on the same unread counts.
+    @discardableResult
+    func manualPullFromCloud(synchronize: Bool = true) -> Bool {
+		if synchronize {
+			cloudSync.forceSynchronize()
 		}
-		cachedReadRedditPosts = effectiveReadPosts
-	}
-
-	/// User-initiated "Sync Now": pull latest cloud state and reapply locally.
-	/// Read-state is cloud-authoritative so all devices converge on the same unread counts.
-	func manualPullFromCloud() {
-		cloudSync.forceSynchronize()
+		var didChangeSubscriptions = false
 
 		// IMPORTANT: Normalize all IDs for consistent cache lookups
 		let localReadArticles = getLocalReadArticles()
@@ -97,15 +147,21 @@ final class PersistenceManager {
 		// Subscriptions: secondary devices should pull from cloud; primary ignores cloud.
 		let localSubs = loadSubscriptionsFromLocal()
 		let cloudSubs = cloudSync.getCloudSubscriptions()
+		let previousSubscriptions = cachedSubscriptions ?? localSubs
 		if cloudSync.isThisDevicePrimary {
 			cachedSubscriptions = localSubs
-		} else if !cloudSubs.isEmpty {
-			saveSubscriptionsToLocal(cloudSubs)
+		} else if cloudSync.hasCloudSubscriptionsValue() {
+			if !subscriptionsEqual(previousSubscriptions, cloudSubs) {
+				saveSubscriptionsToLocal(cloudSubs)
+				didChangeSubscriptions = true
+			}
 			cachedSubscriptions = cloudSubs
 		} else {
-			// Cloud empty: keep local as a fallback.
+			// No cloud value: keep local as a fallback.
 			cachedSubscriptions = localSubs
 		}
+
+		return didChangeSubscriptions
 	}
 
 	    func performInitialCloudMerge() {
@@ -169,7 +225,7 @@ final class PersistenceManager {
             print("☁️ PersistenceManager: Primary device - merged subscriptions")
         } else if cloudSync.hasPrimaryDevice {
             // Another device is primary: use cloud subscriptions as source of truth
-            if !cloudSubs.isEmpty {
+            if cloudSync.hasCloudSubscriptionsValue() {
                 saveSubscriptionsToLocal(cloudSubs)
                 cachedSubscriptions = cloudSubs
                 print("☁️ PersistenceManager: Secondary device - using cloud subscriptions from primary")
@@ -193,56 +249,75 @@ final class PersistenceManager {
 
     /// Call this when remote changes are received to update local cache.
     /// Remote updates merge with local so freshly-read badges don't regress.
-    func handleRemoteReadArticlesChange(_ ids: Set<String>) {
+    @discardableResult
+    func handleRemoteReadArticlesChange(_ ids: Set<String>) -> Bool {
         let normalizedIds = normalizeIDs(ids)
-        let local = getLocalReadArticles()
+        let local = cachedReadArticles ?? getLocalReadArticles()
         let merged = normalizeIDs(local.union(normalizedIds))
+        guard merged != local else { return false }
         saveLocalReadArticles(merged)
         cachedReadArticles = merged
         print("☁️ PersistenceManager: Applied \(ids.count) cloud articles → local cache now has \(merged.count)")
+        return true
     }
 
-    func handleRemoteFavoriteArticlesChange(_ ids: Set<String>) {
+    @discardableResult
+    func handleRemoteFavoriteArticlesChange(_ ids: Set<String>) -> Bool {
         let normalizedIds = normalizeIDs(ids)
-        let local = getLocalFavoriteArticles()
+        let local = cachedFavoriteArticles ?? getLocalFavoriteArticles()
         let merged = cloudSync.mergeReadStates(local: local, cloud: normalizedIds)
         let normalizedMerged = normalizeIDs(merged)
+        guard normalizedMerged != local else { return false }
         saveLocalFavoriteArticles(normalizedMerged)
         cachedFavoriteArticles = normalizedMerged
+        return true
     }
 
     /// Remote updates merge with local so freshly-read badges don't regress.
-    func handleRemoteReadRedditPostsChange(_ ids: Set<String>) {
+    @discardableResult
+    func handleRemoteReadRedditPostsChange(_ ids: Set<String>) -> Bool {
         let normalizedIds = normalizeIDs(ids)
-        let local = getLocalReadRedditPosts()
+        let local = cachedReadRedditPosts ?? getLocalReadRedditPosts()
         let merged = normalizeIDs(local.union(normalizedIds))
+        guard merged != local else { return false }
         saveLocalReadRedditPosts(merged)
         cachedReadRedditPosts = merged
         print("☁️ PersistenceManager: Applied \(ids.count) cloud Reddit posts → local cache now has \(merged.count)")
+        return true
     }
 
-    func handleRemoteFavoriteRedditPostsChange(_ ids: Set<String>) {
+    @discardableResult
+    func handleRemoteFavoriteRedditPostsChange(_ ids: Set<String>) -> Bool {
         let normalizedIds = normalizeIDs(ids)
-        let local = getLocalFavoriteRedditPosts()
+        let local = cachedFavoriteRedditPosts ?? getLocalFavoriteRedditPosts()
         let merged = cloudSync.mergeReadStates(local: local, cloud: normalizedIds)
         let normalizedMerged = normalizeIDs(merged)
+        guard normalizedMerged != local else { return false }
         saveLocalFavoriteRedditPosts(normalizedMerged)
         cachedFavoriteRedditPosts = normalizedMerged
+        return true
     }
 
-    func handleRemoteSubscriptionsChange(_ subscriptions: [Subscription]) {
+    @discardableResult
+    func handleRemoteSubscriptionsChange(_ subscriptions: [Subscription], allowEmptyCloudValue: Bool = false) -> Bool {
         // Only accept remote subscription changes if we're not the primary device
         if cloudSync.isThisDevicePrimary {
             print("☁️ PersistenceManager: Ignoring remote subscription change - this device is primary")
-            return
+            return false
         }
 
-        // Secondary device: accept cloud subscriptions as source of truth
-        if !subscriptions.isEmpty {
-            saveSubscriptionsToLocal(subscriptions)
-            cachedSubscriptions = subscriptions
-            print("☁️ PersistenceManager: Updated local subscriptions from primary device")
+        // Secondary device: accept cloud subscriptions as source of truth.
+        // Empty is valid only when the cloud key itself exists.
+        if subscriptions.isEmpty && !allowEmptyCloudValue && !cloudSync.hasCloudSubscriptionsValue() {
+            return false
         }
+
+        let current = cachedSubscriptions ?? loadSubscriptionsFromLocal()
+        guard !subscriptionsEqual(current, subscriptions) else { return false }
+        saveSubscriptionsToLocal(subscriptions)
+        cachedSubscriptions = subscriptions
+        print("☁️ PersistenceManager: Updated local subscriptions from primary device")
+        return true
     }
 
     // MARK: - Local Storage Helpers
@@ -407,8 +482,17 @@ final class PersistenceManager {
         isArticleRead(tokens: articleReadTokens(for: article))
     }
 
-    func isArticleRead(_ articleId: String) -> Bool {
-        isArticleRead(tokens: articleReadTokens(articleId: articleId, articleURL: nil))
+	    func isArticleRead(_ articleId: String) -> Bool {
+	        isArticleRead(tokens: articleReadTokens(articleId: articleId, articleURL: nil))
+	    }
+
+    func readTokensForPolling(articleID: String, articleURL: URL?, title: String?, feedURL: String?) -> Set<String> {
+        articleReadTokens(articleId: articleID, articleURL: articleURL, title: title, feedURL: feedURL)
+    }
+
+    func containsReadArticle(tokens: Set<String>, in readTokenSet: Set<String>) -> Bool {
+        let candidates = normalizeIDs(tokens)
+        return !readTokenSet.isDisjoint(with: candidates)
     }
 
     private func getReadArticles() -> Set<String> {
@@ -418,7 +502,7 @@ final class PersistenceManager {
     // MARK: - Article Favorites
     func addFavoriteArticle(_ articleId: String) {
         var favorites = cachedFavoriteArticles ?? getLocalFavoriteArticles()
-        favorites.insert(ArticleIDNormalizer.normalize(articleId))
+        favorites.insert(normalizedToken(articleId))
         saveLocalFavoriteArticles(favorites)
         cachedFavoriteArticles = favorites
         // Sync to cloud
@@ -427,7 +511,7 @@ final class PersistenceManager {
 
     func removeFavoriteArticle(_ articleId: String) {
         var favorites = cachedFavoriteArticles ?? getLocalFavoriteArticles()
-        favorites.remove(ArticleIDNormalizer.normalize(articleId))
+        favorites.remove(normalizedToken(articleId))
         saveLocalFavoriteArticles(favorites)
         cachedFavoriteArticles = favorites
         // Sync to cloud
@@ -435,7 +519,7 @@ final class PersistenceManager {
     }
 
     func isArticleFavorite(_ articleId: String) -> Bool {
-        let normalized = ArticleIDNormalizer.normalize(articleId)
+        let normalized = normalizedToken(articleId)
         return (cachedFavoriteArticles ?? getLocalFavoriteArticles()).contains(normalized)
     }
 
@@ -456,63 +540,31 @@ final class PersistenceManager {
         isRedditPostRead(tokens: redditReadTokens(for: post))
     }
 
-    func isRedditPostRead(_ postId: String) -> Bool {
-        isRedditPostRead(tokens: redditReadTokens(postId: postId, subreddit: nil))
+	    func isRedditPostRead(_ postId: String) -> Bool {
+	        isRedditPostRead(tokens: redditReadTokens(postId: postId, subreddit: nil))
+	    }
+
+    func readTokensForPolling(postID: String, subreddit: String, postURL: URL?) -> Set<String> {
+        var tokens = redditReadTokens(postId: postID, subreddit: subreddit)
+        if let rawURL = postURL?.absoluteString, !rawURL.isEmpty {
+            tokens.insert(rawURL)
+        }
+        return normalizeIDs(tokens)
+    }
+
+    func containsReadRedditPost(tokens: Set<String>, in readTokenSet: Set<String>) -> Bool {
+        let candidates = normalizeIDs(tokens)
+        return !readTokenSet.isDisjoint(with: candidates)
     }
 
     private func getReadRedditPosts() -> Set<String> {
         return cachedReadRedditPosts ?? getLocalReadRedditPosts()
     }
-
-    /// Backfill richer read tokens for already-read visible items so future ID variants stay read.
-    /// Returns how many new tokens were added for each content type.
-    @discardableResult
-    func backfillReadTokensIfNeeded(articles: [Article], posts: [RedditPost]) -> (addedArticleTokens: Int, addedRedditTokens: Int) {
-        var readArticles = cachedReadArticles ?? getLocalReadArticles()
-        var readPosts = cachedReadRedditPosts ?? getLocalReadRedditPosts()
-
-        var articleTokensToSync: Set<String> = []
-        var redditTokensToSync: Set<String> = []
-        var addedArticleTokens = 0
-        var addedRedditTokens = 0
-
-        for article in articles where article.isRead {
-            let tokens = articleReadTokens(for: article)
-            let missing = tokens.subtracting(readArticles)
-            guard !missing.isEmpty else { continue }
-            readArticles.formUnion(missing)
-            articleTokensToSync.formUnion(missing)
-            addedArticleTokens += missing.count
-        }
-
-        for post in posts where post.isRead {
-            let tokens = redditReadTokens(for: post)
-            let missing = tokens.subtracting(readPosts)
-            guard !missing.isEmpty else { continue }
-            readPosts.formUnion(missing)
-            redditTokensToSync.formUnion(missing)
-            addedRedditTokens += missing.count
-        }
-
-        if addedArticleTokens > 0 {
-            saveLocalReadArticles(readArticles)
-            cachedReadArticles = readArticles
-            cloudSync.syncReadArticles(articleTokensToSync)
-        }
-
-        if addedRedditTokens > 0 {
-            saveLocalReadRedditPosts(readPosts)
-            cachedReadRedditPosts = readPosts
-            cloudSync.syncReadRedditPosts(redditTokensToSync)
-        }
-
-        return (addedArticleTokens, addedRedditTokens)
-    }
     
     // MARK: - Reddit Post Favorites
     func addFavoriteRedditPost(_ postId: String) {
         var favorites = cachedFavoriteRedditPosts ?? getLocalFavoriteRedditPosts()
-        favorites.insert(ArticleIDNormalizer.normalize(postId))
+        favorites.insert(normalizedToken(postId))
         saveLocalFavoriteRedditPosts(favorites)
         cachedFavoriteRedditPosts = favorites
         // Sync to cloud
@@ -521,7 +573,7 @@ final class PersistenceManager {
 
     func removeFavoriteRedditPost(_ postId: String) {
         var favorites = cachedFavoriteRedditPosts ?? getLocalFavoriteRedditPosts()
-        favorites.remove(ArticleIDNormalizer.normalize(postId))
+        favorites.remove(normalizedToken(postId))
         saveLocalFavoriteRedditPosts(favorites)
         cachedFavoriteRedditPosts = favorites
         // Sync to cloud
@@ -529,7 +581,7 @@ final class PersistenceManager {
     }
 
     func isRedditPostFavorite(_ postId: String) -> Bool {
-        let normalized = ArticleIDNormalizer.normalize(postId)
+        let normalized = normalizedToken(postId)
         return (cachedFavoriteRedditPosts ?? getLocalFavoriteRedditPosts()).contains(normalized)
     }
 
@@ -630,6 +682,7 @@ final class PersistenceManager {
         } else {
             userDefaults.set(pccToken, forKey: "pccGatewayToken")
         }
+
         userDefaults.set(
             AppSettings.sanitizedSummarizeHost(settings.pccGatewayHost, fallback: AppSettings.defaultPCCGatewayHost),
             forKey: "pccGatewayHost"
@@ -675,10 +728,28 @@ final class PersistenceManager {
     }
 
     private func normalizeIDs(_ ids: Set<String>) -> Set<String> {
+        guard !ids.isEmpty else { return [] }
+
         var normalized: Set<String> = []
+        normalized.reserveCapacity(ids.count)
         for raw in ids {
             normalized.formUnion(expandedReadTokens(from: raw))
         }
+        return normalized
+    }
+
+    private func normalizedToken(_ raw: String) -> String {
+        let cacheKey = raw as NSString
+        if let cached = normalizedTokenCache.object(forKey: cacheKey) {
+            return cached as String
+        }
+
+        let normalized = ArticleIDNormalizer.normalize(raw)
+        normalizedTokenCache.setObject(
+            normalized as NSString,
+            forKey: cacheKey,
+            cost: max(1, normalized.utf8.count)
+        )
         return normalized
     }
 
@@ -711,16 +782,13 @@ final class PersistenceManager {
     }
 
     private func articleReadTokens(articleId: String, articleURL: URL?, title: String?, feedURL: String?) -> Set<String> {
-        var tokens: Set<String> = [ArticleIDNormalizer.normalize(articleId)]
+        var tokens: Set<String> = [normalizedToken(articleId)]
         if let rawURL = articleURL?.absoluteString, !rawURL.isEmpty {
             tokens.insert(rawURL)
         }
-        if let canonicalURL = canonicalReadURL(articleURL) {
-            tokens.insert(canonicalURL)
-        }
         if let title, !title.isEmpty, let feedURL, !feedURL.isEmpty {
             let fallbackHash = "hash-\(djb2Hex("\(title)|\(feedURL)"))"
-            tokens.insert(ArticleIDNormalizer.normalize(fallbackHash))
+            tokens.insert(normalizedToken(fallbackHash))
         }
         return normalizeIDs(tokens)
     }
@@ -750,14 +818,11 @@ final class PersistenceManager {
         if let rawURL = post.url?.absoluteString, !rawURL.isEmpty {
             tokens.insert(rawURL)
         }
-        if let canonicalURL = canonicalReadURL(post.url) {
-            tokens.insert(canonicalURL)
-        }
         return normalizeIDs(tokens)
     }
 
     private func redditReadTokens(postId: String, subreddit: String?) -> Set<String> {
-        let normalizedID = ArticleIDNormalizer.normalize(postId)
+        let normalizedID = normalizedToken(postId)
         var tokens: Set<String> = [normalizedID]
 
         if normalizedID.hasPrefix("t3_") {
@@ -787,19 +852,48 @@ final class PersistenceManager {
             return nil
         }
 
-        // Reuse the global normalizer so we preserve identity-defining query params
-        // while still removing volatile tracking parameters.
-        let canonical = ArticleIDNormalizer.normalize(rawURL)
-        guard !canonical.isEmpty else {
+        let trimmedURL = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmedURL) else {
             return nil
         }
 
-        return canonical
+        components.fragment = nil
+        // Keep query parameters for article identity. Dropping them can collapse
+        // distinct items (e.g. ?p=123 vs ?p=456) into the same read token.
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+
+        if let port = components.port, port == 80 || port == 443 {
+            components.port = nil
+        }
+
+        if var path = components.percentEncodedPath.removingPercentEncoding {
+            if path.count > 1 && path.hasSuffix("/") {
+                path.removeLast()
+            }
+            components.percentEncodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? components.percentEncodedPath
+        }
+
+        guard let canonical = components.string, !canonical.isEmpty else {
+            return nil
+        }
+
+        return normalizedToken(canonical)
     }
 
     private func expandedReadTokens(from raw: String) -> Set<String> {
-        let normalized = ArticleIDNormalizer.normalize(raw)
+        let rawCacheKey = raw as NSString
+        if let cached = expandedReadTokenCache.object(forKey: rawCacheKey) {
+            return cached.tokens
+        }
+
+        let normalized = normalizedToken(raw)
         guard !normalized.isEmpty else { return [] }
+
+        let cacheKey = normalized as NSString
+        if let cached = expandedReadTokenCache.object(forKey: cacheKey) {
+            return cached.tokens
+        }
 
         var tokens: Set<String> = [normalized]
         addRedditIDAliases(from: normalized, into: &tokens)
@@ -813,6 +907,15 @@ final class PersistenceManager {
                     addRedditIDAliases(from: redditPostID, into: &tokens)
                 }
             }
+        }
+
+        let cost = max(1, tokens.reduce(into: 0) { total, token in
+            total += token.utf8.count
+        })
+        let cacheEntry = TokenSetCacheEntry(tokens: tokens)
+        expandedReadTokenCache.setObject(cacheEntry, forKey: cacheKey, cost: cost)
+        if raw != normalized {
+            expandedReadTokenCache.setObject(cacheEntry, forKey: rawCacheKey, cost: cost)
         }
 
         return tokens
@@ -860,7 +963,7 @@ final class PersistenceManager {
         let subreddit = parts[1].lowercased()
         let postID = parts[3].hasPrefix("t3_") ? String(parts[3].dropFirst(3)) : parts[3]
         guard !subreddit.isEmpty, isLikelyRedditPostID(postID) else { return nil }
-        return ArticleIDNormalizer.normalize("https://www.reddit.com/r/\(subreddit)/comments/\(postID)")
+        return normalizedToken("https://www.reddit.com/r/\(subreddit)/comments/\(postID)")
     }
 
     private func redditPostID(fromPermalink token: String) -> String? {
