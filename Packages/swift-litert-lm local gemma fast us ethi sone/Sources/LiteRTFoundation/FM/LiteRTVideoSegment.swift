@@ -18,6 +18,7 @@ import Foundation
 import FoundationModels
 
 /// A Foundation Models prompt segment carrying sampled video frames.
+#if swift(>=6.4)
 @available(iOS 27.0, macOS 27.0, *)
 public struct LiteRTVideoSegment: Transcript.CustomSegment {
   /// Sampled frames as image bytes (e.g. PNG), in temporal order.
@@ -34,5 +35,24 @@ public struct LiteRTVideoSegment: Transcript.CustomSegment {
     self.content = Content(frames: frames)
   }
 }
+#else
+// See LiteRTAudioSegment: retain the shared payload on the supported iOS 26
+// cloud toolchain, where Transcript.CustomSegment is not in the SDK.
+@available(iOS 27.0, macOS 27.0, *)
+public struct LiteRTVideoSegment: Sendable {
+  public struct Content: Codable, Equatable, Sendable {
+    public var frames: [Data]
+    public init(frames: [Data]) { self.frames = frames }
+  }
+
+  public let id: String
+  public let content: Content
+
+  public init(frames: [Data], id: String = UUID().uuidString) {
+    self.id = id
+    self.content = Content(frames: frames)
+  }
+}
+#endif
 
 #endif

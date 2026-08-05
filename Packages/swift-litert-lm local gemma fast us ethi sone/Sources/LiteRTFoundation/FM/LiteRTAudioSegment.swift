@@ -23,6 +23,7 @@ import FoundationModels
 /// `Transcript.CustomSegment` supplies `promptRepresentation`, `description`, and
 /// equality for free; we only provide `id` + `content`. Include it in a prompt
 /// via the `@PromptBuilder` overloads of `respond`/`streamResponse`.
+#if swift(>=6.4)
 @available(iOS 27.0, macOS 27.0, *)
 public struct LiteRTAudioSegment: Transcript.CustomSegment {
   /// The segment payload. Must be `Codable`/`Equatable`/`Sendable` per the
@@ -49,5 +50,30 @@ public struct LiteRTAudioSegment: Transcript.CustomSegment {
     self.content = Content(data: try Data(contentsOf: fileURL))
   }
 }
+#else
+// FoundationModels' custom-segment protocol is only present in the newer
+// SDK used by the local iOS 27 build. Keep the payload type available to the
+// shared LiteRT bridge when Xcode Cloud uses the supported iOS 26 toolchain.
+@available(iOS 27.0, macOS 27.0, *)
+public struct LiteRTAudioSegment: Sendable {
+  public struct Content: Codable, Equatable, Sendable {
+    public var data: Data
+    public init(data: Data) { self.data = data }
+  }
+
+  public let id: String
+  public let content: Content
+
+  public init(data: Data, id: String = UUID().uuidString) {
+    self.id = id
+    self.content = Content(data: data)
+  }
+
+  public init(fileURL: URL, id: String = UUID().uuidString) throws {
+    self.id = id
+    self.content = Content(data: try Data(contentsOf: fileURL))
+  }
+}
+#endif
 
 #endif
