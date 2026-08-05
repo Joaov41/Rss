@@ -13,6 +13,7 @@
 // transcript on each turn — correct and simple; an incremental fast-path is a
 // later optimization.
 
+#if swift(>=6.4)
 #if canImport(FoundationModels)
 
 import Foundation
@@ -472,4 +473,5 @@ private actor LazyEngine {
   }
 }
 
+#endif
 #endif
