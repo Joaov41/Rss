@@ -3916,12 +3916,15 @@ struct ContentView: View {
     }
     
     var favoritesView: some View {
+        let favoriteArticles = appState.feeds.flatMap { $0.articles }
+            .filter { $0.isFavorite }
+            .sorted(by: { $0.publishDate > $1.publishDate })
+        let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
+            .filter { $0.isFavorite }
+            .sorted(by: { $0.publishDate > $1.publishDate })
+
         List {
             Section(header: Text("RSS Articles")) {
-                let favoriteArticles = appState.feeds.flatMap { $0.articles }
-                    .filter { $0.isFavorite }
-                    .sorted(by: { $0.publishDate > $1.publishDate })
-                
                 if favoriteArticles.isEmpty {
                     Text("No favorite articles")
                         .foregroundColor(.secondary)
@@ -3955,10 +3958,6 @@ struct ContentView: View {
             }
             
             Section(header: Text("Reddit Posts")) {
-                let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
-                    .filter { $0.isFavorite }
-                    .sorted(by: { $0.publishDate > $1.publishDate })
-                
                 if favoritePosts.isEmpty {
                     Text("No favorite posts")
                         .foregroundColor(.secondary)
