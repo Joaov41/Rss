@@ -41,7 +41,12 @@ struct InfographicView: View {
                         WebView(htmlContent: htmlString,
                                 webView: $webViewRef,
                                 isLoading: $isLoading,
-                                onAskAISelection: handleAskAISelection(selectedText:context:))
+                                onAskAISelection: { selectedText, context in
+                                    handleAskAISelection(selectedText: selectedText, context: context, useWebAI: false)
+                                },
+                                onAskAIWebSelection: { selectedText, context in
+                                    handleAskAISelection(selectedText: selectedText, context: context, useWebAI: true)
+                                })
                             .edgesIgnoringSafeArea(.bottom)
                         if isLoading {
                             ProgressView(loadingText)
@@ -282,7 +287,7 @@ struct InfographicView: View {
         }
     }
 
-    private func handleAskAISelection(selectedText: String, context: String) {
+    private func handleAskAISelection(selectedText: String, context: String, useWebAI: Bool) {
         guard !isAskingAI else { return }
         let prompt = buildAskAISelectionPrompt(selectedText: selectedText, extractedContext: context)
         guard !prompt.isEmpty else { return }
@@ -291,7 +296,11 @@ struct InfographicView: View {
         askAIResponse = ""
         isAskingAI = true
 
-        appState.askQuestionAboutGlobalSummary(question: prompt) { answer in
+        appState.askQuestionAboutGlobalSummarySelection(
+            selectedText: selectedText,
+            extractedContext: context,
+            useWebAI: useWebAI
+        ) { answer in
             DispatchQueue.main.async {
                 self.isAskingAI = false
                 self.askAIResponse = formatAskAIResponseForDisplay(answer)
@@ -317,6 +326,7 @@ struct WebView: UIViewRepresentable {
     @Binding var webView: WKWebView?
     @Binding var isLoading: Bool
     var onAskAISelection: ((String, String) -> Void)? = nil
+    var onAskAIWebSelection: ((String, String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -327,8 +337,12 @@ struct WebView: UIViewRepresentable {
         config.preferences.javaScriptEnabled = true
         let webView = AskAIEnabledWKWebView(frame: .zero, configuration: config)
         webView.onAskAISelection = { action, selectedText, context in
-            guard action == .standard else { return }
-            onAskAISelection?(selectedText, context)
+            switch action {
+            case .standard:
+                onAskAISelection?(selectedText, context)
+            case .web:
+                onAskAIWebSelection?(selectedText, context)
+            }
         }
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
@@ -345,8 +359,12 @@ struct WebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {
         if let askAIWebView = uiView as? AskAIEnabledWKWebView {
             askAIWebView.onAskAISelection = { action, selectedText, context in
-                guard action == .standard else { return }
-                onAskAISelection?(selectedText, context)
+                switch action {
+                case .standard:
+                    onAskAISelection?(selectedText, context)
+                case .web:
+                    onAskAIWebSelection?(selectedText, context)
+                }
             }
         }
         guard context.coordinator.lastHTML != htmlContent else { return }
@@ -413,6 +431,7 @@ struct WebView: NSViewRepresentable {
     @Binding var webView: WKWebView?
     @Binding var isLoading: Bool
     var onAskAISelection: ((String, String) -> Void)? = nil
+    var onAskAIWebSelection: ((String, String) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)

@@ -631,7 +631,7 @@ struct WebAIHandoffIOSPresenterModifier: ViewModifier {
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(.ultraThickMaterial, in: Capsule())
+            .background(.thinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)

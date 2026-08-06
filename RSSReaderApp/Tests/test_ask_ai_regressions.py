@@ -178,6 +178,26 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("var onAskAIWebSelection: ((String, String) -> Void)? = nil", component)
         self.assertRegex(component, r"SelectableText\(\s*text: displaySummaryText,[\s\S]*?onAskAI: onAskAISelection,[\s\S]*?onAskAIWeb: onAskAIWebSelection")
 
+    def test_summary_selection_drag_does_not_trigger_full_screen_back(self):
+        source = read("RSSReaderApp/Views/ContentView.swift")
+        gesture = re.search(
+            r"func enhancedSwipeBack\(perform action:[\s\S]*?func anywhereSwipeBack",
+            source,
+        )
+        self.assertIsNotNone(gesture)
+        self.assertIn("coordinateSpace: .local", gesture.group(0))
+        self.assertIn(
+            "guard !AskAITextView.didActiveTextTouchChangeSelection else { return }",
+            gesture.group(0),
+        )
+        self.assertIn("DispatchQueue.main.asyncAfter(deadline: .now() + 0.01)", gesture.group(0))
+
+        utilities = read("RSSReaderApp/Views/AskAIUtilities.swift")
+        self.assertIn("TextSelectionIntentGestureRecognizer", utilities)
+        self.assertIn("func textViewDidChangeSelection", utilities)
+        self.assertIn("didSelectionChangeDuringCurrentTouch = true", utilities)
+        self.assertIn("currentTextTouchView = self", utilities)
+
     def test_explicit_reddit_web_summary_and_deep_analysis_update_ui_state(self):
         source = read("RSSReaderApp/Views/RedditDetailView.swift")
         menu = re.search(
