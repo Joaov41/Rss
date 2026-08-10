@@ -15,6 +15,39 @@ private struct SettingsFormWidthPreferenceKey: PreferenceKey {
     }
 }
 
+#if os(iOS)
+struct RSSSettingsPresentationBackground: View {
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 40, style: .continuous)
+
+        if #available(iOS 26.0, *) {
+            shape
+                .fill(.clear)
+                .glassEffect(.regular, in: .rect(cornerRadius: 40))
+                .overlay {
+                    shape.stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.08)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.8
+                    )
+                }
+        } else {
+            shape
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    shape.stroke(Color.white.opacity(0.2), lineWidth: 0.8)
+                }
+        }
+    }
+}
+#endif
+
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.presentationMode) var presentationMode
@@ -145,7 +178,6 @@ struct SettingsView: View {
         NavigationView {
             ZStack {
                 settingsBackground
-                    .ignoresSafeArea()
                 
                 Form {
                     Section("Appearance") {
@@ -157,6 +189,23 @@ struct SettingsView: View {
                         .pickerStyle(SegmentedPickerStyle())
                         .padding(.vertical, 4)
                     }
+
+                    #if os(iOS)
+                    Section("Experimental YouTube") {
+                        Toggle("YouTube Support", isOn: Binding(
+                            get: { appState.settings.youtubeSupportEnabled },
+                            set: { enabled in
+                                var newSettings = appState.settings
+                                newSettings.youtubeSupportEnabled = enabled
+                                appState.updateSettings(newSettings)
+                            }
+                        ))
+
+                        Text("When enabled, you can search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for summaries and Q&A. When disabled, the existing RSS and Reddit interface is unchanged.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    #endif
                     
                     Section("Summary Provider") {
                         Picker("Summary Source", selection: $appState.settings.selectedSummaryProvider) {
@@ -939,6 +988,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(
                 trailing: Button("Done") {
                     presentationMode.wrappedValue.dismiss()
@@ -1023,6 +1073,15 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .modifier(AdaptiveGlassModifier(cornerRadius: 40))
+        #if os(iOS)
+        .background(Color.clear)
+        .background(AskAISheetTransparencyBridge())
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .bottomBar)
+        .presentationBackground {
+            RSSSettingsPresentationBackground()
+        }
+        #endif
     }
     
     private func loadCurrentSettings() {
