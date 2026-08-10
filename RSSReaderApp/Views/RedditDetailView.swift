@@ -73,21 +73,6 @@ private struct RedditCommentsActionCapsule<Content: View>: View {
         }
         .padding(4)
         .modifier(RedditCommentsGlassModifier())
-        .overlay {
-            Capsule(style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(colorScheme == .dark ? 0.38 : 0.34),
-                            Color.white.opacity(0.10),
-                            Color.black.opacity(0.12)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.8
-                )
-        }
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 10, x: 0, y: 5)
         .accessibilityElement(children: .contain)
     }
@@ -141,6 +126,7 @@ struct RedditDetailView: View {
     @State private var showPostCommentSheet = false
     @State private var commentSummary: CommentSummary?
     @State private var showCommentSummary = false
+    @State private var commentSummaryScrollRequest = 0
     @State private var cancellables = Set<AnyCancellable>()
     @State private var showMoreCommentsButton = false
     @State private var hasMoreCommentsToLoad = false
@@ -154,6 +140,8 @@ struct RedditDetailView: View {
     // Default max number of comments to show
     private let maxDisplayComments = 50
     private let redditTopAnchor = "redditDetailTopAnchor"
+    private let redditPostSummaryAnchor = "redditPostSummaryAnchor"
+    private let redditCommentSummaryAnchor = "redditCommentSummaryAnchor"
     private let iphoneDetailHorizontalInset: CGFloat = 16
 
     private var detailBackground: Color {
@@ -375,6 +363,12 @@ struct RedditDetailView: View {
         return nil
     }
     
+    private func scrollToSummarySection(_ anchor: String, using proxy: ScrollViewProxy) {
+        withAnimation(.easeInOut(duration: 0.35)) {
+            proxy.scrollTo(anchor, anchor: UnitPoint(x: 0.5, y: 0.12))
+        }
+    }
+
     private func postDetailView(for post: RedditPost, proxy: ScrollViewProxy) -> some View {
         ZStack {
             // Keep detail background truly black in dark mode.
@@ -455,6 +449,10 @@ struct RedditDetailView: View {
                 .foregroundColor(.secondary)
                 
                 Divider()
+
+                Color.clear
+                    .frame(height: 0)
+                    .id(redditPostSummaryAnchor)
                 
                 if appState.isSummarizingRedditPost(post) && post.summary == nil {
                     VStack(spacing: 16) {
@@ -664,6 +662,10 @@ struct RedditDetailView: View {
                                     }
                                 }
                 
+                Color.clear
+                    .frame(height: 0)
+                    .id(redditCommentSummaryAnchor)
+
                 // Show loading indicator while summarizing
                 if isLoadingComments && commentSummary == nil {
                     VStack(spacing: 16) {
@@ -866,6 +868,23 @@ struct RedditDetailView: View {
             }
         
         } // Close ZStack
+        .onChange(of: appState.isSummarizingRedditPost(post)) { _, isSummarizing in
+            guard isSummarizing else { return }
+            scrollToSummarySection(redditPostSummaryAnchor, using: proxy)
+        }
+        .onChange(of: post.summary) { _, summary in
+            guard let summary,
+                  !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            scrollToSummarySection(redditPostSummaryAnchor, using: proxy)
+        }
+        .onChange(of: commentSummaryScrollRequest) { _, _ in
+            scrollToSummarySection(redditCommentSummaryAnchor, using: proxy)
+        }
+        .onChange(of: commentSummary?.summary) { _, summary in
+            guard let summary,
+                  !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            scrollToSummarySection(redditCommentSummaryAnchor, using: proxy)
+        }
         // Use this key view ID to ensure proper reconstruction when post changes
         .id("reddit-detail-\(post.id)")
         #if os(iOS)
@@ -915,7 +934,9 @@ struct RedditDetailView: View {
                     #if os(iOS)
                     .presentationDetents([.large])
                     .presentationCornerRadius(40) // Balanced radius to prevent clipping
-                    .presentationBackground(.ultraThinMaterial) // Ultra translucent background
+                    .presentationBackground {
+                        AskAIPresentationBackground()
+                    }
                     .presentationBackgroundInteraction(.enabled)
                     #endif
             }
@@ -1016,7 +1037,7 @@ struct RedditDetailView: View {
                     HStack {
                         Spacer(minLength: 0)
 
-                        RedditCommentsActionCapsule {
+                        Group {
                             HStack(spacing: 2) {
                                 Button(action: {
                                     withAnimation(.easeInOut) {
@@ -2010,6 +2031,8 @@ struct RedditDetailView: View {
             print("⚠️ RedditDetailView: Cannot summarize while processing a question")
             return
         }
+
+        commentSummaryScrollRequest &+= 1
         
         // Set loading state immediately to show progress indicator
         print("📱 Setting isLoadingComments = true")
@@ -2218,6 +2241,8 @@ struct RedditDetailView: View {
 
     private func requestWebCommentSummary(for post: RedditPost) {
         guard !comments.isEmpty else { return }
+
+        commentSummaryScrollRequest &+= 1
 
         let commentsToSummarize = comments
         let prompt = appState.commentSummaryPrompt(comments: commentsToSummarize)
@@ -3203,8 +3228,28 @@ struct CommentAnalyticsViewIntegrated: View {
                 .padding(.horizontal, 20)
             }
         }
-        .background(.ultraThinMaterial)
-        .modifier(AdaptiveGlassModifier(cornerRadius: 40))
+        #if os(iOS)
+        .background(AskAIPresentationBackground())
+        #elseif os(macOS)
+        .glassEffect(
+            .regular.tint(Color(red: 0.30, green: 0.46, blue: 0.64).opacity(0.26)),
+            in: .rect(cornerRadius: 32)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.28),
+                            Color.white.opacity(0.08)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.8
+                )
+        }
+        #endif
         .onAppear {
             Task {
                 await generateAnalytics()

@@ -61,7 +61,9 @@ struct MainSplitView: View {
             }
             .presentationDetents([.large])
             .presentationCornerRadius(40) // Balanced radius to prevent clipping
-            .presentationBackground(.ultraThinMaterial) // Use thin material for iOS 26
+            .presentationBackground {
+                RSSSettingsPresentationBackground()
+            }
             .presentationBackgroundInteraction(.enabled)
             #endif
         }

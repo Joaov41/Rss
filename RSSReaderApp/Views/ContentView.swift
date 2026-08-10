@@ -2748,6 +2748,33 @@ private struct RedditFloatingSubscriptionChrome: View {
 }
 
 struct ContentView: View {
+    private enum SubscriptionSidebarFilter: String, CaseIterable, Identifiable {
+        case all
+        case articles
+        case reddit
+        case youtube
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .all: return "All"
+            case .articles: return "Articles"
+            case .reddit: return "Reddit"
+            case .youtube: return "YouTube"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .all: return "line.3.horizontal.decrease"
+            case .articles: return "doc.text"
+            case .reddit: return "bubble.left.and.text.bubble.right"
+            case .youtube: return "play.rectangle.fill"
+            }
+        }
+    }
+
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     // Programmatic pop for NavigationStack on iPhone
@@ -2769,6 +2796,7 @@ struct ContentView: View {
     @State private var showAddSubscription = false
     @State private var selectedCategory: FeedCategory = .all
     @State private var showSettings = false
+    @AppStorage("subscriptionSidebarFilter") private var subscriptionSidebarFilterRawValue = SubscriptionSidebarFilter.all.rawValue
     @State private var showRedditSummaryScopePicker = false
     @State private var redditSummaryScopeSubreddit: String?
     @State private var feedListScrollOffset: CGFloat = 0
@@ -2804,6 +2832,25 @@ struct ContentView: View {
 
     private var shouldShowExplicitWebAIControls: Bool {
         appState.settings.selectedSummaryProvider != .webAI
+    }
+
+    private var subscriptionSidebarFilter: SubscriptionSidebarFilter {
+        SubscriptionSidebarFilter(rawValue: subscriptionSidebarFilterRawValue) ?? .all
+    }
+
+    private var filteredSidebarSubscriptions: [Subscription] {
+        appState.subscriptions.filter { subscription in
+            switch subscriptionSidebarFilter {
+            case .all:
+                return true
+            case .articles:
+                return subscription.type == .rss && !subscription.isYouTubeChannel
+            case .reddit:
+                return subscription.type == .reddit
+            case .youtube:
+                return subscription.isYouTubeChannel
+            }
+        }
     }
 
     private func articleListID(for article: Article) -> String {
@@ -3088,7 +3135,13 @@ struct ContentView: View {
                 .environmentObject(appState)
                 .presentationDetents([.large])
                 .presentationCornerRadius(40) // Balanced radius to prevent clipping
-                .presentationBackground(.ultraThinMaterial) // Use thin material for iOS 26
+                #if os(iOS)
+                .presentationBackground {
+                    RSSSettingsPresentationBackground()
+                }
+                #else
+                .presentationBackground(.ultraThinMaterial)
+                #endif
                 .presentationBackgroundInteraction(.enabled)
         }
         .confirmationDialog(
@@ -3344,6 +3397,73 @@ struct ContentView: View {
         .padding(.bottom, 2)
     }
 
+    private func subscriptionSidebarSectionHeader() -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Rectangle()
+                .fill(sidebarDividerColor)
+                .frame(height: 1)
+                .padding(.bottom, 2)
+
+            HStack(spacing: 10) {
+                Text("SUBSCRIPTIONS")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(sidebarHeaderTextColor)
+                    .textCase(nil)
+                    .tracking(0.6)
+
+                Spacer(minLength: 4)
+
+                Menu {
+                    ForEach(SubscriptionSidebarFilter.allCases) { filter in
+                        Button {
+                            subscriptionSidebarFilterRawValue = filter.rawValue
+                        } label: {
+                            HStack {
+                                Label(filter.title, systemImage: filter.systemImage)
+                                if filter == subscriptionSidebarFilter {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: subscriptionSidebarFilter.systemImage)
+                        Text(subscriptionSidebarFilter.title)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 28)
+                    .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(colorScheme == .dark ? 0.20 : 0.34), lineWidth: 0.8)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Filter subscriptions")
+                .accessibilityValue(subscriptionSidebarFilter.title)
+            }
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
+    private func removeVisibleSubscriptions(at offsets: IndexSet, from visibleSubscriptions: [Subscription]) {
+        let visibleIDs = Set(offsets.compactMap { offset in
+            visibleSubscriptions.indices.contains(offset) ? visibleSubscriptions[offset].id : nil
+        })
+        let sourceOffsets = IndexSet(appState.subscriptions.enumerated().compactMap { index, subscription in
+            visibleIDs.contains(subscription.id) ? index : nil
+        })
+        guard !sourceOffsets.isEmpty else { return }
+        appState.removeSubscription(at: sourceOffsets)
+    }
+
     private func sidebarSystemIcon(_ systemName: String, tint: Color) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 18, weight: .medium))
@@ -3360,7 +3480,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private func sidebarSubscriptionIcon(for subscription: Subscription, isSelected: Bool = false) -> some View {
-        if subscription.type == .rss {
+        if subscription.isYouTubeChannel {
+            sidebarSystemIcon(
+                "play.rectangle.fill",
+                tint: isSelected ? Color.white.opacity(0.95) : Color.red
+            )
+        } else if subscription.type == .rss {
             if let url = URL(string: subscription.url), let host = url.host {
                 DomainIconView(domain: host, size: 18)
                     .frame(width: 28, height: 28)
@@ -3578,9 +3703,10 @@ struct ContentView: View {
 	                #endif
 	            }
 	            
-	            Section(header: 
-	                sidebarSectionHeader("SUBSCRIPTIONS", showsDivider: true)
+	            Section(header:
+	                subscriptionSidebarSectionHeader()
 	            ) {
+                let visibleSubscriptions = filteredSidebarSubscriptions
                 let rssUnreadCounts = Dictionary(
                     uniqueKeysWithValues: appState.feeds.map { feed in
                         (feed.url, feed.articles.reduce(into: 0) { count, article in
@@ -3600,7 +3726,7 @@ struct ContentView: View {
                     }
                 )
 
-                ForEach(appState.subscriptions) { subscription in
+                ForEach(visibleSubscriptions) { subscription in
                     let unreadCount = sidebarUnreadCount(
                         for: subscription,
                         rssUnreadCounts: rssUnreadCounts,
@@ -3695,7 +3821,7 @@ struct ContentView: View {
                     #endif
                 }
                 .onDelete { indexSet in
-                    appState.removeSubscription(at: indexSet)
+                    removeVisibleSubscriptions(at: indexSet, from: visibleSubscriptions)
                 }
 	                
 	                Button(action: { showAddSubscription = true }) {
@@ -3721,7 +3847,7 @@ struct ContentView: View {
             .modifier(
                 NativeScrollRestorationModifier(
                     restorationKey: "sidebar_subscriptions",
-                    trackedItemIDs: appState.subscriptions.map(\.url),
+                    trackedItemIDs: filteredSidebarSubscriptions.map(\.url),
                     onRawScrollActivity: nil,
                     onOffsetChange: { _ in }
                 )
@@ -3802,9 +3928,11 @@ struct ContentView: View {
     @ViewBuilder
     private func subscriptionSidebarRow(for subscription: Subscription, unreadCount: Int) -> some View {
         let isSelected = appState.activeSubscriptionURL == subscription.url
-        let selectionColor: Color = subscription.type == .reddit
-            ? Color(red: 1.0, green: 0.28, blue: 0.10)
-            : sidebarSelectionAccent
+        let selectionColor: Color = subscription.isYouTubeChannel
+            ? .red
+            : (subscription.type == .reddit
+                ? Color(red: 1.0, green: 0.28, blue: 0.10)
+                : sidebarSelectionAccent)
 
         sidebarMenuRow(
             title: subscription.title,
@@ -4580,11 +4708,23 @@ struct ContentView: View {
                 if let feed = appState.feeds.first(where: { $0.url == subscription.url }) {
                     feedSubscriptionView(feed: feed, subscription: subscription)
                 } else {
-                    Text("Loading feed...")
-                        .navigationTitle(subscription.title)
-                        .onAppear {
-                            appState.refreshSingleRSSFeed(url: subscription.url)
+                    VStack(spacing: 12) {
+                        if subscription.isYouTubeChannel,
+                           let message = appState.youtubeStatusMessages[subscription.url] {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            Text(message)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView()
+                            Text("Loading feed...")
                         }
+                    }
+                    .navigationTitle(subscription.title)
+                    .onAppear {
+                        appState.refreshSingleRSSFeed(url: subscription.url)
+                    }
                 }
             } else {
                 if let feed = appState.redditFeeds.first(where: { $0.subreddit == subscription.url }) {
@@ -5040,6 +5180,7 @@ struct DraggableGlobalSummaryView: View {
     @State private var isSummaryContentScrolling = false
     @State private var summaryChromeReturnTask: Task<Void, Never>?
     @State private var isSummaryScrollActive = false
+    @State private var isOverallSummaryVisible = false
 
     private let summaryChromeReturnDelay: UInt64 = 450_000_000
 
@@ -5171,6 +5312,12 @@ struct DraggableGlobalSummaryView: View {
         }
     }
 
+    private func openSummaryReference(referenceNumber: Int) {
+        let index = referenceNumber - 1
+        guard parsedSummaries.indices.contains(index) else { return }
+        openItem(parsedSummaries[index], isReddit: isRedditContent)
+    }
+
     private func scrollToOverallSummary() {
         if let summaryReturnContentOffset {
             var target = summaryScrollPosition
@@ -5235,14 +5382,21 @@ struct DraggableGlobalSummaryView: View {
         cachedSummaryClipboardText = baseClipboard
     }
 
-    private func restoreSummaryScrollPositionAfterRefresh(from offset: CGPoint) {
+    private func restoreSummaryScrollPositionAfterRefresh(
+        from offset: CGPoint,
+        keepingOverallSummaryVisible: Bool
+    ) {
         guard summaryScrollProxy != nil else { return }
 
         DispatchQueue.main.async {
             guard !isSummaryScrollActive else { return }
 
             var restoredPosition = summaryScrollPosition
-            restoredPosition.scrollTo(point: offset)
+            if keepingOverallSummaryVisible {
+                restoredPosition.scrollTo(id: Self.overallSummaryAnchorID, anchor: .top)
+            } else {
+                restoredPosition.scrollTo(point: offset)
+            }
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -5303,9 +5457,13 @@ struct DraggableGlobalSummaryView: View {
         }
         .onChange(of: json) { newValue in
             let preservedOffset = currentSummaryContentOffset
+            let keepOverallSummaryVisible = isOverallSummaryVisible && formattedAggregateSummary != nil
             rebuildParsedSummaryCache(from: newValue)
             rebuildAggregateSummaryCache()
-            restoreSummaryScrollPositionAfterRefresh(from: preservedOffset)
+            restoreSummaryScrollPositionAfterRefresh(
+                from: preservedOffset,
+                keepingOverallSummaryVisible: keepOverallSummaryVisible
+            )
         }
         .onChange(of: appState.aggregateSummaryText) { _ in
             rebuildAggregateSummaryCache()
@@ -5540,38 +5698,52 @@ struct DraggableGlobalSummaryView: View {
                         }
                     
                     HStack(spacing: 8) {
-                        Button {
-                            askGlobalSummaryQuestion()
-                        } label: {
-                            Image(systemName: "questionmark.circle")
-                                .font(.subheadline)
-                        }
-                        .accessibilityLabel("Ask")
-                        .buttonStyle(LiquidGlassButtonStyle())
-                        .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
-
-                        if shouldShowExplicitWebAIControls {
+                        HStack(spacing: 4) {
                             Button {
-                                askGlobalSummaryWebQuestion()
+                                askGlobalSummaryQuestion()
                             } label: {
-                                Image(systemName: "globe")
+                                Image(systemName: "questionmark.circle")
                                     .font(.subheadline)
                             }
-                            .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
-                            .buttonStyle(LiquidGlassButtonStyle())
+                            .accessibilityLabel("Ask")
+                            .buttonStyle(.plain)
+                            .frame(width: 38, height: 38)
+                            .contentShape(Circle())
                             .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
+
+                            if shouldShowExplicitWebAIControls {
+                                Button {
+                                    askGlobalSummaryWebQuestion()
+                                } label: {
+                                    Image(systemName: "globe")
+                                        .font(.subheadline)
+                                }
+                                .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+                                .buttonStyle(.plain)
+                                .frame(width: 38, height: 38)
+                                .contentShape(Circle())
+                                .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
+                            }
+
+                            Button {
+                                resetQAState(keepInterface: true)
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                                    .font(.subheadline)
+                            }
+                            .accessibilityLabel("Clear")
+                            .buttonStyle(.plain)
+                            .frame(width: 38, height: 38)
+                            .contentShape(Circle())
+                            .disabled(isProcessingQA || appState.isWaitingForGlobalQA)
                         }
-                        
-                        Button {
-                            resetQAState(keepInterface: true)
-                        } label: {
-                            Image(systemName: "xmark.circle")
-                                .font(.subheadline)
-                        }
-                        .accessibilityLabel("Clear")
-                        .buttonStyle(LiquidGlassButtonStyle())
-                        .disabled(isProcessingQA || appState.isWaitingForGlobalQA)
-                        
+                        .padding(5)
+                        .redditSummaryScopeGlass(
+                            in: Capsule(style: .continuous),
+                            tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.22),
+                            interactive: true
+                        )
+
                         Spacer()
                     }
                     
@@ -5597,19 +5769,31 @@ struct DraggableGlobalSummaryView: View {
                                 .foregroundColor(.secondary)
                             
                             HStack {
-                                Button {
-                                    showAnswerSheet = true
-                                } label: {
-                                    Label("Open Answer", systemImage: "arrow.up.left.and.arrow.down.right")
-                                }
-                                .buttonStyle(LiquidGlassButtonStyle())
+                                HStack(spacing: 4) {
+                                    Button {
+                                        showAnswerSheet = true
+                                    } label: {
+                                        Label("Open Answer", systemImage: "arrow.up.left.and.arrow.down.right")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 10)
+                                    .frame(minHeight: 38)
 
-                                Button {
-                                    copySummaryToClipboard(text: qaAnswerText)
-                                } label: {
-                                    Label("Copy", systemImage: "doc.on.doc")
+                                    Button {
+                                        copySummaryToClipboard(text: qaAnswerText)
+                                    } label: {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 10)
+                                    .frame(minHeight: 38)
                                 }
-                                .buttonStyle(LiquidGlassButtonStyle())
+                                .padding(5)
+                                .redditSummaryScopeGlass(
+                                    in: Capsule(style: .continuous),
+                                    tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.22),
+                                    interactive: true
+                                )
 
                                 Spacer()
                             }
@@ -5618,7 +5802,10 @@ struct DraggableGlobalSummaryView: View {
                     }
                 }
                 .padding()
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .redditSummaryScopeGlass(
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                    tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.20)
+                )
                 .padding(.horizontal)
             }
 
@@ -5722,13 +5909,22 @@ struct DraggableGlobalSummaryView: View {
                                     },
                                     summaryReferenceCount: parsedSummaries.count,
                                     onSummaryReferenceTap: { referenceNumber in
-                                        scrollToSummary(referenceNumber: referenceNumber, using: scrollProxy)
+                                        if isRedditContent {
+                                            scrollToSummary(referenceNumber: referenceNumber, using: scrollProxy)
+                                        } else {
+                                            openSummaryReference(referenceNumber: referenceNumber)
+                                        }
                                     },
                                     borderStyle: isRedditContent ? .reddit : .article
                                 )
                                     .environmentObject(appState)
                             }
                             .id(Self.overallSummaryAnchorID)
+                            #if os(iOS)
+                            .onScrollVisibilityChange(threshold: 0.01) { isVisible in
+                                isOverallSummaryVisible = isVisible
+                            }
+                            #endif
                         } else if let aggregateError = appState.aggregateSummaryError, !aggregateError.isEmpty {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -5749,9 +5945,22 @@ struct DraggableGlobalSummaryView: View {
                             let displaySummary = parsedSummaryDisplayCache[cacheKey] ?? cleanMarkdownArtifactsForDisplay(item.summary)
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack(alignment: .center, spacing: 8) {
-                                    Text("\(index + 1).")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                    if !isRedditContent, item.referenceId != nil {
+                                        Button {
+                                            openItem(item, isReddit: false)
+                                        } label: {
+                                            Text("\(index + 1).")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundColor(.blue)
+                                                .underline()
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Open article \(index + 1)")
+                                    } else {
+                                        Text("\(index + 1).")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
                                     Text(item.subject)
                                         .font(.headline)
                                         .foregroundColor(.primary)
@@ -9911,7 +10120,7 @@ struct ArticleRow: View {
     }
 
     private var ipadArticlePreviewText: String {
-        let expanded = expandedCardPreviewText(from: article.content, maxCharacters: 520)
+        let expanded = expandedCardPreviewText(from: article.content, maxCharacters: 760)
         return expanded.isEmpty ? article.previewText : expanded
     }
 
@@ -9947,71 +10156,18 @@ struct ArticleRow: View {
             }
             
             if usesExpandedIpadThumbnail {
-                // iPad: keep the title and preview in the left column so they
-                // never span across the larger image on the right.
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(article.title)
-                            .font(.system(size: 21, weight: .semibold))
-                            .foregroundColor(.primary)
-                            .lineLimit(3)
-                        .multilineTextAlignment(.leading)
+                if article.imageURL != nil {
+                    ViewThatFits(in: .horizontal) {
+                        expandedIpadArticleContent
+                            .frame(minWidth: 680)
 
-                        if !ipadArticlePreviewText.isEmpty {
-                            Text(ipadArticlePreviewText)
-                                .font(.system(size: 17))
-                                .foregroundColor(.secondary)
-                                .lineLimit(6)
-                                .lineSpacing(2)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        compactIOSArticleContent
                     }
-
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-
-                    if let imageURL = article.imageURL {
-                        FeedRowThumbnailView(
-                            url: imageURL,
-                            width: articleThumbnailWidth,
-                            height: articleThumbnailHeight,
-                            contentMode: .fill
-                        )
-                    }
+                } else {
+                    expandedIpadArticleContent
                 }
             } else if usesExpandedPhoneThumbnail {
-                // iPhone: keep the larger image beside the title, then let the
-                // preview use the full width below so the card has no dead
-                // column beneath the image.
-                HStack(alignment: .top, spacing: 12) {
-                    Text(article.title)
-                        .font(.system(size: 21, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-
-                    if let imageURL = article.imageURL {
-                        FeedRowThumbnailView(
-                            url: imageURL,
-                            width: articleThumbnailWidth,
-                            height: articleThumbnailHeight,
-                            contentMode: .fill
-                        )
-                    }
-                }
-
-                if !ipadArticlePreviewText.isEmpty {
-                    Text(ipadArticlePreviewText)
-                        .font(.system(size: 17))
-                        .foregroundColor(.secondary)
-                        .lineLimit(6)
-                        .lineSpacing(1)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                compactIOSArticleContent
             } else {
                 // Preserve the existing non-iOS fallback article-row layout.
                 Text(article.title)
@@ -10089,6 +10245,87 @@ struct ArticleRow: View {
         )
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
+    }
+
+    private var expandedIpadArticleContent: some View {
+        // Preserve the existing full-screen iPad card exactly when the row is
+        // wide enough for the large image and a readable text column.
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(article.title)
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+
+                if !ipadArticlePreviewText.isEmpty {
+                    Text(ipadArticlePreviewText)
+                        .font(.system(size: 17))
+                        .foregroundColor(.secondary)
+                        .lineLimit(6)
+                        .lineSpacing(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+
+            if let imageURL = article.imageURL {
+                FeedRowThumbnailView(
+                    url: imageURL,
+                    width: 340,
+                    height: 180,
+                    contentMode: .fill
+                )
+            }
+        }
+    }
+
+    private var compactIOSArticleContent: some View {
+        // Stage Manager can keep an iPad in a regular size class while making
+        // this list column narrow. Keep the compact thumbnail, but place the
+        // preview directly below the title so the space beside the image is
+        // used instead of leaving an empty band above the preview.
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(article.title)
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !ipadArticlePreviewText.isEmpty {
+                    Text(ipadArticlePreviewText)
+                        .font(.system(size: 17))
+                        .foregroundColor(.secondary)
+                        .lineLimit(11)
+                        .lineSpacing(1)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .layoutPriority(1)
+                }
+            }
+            .frame(
+                maxWidth: .infinity,
+                minHeight: 220,
+                maxHeight: 220,
+                alignment: .topLeading
+            )
+            .clipped()
+            .layoutPriority(1)
+
+            if let imageURL = article.imageURL {
+                FeedRowThumbnailView(
+                    url: imageURL,
+                    width: 160,
+                    height: 220,
+                    contentMode: .fit,
+                    usesBlurredBackdrop: true
+                )
+            }
+        }
     }
     
     // Format date in a clean readable format
@@ -10178,7 +10415,7 @@ struct RedditPostRow: View {
     private var cardPreviewText: String {
         guard usesExpandedIOSSubscriptionLayout else { return post.cleanPreviewText }
 
-        let expanded = expandedCardPreviewText(from: post.content)
+        let expanded = expandedCardPreviewText(from: post.content, maxCharacters: 520)
         return expanded.isEmpty ? post.cleanPreviewText : expanded
     }
 
@@ -10201,8 +10438,21 @@ struct RedditPostRow: View {
 
             if usesExpandedPhoneThumbnail {
                 phoneCardContent
+            } else if usesExpandedIpadThumbnail && post.resolvedImageURL != nil {
+                ViewThatFits(in: .horizontal) {
+                    regularCardContent
+                        .frame(minWidth: 680)
+
+                    phoneCardContent
+                }
             } else {
-                HStack(alignment: .top, spacing: 12) {
+                regularCardContent
+            }
+        }
+    }
+
+    private var regularCardContent: some View {
+        HStack(alignment: .top, spacing: 12) {
                 // Left side: content
                 VStack(alignment: .leading, spacing: 8) {
                     // Header with Reddit info
@@ -10335,10 +10585,8 @@ struct RedditPostRow: View {
                         usesBlurredBackdrop: usesExpandedIOSSubscriptionLayout
                     )
                 }
-                }
-                .padding(12)
-            }
         }
+        .padding(12)
     }
 
     private var phoneCardContent: some View {
@@ -10389,28 +10637,40 @@ struct RedditPostRow: View {
                         .lineLimit(3)
                         .foregroundColor(.primary)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !cardPreviewText.isEmpty {
+                        Text(cardPreviewText)
+                            .font(.system(size: 17))
+                            .foregroundColor(.secondary)
+                            .lineLimit(10)
+                            .lineSpacing(1)
+                            .frame(
+                                maxWidth: .infinity,
+                                maxHeight: .infinity,
+                                alignment: .topLeading
+                            )
+                            .layoutPriority(1)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: 220,
+                    maxHeight: 220,
+                    alignment: .topLeading
+                )
+                .clipped()
                 .layoutPriority(1)
 
                 if let imageURL = post.resolvedImageURL {
                     FeedRowThumbnailView(
                         url: imageURL,
-                        width: redditThumbnailWidth,
-                        height: redditThumbnailHeight,
+                        width: 160,
+                        height: 220,
                         contentMode: .fit,
                         usesBlurredBackdrop: true
                     )
                 }
-            }
-
-            if !cardPreviewText.isEmpty {
-                Text(cardPreviewText)
-                    .font(.system(size: 17))
-                    .foregroundColor(.secondary)
-                    .lineLimit(5)
-                    .lineSpacing(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             HStack(spacing: 16) {
@@ -10475,6 +10735,7 @@ struct ArticleDetailView: View {
     @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
     @State private var isArticleMetadataChromeHidden: Bool = false
     @State private var isArticleReaderLoading: Bool = true
+    @State private var youtubePlaybackError: String?
 #if os(iOS)
     @State private var audioPlayerQA: AVAudioPlayer?
     @State private var localSpeechSynthQA: AVSpeechSynthesizer?
@@ -10815,6 +11076,7 @@ struct ArticleDetailView: View {
     #if os(iOS)
     private func handlePhoneArticleScrollOffsetChange(_ offset: CGFloat) {
         guard usesPhoneArticleLayout else {
+            guard appState.selectedArticle?.isYouTubeVideo != true else { return }
             setArticleMetadataChromeHidden(offset < -8)
             return
         }
@@ -10985,25 +11247,10 @@ struct ArticleDetailView: View {
                     .transition(.articleChromeContinuity(edge: .top))
                 }
 
-                ArticleContentRenderer(
-                    content: contentToRender,
-                    baseURL: article.url,
-                    prefersCompactTitleSizing: usesCompactTitleSizing,
-                    viewMode: $articleViewMode,
-                    isLoadingReader: $isArticleReaderLoading,
-                    isReadingChromeHidden: isReadingChromeHidden,
-                    scrollToTopTrigger: articleReaderScrollToTopTrigger,
-                    readerTopContentInset: readerTopContentInset(for: article),
-                    readerViewportHeight: articleReaderViewportHeight(for: viewportHeight),
-                    onPhoneScrollActivity: { isAtTop in
-                        noteArticleReaderScrollActivity(isAtTop: isAtTop)
-                    },
-                    onArticleTextScroll: noteArticleTextScrollActivity,
-                    onArticleTextTap: revealArticleReadingChrome
-                )
-                .id(article.id)
-                .padding(.top, 8)
-                .padding(.horizontal, articleContentHorizontalPadding)
+                articlePrimaryContent(article: article, viewportHeight: viewportHeight)
+                    .id(article.id)
+                    .padding(.top, 8)
+                    .padding(.horizontal, articleContentHorizontalPadding)
 
                 Spacer()
                     .frame(height: 40)
@@ -11027,6 +11274,110 @@ struct ArticleDetailView: View {
         .coordinateSpace(name: articleScrollCoordinateSpace)
         .background(ArticleOuterScrollViewResolver().frame(width: 0, height: 0))
         .onPreferenceChange(ArticleDetailScrollOffsetPreferenceKey.self, perform: handlePhoneArticleScrollOffsetChange)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y > geometry.contentInsets.top + 1
+        } action: { _, isScrolled in
+            guard article.isYouTubeVideo, !usesPhoneArticleLayout else { return }
+            setArticleMetadataChromeHidden(isScrolled)
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private func articlePrimaryContent(article: Article, viewportHeight: CGFloat) -> some View {
+        #if os(iOS)
+        if appState.settings.youtubeSupportEnabled, let videoID = article.youtubeVideoID {
+            VStack(alignment: .leading, spacing: 14) {
+                YouTubePlayerView(videoID: videoID) { message in
+                    youtubePlaybackError = message
+                }
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: 900)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                }
+                .onAppear { isArticleReaderLoading = false }
+                .frame(maxWidth: .infinity, alignment: .center)
+
+                if let youtubePlaybackError {
+                    Text(youtubePlaybackError)
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+
+                if let status = appState.youtubeStatusMessages[videoID] {
+                    Label(status, systemImage: "captions.bubble")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                IOSArticleActionCapsule {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            qaState.showQAInterface = true
+                        }
+                    } label: {
+                        Label("Ask About This Video", systemImage: "questionmark.bubble")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Ask a question grounded in the video's transcript")
+                }
+
+                if !article.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(article.content)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                if let url = article.url {
+                    Link(destination: url) {
+                        Label("Open on YouTube", systemImage: "arrow.up.right.square")
+                    }
+                }
+            }
+            .padding(.top, readerTopContentInset(for: article) + (usesPhoneArticleLayout ? 0 : 12))
+        } else {
+            ArticleContentRenderer(
+                content: contentToRender,
+                baseURL: article.url,
+                prefersCompactTitleSizing: usesCompactTitleSizing,
+                viewMode: $articleViewMode,
+                isLoadingReader: $isArticleReaderLoading,
+                isReadingChromeHidden: isReadingChromeHidden,
+                scrollToTopTrigger: articleReaderScrollToTopTrigger,
+                readerTopContentInset: readerTopContentInset(for: article),
+                readerViewportHeight: articleReaderViewportHeight(for: viewportHeight),
+                onPhoneScrollActivity: { isAtTop in
+                    noteArticleReaderScrollActivity(isAtTop: isAtTop)
+                },
+                onArticleTextScroll: noteArticleTextScrollActivity,
+                onArticleTextTap: revealArticleReadingChrome
+            )
+        }
+        #else
+        ArticleContentRenderer(
+                    content: contentToRender,
+                    baseURL: article.url,
+                    prefersCompactTitleSizing: usesCompactTitleSizing,
+                    viewMode: $articleViewMode,
+                    isLoadingReader: $isArticleReaderLoading,
+                    isReadingChromeHidden: isReadingChromeHidden,
+                    scrollToTopTrigger: articleReaderScrollToTopTrigger,
+                    readerTopContentInset: readerTopContentInset(for: article),
+                    readerViewportHeight: articleReaderViewportHeight(for: viewportHeight),
+                    onPhoneScrollActivity: { isAtTop in
+                        noteArticleReaderScrollActivity(isAtTop: isAtTop)
+                    },
+                    onArticleTextScroll: noteArticleTextScrollActivity,
+                    onArticleTextTap: revealArticleReadingChrome
+                )
         #endif
     }
 
@@ -14138,14 +14489,24 @@ struct HTMLWebView: UIViewRepresentable {
 
 // MARK: - Add Subscription View
 struct AddSubscriptionView: View {
+    private enum SubscriptionSource: String, Hashable {
+        case rss
+        case reddit
+        case youtube
+    }
+
     @EnvironmentObject var appState: AppState
     @Environment(\.presentationMode) var presentationMode
     @Environment(\.colorScheme) var colorScheme
     
     @State private var title = ""
     @State private var url = ""
-    @State private var type: SubscriptionType = .rss
+    @State private var source: SubscriptionSource = .rss
     @State private var errorMessage: String?
+    @State private var youtubeQuery = ""
+    @State private var youtubeResults: [YouTubeChannelSearchResult] = []
+    @State private var isSearchingYouTube = false
+    @State private var subscribingChannelID: String?
     
     var body: some View {
         NavigationView {
@@ -14170,15 +14531,82 @@ struct AddSubscriptionView: View {
                 
                 Form {
                 Section(header: Text("Subscription Details")) {
-                    TextField("Title", text: $title)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                    TextField(type == .rss ? "Feed URL" : "Subreddit Name", text: $url)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                    Picker("Type", selection: $type) {
-                        Text("RSS Feed").tag(SubscriptionType.rss)
-                        Text("Reddit").tag(SubscriptionType.reddit)
+                    if appState.settings.youtubeSupportEnabled {
+                        Picker("Type", selection: $source) {
+                            Text("RSS Feed").tag(SubscriptionSource.rss)
+                            Text("Reddit").tag(SubscriptionSource.reddit)
+                            Text("YouTube").tag(SubscriptionSource.youtube)
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
+
+                        if source == .youtube {
+                            TextField("Search YouTube channels", text: $youtubeQuery)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .submitLabel(.search)
+                                .onSubmit(searchYouTube)
+
+                            Button {
+                                searchYouTube()
+                            } label: {
+                                if isSearchingYouTube {
+                                    ProgressView()
+                                } else {
+                                    Label("Search Channels", systemImage: "magnifyingglass")
+                                }
+                            }
+                            .disabled(youtubeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearchingYouTube)
+                        } else {
+                            TextField("Title", text: $title)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                            TextField(source == .rss ? "Feed URL" : "Subreddit Name", text: $url)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                        }
+                    } else {
+                        // Preserve the original form exactly while YouTube is off.
+                        TextField("Title", text: $title)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        TextField(source == .rss ? "Feed URL" : "Subreddit Name", text: $url)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        Picker("Type", selection: $source) {
+                            Text("RSS Feed").tag(SubscriptionSource.rss)
+                            Text("Reddit").tag(SubscriptionSource.reddit)
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
                     }
-                    .pickerStyle(SegmentedPickerStyle())
+                }
+
+                if source == .youtube, appState.settings.youtubeSupportEnabled, !youtubeResults.isEmpty {
+                    Section("Channels") {
+                        ForEach(youtubeResults) { channel in
+                            HStack(spacing: 12) {
+                                AsyncImage(url: channel.thumbnailURL) { image in
+                                    image.resizable().scaledToFill()
+                                } placeholder: {
+                                    Image(systemName: "play.rectangle.fill")
+                                        .foregroundStyle(.red)
+                                }
+                                .frame(width: 42, height: 42)
+                                .clipShape(Circle())
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(channel.title)
+                                        .font(.headline)
+                                    if let handle = channel.handle {
+                                        Text(handle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Button(subscribingChannelID == channel.id ? "Adding…" : "Subscribe") {
+                                    subscribe(to: channel)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(subscribingChannelID != nil)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
                 }
                 if let errorMessage = errorMessage {
                     Section {
@@ -14186,14 +14614,16 @@ struct AddSubscriptionView: View {
                             .foregroundColor(.red)
                     }
                 }
-                Section {
-                    Button("Add Subscription") {
-                        addSubscription()
+                if source != .youtube {
+                    Section {
+                        Button("Add Subscription") {
+                            addSubscription()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(title.isEmpty || url.isEmpty)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(title.isEmpty || url.isEmpty)
+                    .scrollContentBackground(.hidden) // Hide the default form background
                 }
-                .scrollContentBackground(.hidden) // Hide the default form background
             }
             }
             .navigationTitle("Add Subscription")
@@ -14212,13 +14642,47 @@ struct AddSubscriptionView: View {
     }
     
     private func addSubscription() {
-        if type == .rss && !url.lowercased().starts(with: "http") {
+        let type: SubscriptionType = source == .reddit ? .reddit : .rss
+        if source == .rss && !url.lowercased().starts(with: "http") {
             errorMessage = "Please enter a valid URL starting with http:// or https://"
             return
         }
         let finalUrl = type == .rss ? url : url.replacingOccurrences(of: "r/", with: "")
         appState.addSubscription(title: title, url: finalUrl, type: type)
         presentationMode.wrappedValue.dismiss()
+    }
+
+    private func searchYouTube() {
+        let query = youtubeQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        errorMessage = nil
+        isSearchingYouTube = true
+        youtubeResults = []
+        Task {
+            do {
+                youtubeResults = try await appState.searchYouTubeChannels(query)
+                if youtubeResults.isEmpty {
+                    errorMessage = "No public YouTube channels were found."
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSearchingYouTube = false
+        }
+    }
+
+    private func subscribe(to channel: YouTubeChannelSearchResult) {
+        errorMessage = nil
+        subscribingChannelID = channel.id
+        Task {
+            do {
+                try await appState.addYouTubeSubscription(channel)
+                presentationMode.wrappedValue.dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+                subscribingChannelID = nil
+            }
+        }
     }
 }
 

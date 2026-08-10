@@ -115,6 +115,10 @@
 		READABILITY0001000102 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
 		SUMM0001000100010001 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
 		SUMM0001000100010002 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
+		YT0000000000000000000001 /* YouTubeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000011 /* YouTubeService.swift */; };
+		YT0000000000000000000002 /* YouTubeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000011 /* YouTubeService.swift */; };
+		YT0000000000000000000003 /* YouTubePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000012 /* YouTubePlayerView.swift */; };
+		YT0000000000000000000004 /* YouTubeSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000013 /* YouTubeSupportTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -170,6 +174,7 @@
 		A1B2C3D4E5F6A7B8C9D0E222 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E223 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E224 /* RSSReaderApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RSSReaderApp.entitlements; sourceTree = "<group>"; };
+		PCCIOSDBG00000000000001 /* RSSReaderApp (iOS)Debug.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "RSSReaderApp (iOS)Debug.entitlements"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E273 /* GeminiBackgroundTaskManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiBackgroundTaskManager.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E290 /* CloudSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncManager.swift; sourceTree = "<group>"; };
 		ASKAI0001000100010003 /* AskAIUtilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAIUtilities.swift; sourceTree = "<group>"; };
@@ -202,6 +207,9 @@
 		LLM0001000100010006 /* LocalLLMCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMCompatibility.swift; sourceTree = "<group>"; };
 		READABILITY0001000100 /* Readability.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Readability.js; sourceTree = "<group>"; };
 		SUMM0001000100010003 /* SummarizeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummarizeBridge.swift; sourceTree = "<group>"; };
+		YT0000000000000000000011 /* YouTubeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeService.swift; sourceTree = "<group>"; };
+		YT0000000000000000000012 /* YouTubePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubePlayerView.swift; sourceTree = "<group>"; };
+		YT0000000000000000000013 /* YouTubeSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeSupportTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -293,6 +301,7 @@
 				A1B2C3D4E5F6A7B8C9D0E222 /* Info.plist */,
 				A1B2C3D4E5F6A7B8C9D0E223 /* Info-macOS.plist */,
 				A1B2C3D4E5F6A7B8C9D0E224 /* RSSReaderApp.entitlements */,
+				PCCIOSDBG00000000000001 /* RSSReaderApp (iOS)Debug.entitlements */,
 				A1B2C3D4E5F6A7B8C9D0E22E /* Preview Content */,
 			);
 			path = RSSReaderApp;
@@ -330,6 +339,7 @@
 				A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */,
 				MLX0001000100010008 /* InfographicView.swift */,
 				ASKAI0001000100010003 /* AskAIUtilities.swift */,
+				YT0000000000000000000012 /* YouTubePlayerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -360,6 +370,7 @@
 					MLX0001000100010005 /* MLXJSONRepairUtils.swift */,
 				SUMM0001000100010003 /* SummarizeBridge.swift */,
 				F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */,
+				YT0000000000000000000011 /* YouTubeService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -416,6 +427,7 @@
 			isa = PBXGroup;
 			children = (
 				E00000000000000000000041 /* BatchPodcastTests.swift */,
+				YT0000000000000000000013 /* YouTubeSupportTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -629,6 +641,8 @@
 				E00000000000000000000024 /* BatchPodcastSession.swift in Sources */,
 				E00000000000000000000025 /* MLXPodcastPlaybackController.swift in Sources */,
 				E00000000000000000000026 /* BatchPodcastView.swift in Sources */,
+				YT0000000000000000000001 /* YouTubeService.swift in Sources */,
+				YT0000000000000000000003 /* YouTubePlayerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -667,6 +681,7 @@
 				SUMM0001000100010002 /* SummarizeBridge.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D3 /* KokoroTTSService.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D4 /* KokoroPlayback.swift in Sources */,
+				YT0000000000000000000002 /* YouTubeService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -684,6 +699,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E0000000000000000000004D /* BatchPodcastTests.swift in Sources */,
+				YT0000000000000000000004 /* YouTubeSupportTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -824,10 +840,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = RSSReaderApp/RSSReaderApp.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "RSSReaderApp/RSSReaderApp (iOS)Debug.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
@@ -844,7 +860,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -865,7 +881,7 @@
 				CODE_SIGN_ENTITLEMENTS = "RSSReaderApp (iOS)Release.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
@@ -882,7 +898,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -963,7 +979,7 @@
 				CODE_SIGN_ENTITLEMENTS = LatestNewsWidget/LatestNewsWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LatestNewsWidget/Info.plist;
@@ -973,7 +989,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -991,7 +1007,7 @@
 				CODE_SIGN_ENTITLEMENTS = LatestNewsWidget/LatestNewsWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LatestNewsWidget/Info.plist;
@@ -1001,7 +1017,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joaovalente.RSSReaderApp.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -1152,15 +1168,15 @@
 		};
 		D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "Packages/mlx-audio-swift";
+			relativePath = "rss mac/Packages/mlx-audio-swift";
 		};
 		D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "Packages/EventSource";
+			relativePath = "rss mac/Packages/EventSource";
 		};
 		LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "Packages/swift-litert-lm local gemma fast us ethi sone";
+			relativePath = "swift-litert-lm local gemma fast us ethi sone";
 		};
 /* End XCRemoteSwiftPackageReference section */
 
