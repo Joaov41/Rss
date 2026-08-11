@@ -359,9 +359,6 @@
 				"$(SRCROOT)/RSSReaderApp/EmbeddedDylib.entitlements",
 			);
 			name = "Sign embedded dylibs";
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libCLiteRTLM_mac.dylib",
-			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -eu\nif [ \"${CODE_SIGNING_ALLOWED:-NO}\" != \"YES\" ] || [ -z \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n    exit 0\nfi\ndylib=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libCLiteRTLM_mac.dylib\"\nif [ -f \"$dylib\" ]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --entitlements \"${SRCROOT}/RSSReaderApp/EmbeddedDylib.entitlements\" --timestamp=none \"$dylib\"\nfi\n";
@@ -552,7 +549,8 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 22;
+					CURRENT_PROJECT_VERSION = 23;
+					ENABLE_USER_SCRIPT_SANDBOXING = NO;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
@@ -589,7 +587,8 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 22;
+					CURRENT_PROJECT_VERSION = 23;
+					ENABLE_USER_SCRIPT_SANDBOXING = NO;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
