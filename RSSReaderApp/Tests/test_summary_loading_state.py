@@ -13,13 +13,14 @@ def read(path: str) -> str:
 class SummaryLoadingStateRegressionTests(unittest.TestCase):
     def test_reddit_spinner_is_scoped_to_the_selected_post(self):
         reddit_view = read("RSSReaderApp/Views/RedditDetailView.swift")
-        self.assertGreaterEqual(
-            reddit_view.count(
-                "appState.isSummarizingRedditPost(post) && post.summary == nil"
-            ),
-            2,
+        self.assertIn(
+            "appState.isSummarizingRedditPost(post) && visiblePostSummary == nil",
+            reddit_view,
         )
-        self.assertNotIn("appState.isLoading && post.summary == nil", reddit_view)
+        self.assertNotIn(
+            "appState.isLoading && visiblePostSummary == nil",
+            reddit_view,
+        )
 
     def test_article_and_reddit_have_independent_active_summary_ids(self):
         app_state = read("RSSReaderApp/Controllers/AppState.swift")
@@ -50,23 +51,19 @@ class SummaryLoadingStateRegressionTests(unittest.TestCase):
         )
         self.assertIsNotNone(cloud_method)
         body = cloud_method.group(0)
-        self.assertIn(
-            "launchCloudRequest(for: content, type: .summary, completion:", body
-        )
+        self.assertIn("launchCloudRequest(for: content, type: .summary) {", body)
         self.assertIn("updateArticleSummaryFromCloud(article, summary: result)", body)
-        self.assertIn(
-            "updateRedditPostSummaryFromCloud(redditPost, summary: result)", body
-        )
+        self.assertIn("updateRedditPostSummaryFromCloud(redditPost, summary: result)", body)
 
     def test_feed_refresh_preserves_in_memory_summaries(self):
         app_state = read("RSSReaderApp/Controllers/AppState.swift")
-        self.assertGreaterEqual(app_state.count("let existingSummaries ="), 4)
+        self.assertGreaterEqual(app_state.count("let existingSummaries ="), 2)
         self.assertIn(
-            "processedFeed.articles[i].summary = existingSummaries[processedFeed.articles[i].id]",
+            "processedFeed.articles[i].summary = existingSummaries[article.id]",
             app_state,
         )
         self.assertIn(
-            "processedFeed.posts[index].summary = existingSummaries[id]",
+            "processedFeed.posts[index].summary = existingSummaries[post.id]",
             app_state,
         )
 

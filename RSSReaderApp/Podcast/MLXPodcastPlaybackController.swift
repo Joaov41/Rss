@@ -3,7 +3,6 @@ import Combine
 import CryptoKit
 import Foundation
 import OSLog
-import UIKit
 
 struct MLXPodcastPlaybackChunk: Identifiable, Equatable {
     let id: String
@@ -138,63 +137,8 @@ final class MLXPodcastPlaybackController: ObservableObject {
     private var playbackTask: Task<Void, Never>?
     private var operationID: UUID?
     private var pauseRequested = false
-    private var interruptionObserver: NSObjectProtocol?
-    private var lifecycleObservers: [NSObjectProtocol] = []
     private var activeLatches: [ObjectIdentifier: AudioCompletionLatch] = [:]
     private var activeAudioCache: PodcastAudioCache?
-    private let activityGate = PodcastApplicationActivityGate(
-        isActive: UIApplication.shared.applicationState == .active
-    )
-
-    init() {
-        interruptionObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance(),
-            queue: .main
-        ) { [weak self] notification in
-            guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if type == .began {
-                    self.pauseForInterruption()
-                } else if type == .ended {
-                    self.statusMessage = "Playback was interrupted. Tap resume to continue."
-                }
-            }
-        }
-
-        let gate = activityGate
-        lifecycleObservers = [
-            NotificationCenter.default.addObserver(
-                forName: UIApplication.willResignActiveNotification,
-                object: nil,
-                queue: .main
-            ) { _ in gate.setActive(false) },
-            NotificationCenter.default.addObserver(
-                forName: UIApplication.didBecomeActiveNotification,
-                object: nil,
-                queue: .main
-            ) { _ in gate.setActive(true) },
-            NotificationCenter.default.addObserver(
-                forName: UIApplication.didReceiveMemoryWarningNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.errorMessage = "Playback stopped because the device reported low memory."
-                    self.stop()
-                }
-            }
-        ]
-    }
-
-    deinit {
-        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
-        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        activityGate.setActive(true)
-    }
 
     func play(episode: PodcastEpisode, hostAVoice: KokoroVoice, hostBVoice: KokoroVoice, speed: Double) {
         stop()
@@ -211,7 +155,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
 
         logger.info("Podcast playback started: chunks=\(plan.count, privacy: .public), hostA=\(hostAVoice.rawValue, privacy: .public), hostB=\(hostBVoice.rawValue, privacy: .public), speed=\(speed, privacy: .public)")
 
-        configureAudioSession()
         let token = KokoroTTSService.shared.newPlaybackToken()
         let operation = UUID()
         let clampedSpeed = min(max(speed, 0.5), 2.0)
@@ -317,11 +260,9 @@ final class MLXPodcastPlaybackController: ObservableObject {
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("rss-podcast-export-\(UUID().uuidString)", isDirectory: true)
-        let url = directory.appendingPathComponent(Self.exportFileName(for: episode.title))
-            .appendingPathExtension("wav")
+        let url = directory.appendingPathComponent(Self.exportFileName(for: episode.title)).appendingPathExtension("wav")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        configureAudioSession()
         let token = KokoroTTSService.shared.newPlaybackToken()
         let cache = makeAudioCache(
             episode: episode,
@@ -474,8 +415,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
     ) async throws -> Data {
         try Task.checkCancellation()
         guard KokoroTTSService.shared.isPlaybackTokenCurrent(token) else { throw CancellationError() }
-        await activityGate.waitUntilActive()
-        try Task.checkCancellation()
         if let cached = audioCache?.read(chunkID: chunk.id) {
             logger.info("Reusing cached podcast chunk: id=\(chunk.id, privacy: .public), bytes=\(cached.count, privacy: .public)")
             return cached
@@ -523,12 +462,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
         }
         activeAudioCache = cache
         return cache
-    }
-
-    private func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .allowAirPlay])
-        try? session.setActive(true, options: .notifyOthersOnDeactivation)
     }
 
     private func ensureEngine(format: AVAudioFormat) throws {
@@ -590,14 +523,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
         }
     }
 
-    private func pauseForInterruption() {
-        guard state == .playing || state == .preparing else { return }
-        pauseRequested = true
-        playerNode.pause()
-        state = .paused
-        statusMessage = "Playback interrupted. Tap resume to continue."
-    }
-
     private func fail(_ message: String) {
         logger.error("Podcast playback entered failed state: \(message, privacy: .public)")
         errorMessage = message
@@ -611,36 +536,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return String((cleaned.isEmpty ? "RSS Batch Podcast" : cleaned).prefix(80))
-    }
-}
-
-private final class PodcastApplicationActivityGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var active: Bool
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    init(isActive: Bool) { active = isActive }
-
-    func setActive(_ active: Bool) {
-        lock.lock()
-        self.active = active
-        let continuations = active ? waiters : []
-        if active { waiters.removeAll(keepingCapacity: false) }
-        lock.unlock()
-        continuations.forEach { $0.resume() }
-    }
-
-    func waitUntilActive() async {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            if active {
-                lock.unlock()
-                continuation.resume()
-            } else {
-                waiters.append(continuation)
-                lock.unlock()
-            }
-        }
     }
 }
 

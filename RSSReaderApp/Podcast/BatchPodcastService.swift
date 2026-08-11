@@ -75,10 +75,7 @@ final class BatchPodcastService {
             for start in stride(from: 0, to: current.count, by: maximumReportsPerPrompt) {
                 try Task.checkCancellation()
                 let group = Array(current[start..<min(start + maximumReportsPerPrompt, current.count)])
-                let raw = try await generator(
-                    mergePrompt(reports: group),
-                    "Merge Podcast Evidence"
-                )
+                let raw = try await generator(mergePrompt(reports: group), "Merge Podcast Evidence")
                 if let drafts = BatchPodcastJSONDecoder.decode([PodcastEvidenceDraft].self, from: raw), !drafts.isEmpty {
                     let ids = Set(group.flatMap(\.sourceIDs))
                     let claims = drafts.flatMap(\.claims).map {
@@ -114,10 +111,7 @@ final class BatchPodcastService {
         context: BatchPodcastContext,
         evidence: [PodcastEvidenceReference]
     ) async throws -> PodcastOutline {
-        let raw = try await generator(
-            outlinePrompt(context: context, evidence: evidence),
-            "Outline Batch Podcast"
-        )
+        let raw = try await generator(outlinePrompt(context: context, evidence: evidence), "Outline Batch Podcast")
         if let draft = BatchPodcastJSONDecoder.decode(PodcastOutlineDraft.self, from: raw) {
             let allowed = Set(evidence.map(\.id))
             return PodcastOutline(
@@ -137,11 +131,7 @@ final class BatchPodcastService {
             title: context.title,
             summary: context.overallSummary.map(PodcastSpokenTextCleaner.clean) ?? "A grounded conversation about the saved batch.",
             beats: evidence.prefix(8).map {
-                PodcastOutlineBeat(
-                    title: $0.id,
-                    talkingPoints: $0.claims,
-                    evidenceRefs: [$0.id]
-                )
+                PodcastOutlineBeat(title: $0.id, talkingPoints: $0.claims, evidenceRefs: [$0.id])
             }
         )
     }
@@ -175,29 +165,24 @@ final class BatchPodcastService {
             )
             guard !spoken.isEmpty else { continue }
 
+            // Unknown evidence references are deliberately discarded. They are
+            // metadata only and must never become a user-facing failure.
             let sourceIDs = Array(
                 Set(draftTurn.evidenceRefs.flatMap { reference in
                     evidenceByID[reference]?.sourceIDs ?? (knownSourceIDs.contains(reference) ? [reference] : [])
-                })
-                    .intersection(knownSourceIDs)
+                }).intersection(knownSourceIDs)
             ).sorted()
             turns.append(
-                PodcastTurn(
-                    id: draftTurn.id,
-                    speaker: draftTurn.speaker,
-                    text: spoken,
-                    sourceIDs: sourceIDs
-                )
+                PodcastTurn(id: draftTurn.id, speaker: draftTurn.speaker, text: spoken, sourceIDs: sourceIDs)
             )
         }
 
         guard !turns.isEmpty else {
             throw BatchPodcastError.invalidScript("all turns were empty after spoken-text cleanup")
         }
-        guard turns.contains(where: { !$0.sourceIDs.isEmpty }) else {
-            throw BatchPodcastError.invalidScript("the script did not retain grounded evidence")
-        }
 
+        // Turn count and the 800-word range are targets, not hard failures. A
+        // small batch remains playable, while the upper cap is automatic.
         let episode = PodcastEpisode(
             id: draft.id,
             title: PodcastSpokenTextCleaner.clean(draft.title).isEmpty ? context.title : PodcastSpokenTextCleaner.clean(draft.title),

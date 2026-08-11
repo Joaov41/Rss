@@ -28,15 +28,14 @@ final class BatchPodcastSession: ObservableObject {
 
     let playbackController = MLXPodcastPlaybackController()
 
-    private var textGenerator: (@MainActor (String, String, AppSettings.SummaryProvider, GeminiBackgroundTaskHandle?) async throws -> String)?
+    private var textGenerator: (@MainActor (String, String, AppSettings.SummaryProvider) async throws -> String)?
     private var providerProvider: (@MainActor () -> AppSettings.SummaryProvider)?
     private var generationTask: Task<Void, Never>?
-    private var generationBackgroundHandle: GeminiBackgroundTaskHandle?
     private var exportTask: Task<Void, Never>?
 
     func configureTextGenerator(
         provider: @escaping @MainActor () -> AppSettings.SummaryProvider = { .gemini },
-        generator: @escaping @MainActor (String, String, AppSettings.SummaryProvider, GeminiBackgroundTaskHandle?) async throws -> String
+        generator: @escaping @MainActor (String, String, AppSettings.SummaryProvider) async throws -> String
     ) {
         providerProvider = provider
         textGenerator = generator
@@ -50,8 +49,6 @@ final class BatchPodcastSession: ObservableObject {
     ) {
         if self.context?.sourceDigest != context.sourceDigest {
             generationTask?.cancel()
-            generationBackgroundHandle?.finish(success: false)
-            generationBackgroundHandle = nil
             exportTask?.cancel()
             exportTask = nil
             playbackController.stop()
@@ -95,11 +92,9 @@ final class BatchPodcastSession: ObservableObject {
         }
 
         generationTask?.cancel()
-        generationBackgroundHandle?.finish(success: false)
-        generationBackgroundHandle = nil
         playbackController.stop()
         playbackController.clearAudioCache()
-        exportURL = nil
+        cleanupExportURL()
         episode = nil
         progress = 0
         progressMessage = "Starting podcast generation…"
@@ -108,31 +103,15 @@ final class BatchPodcastSession: ObservableObject {
 
         let provider = providerProvider?() ?? .gemini
         selectedProvider = provider
-        let backgroundHandle = provider == .gemini
-            ? GeminiBackgroundTaskManager.shared.beginLongRunningTask(
-                identifier: GeminiBackgroundTaskManager.shared.taskIdentifier(for: .processing),
-                title: "Generating Batch Podcast"
-            )
-            : nil
-        generationBackgroundHandle = backgroundHandle
         let service = BatchPodcastService { prompt, title in
-            try await textGenerator(prompt, title, provider, backgroundHandle)
+            try await textGenerator(prompt, title, provider)
         }
 
         generationTask = Task { [weak self] in
             guard let self else { return }
-            var completedSuccessfully = false
-            defer {
-                backgroundHandle?.reportProgress(fractionCompleted: completedSuccessfully ? 1 : self.progress)
-                backgroundHandle?.finish(success: completedSuccessfully)
-                if let backgroundHandle, self.generationBackgroundHandle === backgroundHandle {
-                    self.generationBackgroundHandle = nil
-                }
-            }
             do {
                 let generated = try await service.generateEpisode(from: context) { [weak self] update in
                     self?.apply(update)
-                    backgroundHandle?.reportProgress(fractionCompleted: self?.progress ?? 0)
                 }
                 try Task.checkCancellation()
                 guard self.context?.sourceDigest == context.sourceDigest else {
@@ -142,7 +121,6 @@ final class BatchPodcastSession: ObservableObject {
                 self.progress = 1
                 self.progressMessage = BatchPodcastProgress.ready.message
                 self.state = .ready
-                completedSuccessfully = true
             } catch is CancellationError {
                 guard !Task.isCancelled else { return }
                 self.state = .idle
@@ -158,8 +136,6 @@ final class BatchPodcastSession: ObservableObject {
     func cancelGeneration() {
         generationTask?.cancel()
         generationTask = nil
-        generationBackgroundHandle?.finish(success: false)
-        generationBackgroundHandle = nil
         if state == .generating {
             state = .idle
             progressMessage = "Generation cancelled"
@@ -176,17 +152,9 @@ final class BatchPodcastSession: ObservableObject {
         )
     }
 
-    func pause() {
-        playbackController.pause()
-    }
-
-    func resume() {
-        playbackController.resume()
-    }
-
-    func stopPlayback() {
-        playbackController.stop()
-    }
+    func pause() { playbackController.pause() }
+    func resume() { playbackController.resume() }
+    func stopPlayback() { playbackController.stop() }
 
     func minimize() {
         guard isPresented else { return }
@@ -203,8 +171,6 @@ final class BatchPodcastSession: ObservableObject {
     func close() {
         generationTask?.cancel()
         generationTask = nil
-        generationBackgroundHandle?.finish(success: false)
-        generationBackgroundHandle = nil
         exportTask?.cancel()
         exportTask = nil
         playbackController.stop()
@@ -229,12 +195,14 @@ final class BatchPodcastSession: ObservableObject {
         guard let episode else { return }
         guard exportTask == nil else { return }
 
+        playbackController.stop()
         state = .saving
         errorMessage = nil
         progress = 0
         progressMessage = "Preparing WAV export…"
         let voiceA = hostAVoice
         let voiceB = hostBVoice
+        let speed = self.speed
         let episodeDigest = episode.sourceDigest
 
         exportTask = Task { [weak self] in
@@ -244,7 +212,7 @@ final class BatchPodcastSession: ObservableObject {
                     episode,
                     hostAVoice: voiceA,
                     hostBVoice: voiceB,
-                    speed: self.speed,
+                    speed: speed,
                     progressHandler: { [weak self] completed, total in
                         self?.progress = total > 0 ? Double(completed) / Double(total) : 0
                         self?.progressMessage = "Preparing WAV export \(completed) of \(total)…"

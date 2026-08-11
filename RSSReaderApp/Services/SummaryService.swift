@@ -7,21 +7,16 @@ import AVFoundation
 import AppKit
 #endif
 
-// TTS Provider enum
-enum SummaryServiceError: LocalizedError {
+// Summary Service Error types
+enum SummaryServiceError: Error {
     case apiKeyMissing
     case invalidURL
-
-    var errorDescription: String? {
-        switch self {
-        case .apiKeyMissing:
-            return "API key not configured. Please add your Gemini API key in Settings."
-        case .invalidURL:
-            return "Invalid API URL"
-        }
-    }
+    case invalidResponse
+    case apiError(statusCode: Int, message: String)
+    case noContent
 }
 
+// TTS Provider enum
 enum TTSProvider: String, CaseIterable {
     case gemini = "Gemini"
     case openai = "OpenAI"
@@ -51,10 +46,6 @@ class SummaryService {
     private var selectedTTSProvider: TTSProvider = .openai  // DEFAULT TO OPENAI!
     private var selectedGeminiVoice: String = "Puck" // Default to fastest voice
     private var selectedOpenAIVoice: String = "alloy" // Default OpenAI voice
-    private var localTTSEngine: LocalTTSEngine = .system
-    private var kokoroVoice: String = KokoroVoice.defaultVoice.rawValue
-    private var kokoroSpeed: Double = 1.0
-    private var kokoroPrecacheEnabled: Bool = false
     
     private let geminiVoices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"]
     private let openaiVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
@@ -71,26 +62,8 @@ class SummaryService {
         "Error occurred.",
         "No content available."
     ]
-
-    // Optimized URLSession for Gemini calls (keeps background tasks responsive)
-    private lazy var responsiveSession: URLSession = {
-        let configuration = URLSessionConfiguration.default
-        #if os(iOS)
-        configuration.networkServiceType = .responsiveData
-        #endif
-        configuration.waitsForConnectivity = true
-        if #available(iOS 13.0, macOS 10.15, *) {
-            configuration.allowsConstrainedNetworkAccess = true
-            configuration.allowsExpensiveNetworkAccess = true
-        }
-        configuration.httpMaximumConnectionsPerHost = 6
-        configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 300
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
-    }()
     
-    init(apiKey: String? = nil) {
+init(apiKey: String? = nil) {
         self.apiKey = apiKey ?? ""
         
         // Load settings from AppSettings via PersistenceManager
@@ -122,16 +95,6 @@ class SummaryService {
         if !settings.selectedOpenAIVoice.isEmpty && openaiVoices.contains(settings.selectedOpenAIVoice) {
             self.selectedOpenAIVoice = settings.selectedOpenAIVoice
         }
-
-        // Load local TTS engine and Kokoro preferences
-        self.localTTSEngine = settings.localTTSEngine
-        if KokoroVoice.allCases.map(\.rawValue).contains(settings.kokoroVoice) {
-            self.kokoroVoice = settings.kokoroVoice
-        } else {
-            self.kokoroVoice = KokoroVoice.defaultVoice.rawValue
-        }
-        self.kokoroSpeed = min(max(settings.kokoroSpeed, 0.5), 2.0)
-        self.kokoroPrecacheEnabled = settings.kokoroPrecacheEnabled
         
         // Start preloading common phrases in background
         if isPreloadingEnabled && (!self.apiKey.isEmpty || !self.openaiApiKey.isEmpty) {
@@ -279,101 +242,6 @@ class SummaryService {
         enableFallback = enabled
         print("🔊 SummaryService: Fallback \(enabled ? "enabled" : "disabled")")
     }
-
-    // MARK: - Local TTS (MLX-backed)
-
-    func getLocalTTSEngine() -> LocalTTSEngine {
-        #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
-        return localTTSEngine
-        #else
-        return .system
-        #endif
-    }
-
-    func setLocalTTSEngine(_ engine: LocalTTSEngine) {
-        localTTSEngine = engine
-        let persistenceManager = PersistenceManager.shared
-        var settings = persistenceManager.loadSettings()
-        settings.localTTSEngine = engine
-        persistenceManager.saveSettings(settings)
-    }
-
-    func getKokoroVoice() -> String {
-        kokoroVoice
-    }
-
-    func getKokoroSpeed() -> Double {
-        kokoroSpeed
-    }
-
-    func isKokoroPrecacheEnabled() -> Bool {
-        kokoroPrecacheEnabled
-    }
-
-    func warmUpKokoroIfNeeded() {
-        #if os(iOS)
-        guard KokoroTTSService.shared.isAvailable else { return }
-        guard kokoroPrecacheEnabled else { return }
-        let voice = kokoroVoice
-        Task.detached(priority: .utility) {
-            do {
-                try await KokoroTTSService.shared.warmUp(preloadVoices: [voice])
-                print("✅ MLX TTS warm-up complete")
-            } catch {
-                print("⚠️ MLX TTS warm-up failed: \(error.localizedDescription)")
-            }
-        }
-        #endif
-    }
-
-    func setKokoroVoice(_ voice: String) {
-        let resolved = KokoroVoice.allCases.map(\.rawValue).contains(voice) ? voice : KokoroVoice.defaultVoice.rawValue
-        kokoroVoice = resolved
-        KokoroTTSService.shared.recordVoiceForWarmup(resolved)
-
-        let persistenceManager = PersistenceManager.shared
-        var settings = persistenceManager.loadSettings()
-        settings.kokoroVoice = resolved
-        persistenceManager.saveSettings(settings)
-
-        if kokoroPrecacheEnabled {
-            warmUpKokoroIfNeeded()
-        }
-    }
-
-    func setKokoroSpeed(_ speed: Double) {
-        kokoroSpeed = min(max(speed, 0.5), 2.0)
-        let persistenceManager = PersistenceManager.shared
-        var settings = persistenceManager.loadSettings()
-        settings.kokoroSpeed = kokoroSpeed
-        persistenceManager.saveSettings(settings)
-    }
-
-    func setKokoroPrecacheEnabled(_ enabled: Bool) {
-        kokoroPrecacheEnabled = enabled
-        let persistenceManager = PersistenceManager.shared
-        var settings = persistenceManager.loadSettings()
-        settings.kokoroPrecacheEnabled = enabled
-        persistenceManager.saveSettings(settings)
-    }
-
-    @MainActor
-    func precacheKokoroNow() async throws {
-        #if os(iOS)
-        guard KokoroTTSService.shared.isAvailable else { return }
-        kokoroPrecacheEnabled = true
-        let persistenceManager = PersistenceManager.shared
-        var settings = persistenceManager.loadSettings()
-        settings.kokoroPrecacheEnabled = true
-        settings.kokoroVoice = kokoroVoice
-        settings.kokoroSpeed = kokoroSpeed
-        persistenceManager.saveSettings(settings)
-
-        let voice = kokoroVoice
-        KokoroTTSService.shared.recordVoiceForWarmup(voice)
-        try await KokoroTTSService.shared.warmUp(preloadVoices: [voice])
-        #endif
-    }
     
     // MARK: - Preloading
     
@@ -412,6 +280,24 @@ class SummaryService {
             }
         }
     }
+
+    // MARK: - Local TTS Settings
+
+    func getLocalTTSEngine() -> LocalTTSEngine {
+        PersistenceManager.shared.loadSettings().localTTSEngine
+    }
+
+    func getKokoroVoice() -> String {
+        PersistenceManager.shared.loadSettings().kokoroVoice
+    }
+
+    func getKokoroSpeed() -> Double {
+        PersistenceManager.shared.loadSettings().kokoroSpeed
+    }
+
+    func isKokoroPrecacheEnabled() -> Bool {
+        PersistenceManager.shared.loadSettings().kokoroPrecacheEnabled
+    }
     
     // MARK: - Fast TTS for Short Phrases
     
@@ -423,163 +309,97 @@ class SummaryService {
         return try await synthesizeSpeech(text: text)
     }
     
-    func summarizeText(
-        _ text: String,
-        customPrompt: String? = nil,
-        preferredBackgroundTaskIdentifier: String? = nil,
-        existingBackgroundTaskHandle: Any? = nil
-    ) -> AnyPublisher<String, Never> {
-        return Future<String, Never> { promise in
-            Task(priority: .userInitiated) {
-                do {
-                    let summary = try await self.summarizeTextAsync(
-                        text,
-                        customPrompt: customPrompt,
-                        preferredBackgroundTaskIdentifier: preferredBackgroundTaskIdentifier,
-                        existingBackgroundTaskHandle: existingBackgroundTaskHandle
-                    )
-                    promise(.success(summary))
-                } catch is CancellationError {
-                    promise(.success("Error: Gemini request cancelled."))
-                } catch {
-                    let localizedMessage = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let userFacingMessage = localizedMessage.isEmpty ? "Error generating summary" : localizedMessage
-                    promise(.success(userFacingMessage))
-                }
-            }
-        }
-        .eraseToAnyPublisher()
-    }
-
-    func summarizeTextAsync(
-        _ text: String,
-        customPrompt: String? = nil,
-        preferredBackgroundTaskIdentifier: String? = nil,
-        existingBackgroundTaskHandle: Any? = nil
-    ) async throws -> String {
+    func summarizeText(_ text: String, customPrompt: String? = nil) -> AnyPublisher<String, Never> {
+        // Check if API key is available
         guard !apiKey.isEmpty else {
-            throw SummaryServiceError.apiKeyMissing
+            return Just("API key not configured. Please add your Gemini API key in Settings.")
+                .eraseToAnyPublisher()
         }
-
+        
+        // Prepare the URL with API key
         let urlString = "\(baseURL)?key=\(apiKey)"
         guard let url = URL(string: urlString) else {
-            throw SummaryServiceError.invalidURL
+            return Just("Invalid API URL")
+                .eraseToAnyPublisher()
         }
-
+        
+        // Handle large text inputs
         var inputText = text
-        let maxTextLength = 150000
+        let maxTextLength = 150000  // Adjust this based on API limits
+        
         if inputText.count > maxTextLength {
             print("⚠️ SummaryService: Text exceeds maximum length (\(inputText.count) chars). Truncating to \(maxTextLength) chars.")
             inputText = String(inputText.prefix(maxTextLength))
         }
-
+        
+        // Prepare the request body
         let prompt: String
-        if let customPrompt = customPrompt, !customPrompt.isEmpty {
+        if let customPrompt = customPrompt {
+            // Use the custom prompt if provided
             prompt = customPrompt
         } else {
+            // Default prompt for article summarization
             prompt = "Summarize the following text in a concise way, highlighting the key points: \(inputText)"
         }
 
         let generationConfig = makeGenerationConfig()
         let requestBody = GeminiRequest(contents: [GeminiContent(parts: [GeminiPart(text: prompt)])], generationConfig: generationConfig)
-        
+
+        // Log the model and thinking status
         let modelName = modelNameForGeminiRequest
         if generationConfig != nil {
             print("🧠 SummaryService: Calling Gemini model '\(modelName)' with thinking disabled (budget: 0).")
         } else {
             print("🧠 SummaryService: Calling Gemini model '\(modelName)' without thinking budget (not supported by this model).")
         }
-        print("📱 SummaryService: Processing \(inputText.count) characters for summarization")
+        let actualPromptLength = prompt.count
+        if customPrompt != nil {
+            print("📱 SummaryService: Processing custom prompt with \(actualPromptLength) characters")
+        } else {
+            print("📱 SummaryService: Processing \(inputText.count) characters for summarization")
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // CRITICAL FIX: Set longer timeout for large summarization requests
-        // Global summaries with 50-100 posts can take 60-120 seconds to generate
-        let estimatedComplexity = prompt.count / 1000 // Rough estimate: 1 second per 1000 chars
-        let baseTimeout: TimeInterval = 120 // 2 minutes base for complex requests
-        let adaptiveTimeout = baseTimeout + Double(estimatedComplexity) * 2
-        request.timeoutInterval = min(adaptiveTimeout, 300) // Cap at 5 minutes
-
-        print("🧠 SummaryService: Set timeout to \(String(format: "%.0f", request.timeoutInterval))s for \(prompt.count) char prompt")
-
-        let jsonData: Data
+        
         do {
-            jsonData = try JSONEncoder().encode(requestBody)
+            let jsonData = try JSONEncoder().encode(requestBody)
+            request.httpBody = jsonData
         } catch {
-            throw error
+            return Just("Error encoding request: \(error.localizedDescription)")
+                .eraseToAnyPublisher()
         }
-        request.httpBody = jsonData
-
-        let subtitleSource: String
-        if let customPrompt = customPrompt, !customPrompt.isEmpty {
-            subtitleSource = customPrompt
-        } else {
-            subtitleSource = inputText
-        }
-        let backgroundSubtitle = String(subtitleSource.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
-
-        #if os(iOS)
-        let backgroundHandle: GeminiBackgroundTaskHandle?
-        let shouldManageHandle: Bool
-        if let providedHandle = existingBackgroundTaskHandle as? GeminiBackgroundTaskHandle {
-            backgroundHandle = providedHandle
-            shouldManageHandle = false
-            backgroundHandle?.onTaskStarted?()
-        } else {
-            let taskIdentifier = preferredBackgroundTaskIdentifier ?? GeminiBackgroundTaskManager.shared.taskIdentifier(for: .processing)
-            let handle = GeminiBackgroundTaskManager.shared.beginLongRunningTask(
-                identifier: taskIdentifier,
-                title: "Generating Summary: \(backgroundSubtitle.isEmpty ? "Gemini request" : backgroundSubtitle)"
-            )
-            backgroundHandle = handle
-            shouldManageHandle = true
-        }
-        #else
-        let shouldManageHandle = false
-        #endif
-
-        do {
-            #if os(iOS)
-            let summary = try await self.performGeminiSummary(
-                request: request,
-                promptCharacterCount: inputText.count,
-                backgroundHandle: backgroundHandle as Any
-            )
-            if shouldManageHandle {
-                backgroundHandle?.reportProgress(fractionCompleted: 1.0)
-                backgroundHandle?.finish(success: true)
-                print("✅ SummaryService: Background task completed successfully (works when locked)")
+        
+        return URLSession.shared.dataTaskPublisher(for: request)
+            .handleEvents(receiveOutput: { data, response in
+                if let httpResponse = response as? HTTPURLResponse {
+                    print("🧠 SummaryService: Received HTTP status code: \(httpResponse.statusCode)")
+                }
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    print("🧠 SummaryService: Raw Gemini API Response:\n---\n\(jsonString)\n---")
+                } else {
+                    print("🧠 SummaryService: Could not convert response data to UTF-8 string.")
+                }
+            })
+            .map { $0.data }
+            .decode(type: GeminiResponse.self, decoder: JSONDecoder())
+            .map { response -> String in
+                if let text = response.candidates?.first?.content.parts.first?.text {
+                    print("✅ SummaryService: Successfully decoded Gemini response.")
+                    return text
+                } else if let errorMessage = response.error?.message {
+                    return "Error: \(errorMessage)"
+                } else {
+                    return "No summary available"
+                }
             }
-            return summary
-            #else
-            return try await self.performGeminiSummary(
-                request: request,
-                promptCharacterCount: inputText.count,
-                backgroundHandle: nil
-            )
-            #endif
-        } catch is CancellationError {
-            #if os(iOS)
-            if let handle = backgroundHandle, shouldManageHandle {
-                handle.finish(success: false)
-            }
-            #endif
-            throw CancellationError()
-        } catch {
-            #if os(iOS)
-            if let handle = backgroundHandle, shouldManageHandle {
-                handle.finish(success: false)
-            }
-            #endif
-            print("🧠 SummaryService: Error executing Gemini request: \(error.localizedDescription)")
-            throw error
-        }
+            .replaceError(with: "Error generating summary")
+            .eraseToAnyPublisher()
     }
 
-    /// Generic method to generate content using Gemini with a custom prompt
-    /// Used for whiteboard generation and other LLM tasks
+    // MARK: - Async Gemini Content Generation (for Whiteboard)
+
     func generateContentWithGemini(prompt: String) async throws -> String {
         guard !apiKey.isEmpty else {
             throw SummaryServiceError.apiKeyMissing
@@ -596,43 +416,44 @@ class SummaryService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120 // 2 minutes for whiteboard generation
+        request.timeoutInterval = 60
 
         let jsonData = try JSONEncoder().encode(requestBody)
         request.httpBody = jsonData
 
-        print("🧠 SummaryService: Generating content with Gemini (\(prompt.count) chars)")
+        print("🧠 SummaryService.generateContentWithGemini: Sending request with prompt length: \(prompt.count) characters")
 
-        let (data, response) = try await responsiveSession.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
 
-        if let httpResponse = response as? HTTPURLResponse {
-            guard (200...299).contains(httpResponse.statusCode) else {
-                let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-                throw NSError(domain: "GeminiAPI", code: httpResponse.statusCode,
-                             userInfo: [NSLocalizedDescriptionKey: "API Error (\(httpResponse.statusCode)): \(errorBody)"])
-            }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SummaryServiceError.invalidResponse
         }
 
-        guard let geminiResponse = try? JSONDecoder().decode(GeminiResponse.self, from: data),
-              let candidate = geminiResponse.candidates?.first,
-              let text = candidate.content.parts.first?.text else {
-            throw NSError(domain: "GeminiAPI", code: -1,
-                         userInfo: [NSLocalizedDescriptionKey: "Failed to parse Gemini response"])
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let responseString = String(data: data, encoding: .utf8) ?? "Unknown error"
+            print("🧠 SummaryService.generateContentWithGemini: API error: \(responseString)")
+            throw SummaryServiceError.apiError(statusCode: httpResponse.statusCode, message: responseString)
         }
 
-        return text
+        let geminiResponse = try JSONDecoder().decode(GeminiResponse.self, from: data)
+
+        if let text = geminiResponse.candidates?.first?.content.parts.first?.text {
+            return text
+        } else if let errorMessage = geminiResponse.error?.message {
+            throw SummaryServiceError.apiError(statusCode: geminiResponse.error?.code ?? 0, message: errorMessage)
+        } else {
+            throw SummaryServiceError.noContent
+        }
     }
 
     func generateContentWithSummarize(
         prompt: String,
         settings: AppSettings,
-        timeout: TimeInterval = 300,
         onPartial: ((String) -> Void)? = nil
     ) async throws -> String {
         try await RSSSummarizeProviderClient.generate(
             prompt: prompt,
             settings: settings,
-            timeout: timeout,
             onPartial: onPartial
         )
     }
@@ -641,29 +462,7 @@ class SummaryService {
         prompt: String,
         settings: AppSettings
     ) async throws -> String {
-        let host = AppSettings.sanitizedSummarizeHost(
-            settings.pccGatewayHost,
-            fallback: AppSettings.defaultPCCGatewayHost
-        )
-        guard !host.isEmpty else { throw FMPCCGatewayError.missingHost }
-
-        let port = AppSettings.sanitizedSummarizePort(
-            settings.pccGatewayPort,
-            fallback: AppSettings.defaultPCCGatewayPort
-        )
-        guard (1...65_535).contains(port) else { throw FMPCCGatewayError.invalidPort(port) }
-
-        let token = AppSettings.sanitizedSummarizeSecret(settings.pccGatewayToken)
-        guard !token.isEmpty else { throw FMPCCGatewayError.missingToken }
-
-        return try await FMPCCGatewayClient(
-            configuration: FMPCCGatewayConfiguration(
-                host: host,
-                port: port,
-                token: token,
-                model: AppSettings.normalizedPCCGatewayModel(settings.pccGatewayModel)
-            )
-        ).generate(prompt: prompt)
+        try await FMPCCGatewayClient().generate(prompt: prompt)
     }
 
     func summarizeWithSummarizePublisher(
@@ -683,87 +482,6 @@ class SummaryService {
         .eraseToAnyPublisher()
     }
 
-    private func performGeminiSummary(request: URLRequest, promptCharacterCount: Int, backgroundHandle: Any?) async throws -> String {
-        #if os(iOS)
-        let handle = backgroundHandle as? GeminiBackgroundTaskHandle
-        await handle?.waitForTaskStartIfNeeded()
-        handle?.reportProgress(fractionCompleted: 0.05)
-
-        var heartbeatTask: Task<Void, Never>?
-        heartbeatTask = Task.detached(priority: .utility) { [weak handle] in
-            guard let handle else { return }
-
-            var nextFraction: Double = 0.1
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                guard !handle.cancelled else { break }
-
-                let fraction = min(0.8, nextFraction)
-                handle.reportProgress(fractionCompleted: fraction)
-
-                if fraction >= 0.8 { break }
-                nextFraction += 0.05
-            }
-        }
-        defer { heartbeatTask?.cancel() }
-        #endif
-
-        let startTime = Date()
-        let fetchTask = Task<(Data, URLResponse), Error> {
-            try await responsiveSession.data(for: request)
-        }
-
-        #if os(iOS)
-        handle?.registerCancellationHandler {
-            fetchTask.cancel()
-        }
-        #endif
-
-        do {
-            let (data, response) = try await fetchTask.value
-
-            #if os(iOS)
-            handle?.reportProgress(fractionCompleted: 0.65)
-            #endif
-
-            let responseTime = Date().timeIntervalSince(startTime)
-            print("🧠 SummaryService: Gemini response time: \(String(format: "%.2f", responseTime)) seconds for \(promptCharacterCount) characters")
-
-            if let httpResponse = response as? HTTPURLResponse {
-                print("🧠 SummaryService: Received HTTP status code: \(httpResponse.statusCode)")
-            }
-
-            if let jsonString = String(data: data, encoding: .utf8) {
-                print("🧠 SummaryService: Raw Gemini API Response:\n---\n\(jsonString)\n---")
-            } else {
-                print("🧠 SummaryService: Could not convert response data to UTF-8 string.")
-            }
-
-            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-
-            #if os(iOS)
-            handle?.reportProgress(fractionCompleted: 0.9)
-            #endif
-
-            if let text = decoded.candidates?.first?.content.parts.first?.text {
-                print("✅ SummaryService: Successfully decoded Gemini response.")
-                return text
-            } else if let errorMessage = decoded.error?.message {
-                return "Error: \(errorMessage)"
-            } else {
-                return "No summary available"
-            }
-        } catch is CancellationError {
-            print("🧠 SummaryService: Gemini request cancelled while fetching data.")
-            throw CancellationError()
-        } catch let error as URLError where error.code == .cancelled {
-            print("🧠 SummaryService: Gemini request cancelled at transport layer.")
-            throw CancellationError()
-        } catch {
-            throw error
-        }
-    }
-    
     // MARK: - Text-to-Speech
     
     func synthesizeSpeech(text: String) async throws -> Data {
@@ -1794,172 +1512,73 @@ class SummaryService {
             onError(error)
         }
     }
-}
 
-// MARK: - Shared Audio Utilities and Delegate (Fallback definitions if Utilities not in target)
+    // MARK: - Kokoro TTS Integration
 
-import Foundation
-#if os(iOS)
-import AVFoundation
-#elseif os(macOS)
-import AppKit
-#endif
-
-// Provide the SoundDelegate definition here to ensure availability in all compilation units.
-#if os(iOS)
-public class SoundDelegate: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
-    public var onPlaybackFinished: (() -> Void)?
-    public var onSpeechFinished: (() -> Void)?
-    public override init() { super.init() }
-    public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        if flag { onPlaybackFinished?() }
-    }
-    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        onSpeechFinished?()
-    }
-}
-#elseif os(macOS)
-public class SoundDelegate: NSObject, ObservableObject, NSSoundDelegate, NSSpeechSynthesizerDelegate {
-    public var onPlaybackFinished: (() -> Void)?
-    public var onSpeechFinished: (() -> Void)?
-    public override init() { super.init() }
-    public func sound(_ sound: NSSound, didFinishPlaying flag: Bool) {
-        if flag { onPlaybackFinished?() }
-    }
-    public func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
-        if finishedSpeaking { onSpeechFinished?() }
-    }
-}
-#endif
-
-// Utility to convert raw PCM to WAV data.
-public func createWavData(from pcmData: Data, sampleRate: UInt32, channels: UInt16, bitsPerSample: UInt16) -> Data {
-    var header = Data()
-    let pcmDataSize = UInt32(pcmData.count)
-    var chunkSize: UInt32 = 36 + pcmDataSize
-    var subChunk1Size: UInt32 = 16
-    var audioFormat: UInt16 = 1
-
-    // RIFF header
-    header.append("RIFF".data(using: .ascii)!)
-    header.append(Data(bytes: &chunkSize, count: 4))
-    header.append("WAVE".data(using: .ascii)!)
-
-    // fmt sub-chunk
-    header.append("fmt ".data(using: .ascii)!)
-    header.append(Data(bytes: &subChunk1Size, count: 4))
-    header.append(Data(bytes: &audioFormat, count: 2))
-    var mutableChannels = channels
-    header.append(Data(bytes: &mutableChannels, count: 2))
-    var mutableSampleRate = sampleRate
-    header.append(Data(bytes: &mutableSampleRate, count: 4))
-    let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample) / 8
-    var mutableByteRate = byteRate
-    header.append(Data(bytes: &mutableByteRate, count: 4))
-    let blockAlign = channels * bitsPerSample / 8
-    var mutableBlockAlign = blockAlign
-    header.append(Data(bytes: &mutableBlockAlign, count: 2))
-    var mutableBits = bitsPerSample
-    header.append(Data(bytes: &mutableBits, count: 2))
-
-    // data sub-chunk
-    header.append("data".data(using: .ascii)!)
-    var mutablePcmSize = pcmDataSize
-    header.append(Data(bytes: &mutablePcmSize, count: 4))
-
-    var out = header
-    out.append(pcmData)
-    return out
-}
-
-// Detect MP3 format via header bytes.
-public func isMP3Data(_ data: Data) -> Bool {
-    guard data.count >= 3 else { return false }
-    let bytes = [UInt8](data.prefix(3))
-    if bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33 { return true } // ID3 tag
-    let sync = (UInt16(bytes[0]) << 8) | UInt16(bytes[1])
-    return (sync & 0xFFE0) == 0xFFE0 // Frame sync pattern
-}
-
-// Detect AAC format via header bytes.
-public func isAACData(_ data: Data) -> Bool {
-    guard data.count >= 2 else { return false }
-    let bytes = [UInt8](data.prefix(2))
-    // AAC ADTS header starts with 12 bits of 1s (0xFFF)
-    return (bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0)
-}
-
-#if os(macOS)
-@discardableResult
-public func setMacSpeechVoice(_ synthesizer: NSSpeechSynthesizer, identifier: String) -> Bool {
-    synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: identifier))
-}
-
-public func availableMacVoices() -> [(id: String, name: String)] {
-    NSSpeechSynthesizer.availableVoices.map { voiceName in
-        let attrs = NSSpeechSynthesizer.attributes(forVoice: voiceName)
-        let displayName = (attrs[.name] as? String) ?? voiceName.rawValue
-        return (id: voiceName.rawValue, name: displayName)
-    }
-}
-
-public func preferredMacVoiceIdentifier() -> String? {
-    let available = NSSpeechSynthesizer.availableVoices
-
-    struct VoiceInfo {
-        let id: String
-        let name: String
-        let locale: String
-    }
-
-    let voiceInfos = available.map { voiceName in
-        let id = voiceName.rawValue
-        let attrs = NSSpeechSynthesizer.attributes(forVoice: voiceName)
-        return VoiceInfo(
-            id: id,
-            name: (attrs[.name] as? String) ?? "",
-            locale: (attrs[.localeIdentifier] as? String) ?? ""
-        )
-    }
-
-    func scoreVoice(_ voice: VoiceInfo) -> Int {
-        let name = voice.name.lowercased()
-        var score = 0
-        if name == "ava (premium)" || name.contains("(premium)") { score += 2000 }
-        if name == "ava" && !name.contains("(") { score += 1800 }
-        if name == "alex" { score += 1500 }
-        if name == "samantha (enhanced)" || (name.contains("samantha") && name.contains("enhanced")) { score += 1400 }
-        if name == "samantha" && !name.contains("(") { score += 1300 }
-        if name == "tom (enhanced)" || (name.contains("tom") && name.contains("enhanced")) { score += 1200 }
-        if name == "allison" { score += 1100 }
-        if name == "susan" { score += 1050 }
-        if name == "victoria" { score += 1000 }
-        if name == "karen" { score += 950 }
-        if name == "daniel" { score += 900 }
-        if name == "moira" { score += 850 }
-        if name == "fiona" { score += 800 }
-        if name == "tessa" { score += 750 }
-        if voice.locale.lowercased().hasPrefix("en-us") { score += 100 }
-        else if voice.locale.lowercased().hasPrefix("en") { score += 50 }
-
-        let noveltyVoices = [
-            "zarvox", "trinoids", "bad news", "good news", "pipe organ",
-            "bells", "boing", "whisper", "cellos", "princess", "fred",
-            "albert", "bubbles", "deranged", "hysterical", "junior", "ralph"
-        ]
-        if noveltyVoices.contains(where: { name.contains($0) }) {
-            score -= 1000
+    func warmUpKokoroIfNeeded() {
+        guard KokoroTTSService.shared.isAvailable else { return }
+        let settings = PersistenceManager.shared.loadSettings()
+        guard settings.kokoroPrecacheEnabled else { return }
+        let voice = settings.kokoroVoice
+        Task.detached(priority: .utility) {
+            do {
+                try await KokoroTTSService.shared.warmUp(preloadVoices: [voice])
+                print("Kokoro warm-up complete")
+            } catch {
+                print("Kokoro warm-up failed: \(error.localizedDescription)")
+            }
         }
-        return score
     }
 
-    return voiceInfos.sorted { scoreVoice($0) > scoreVoice($1) }.first?.id ?? available.first?.rawValue
+    func setKokoroVoice(_ voice: String) {
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroVoice = voice
+        persistenceManager.saveSettings(settings)
+        KokoroTTSService.shared.recordVoiceForWarmup(voice)
+        if settings.kokoroPrecacheEnabled {
+            warmUpKokoroIfNeeded()
+        }
+    }
+
+    func setKokoroSpeed(_ speed: Double) {
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroSpeed = min(max(speed, 0.5), 2.0)
+        persistenceManager.saveSettings(settings)
+    }
+
+    func setKokoroPrecacheEnabled(_ enabled: Bool) {
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroPrecacheEnabled = enabled
+        persistenceManager.saveSettings(settings)
+    }
+
+    func setLocalTTSEngine(_ engine: LocalTTSEngine) {
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.localTTSEngine = engine
+        persistenceManager.saveSettings(settings)
+    }
+
+    @MainActor
+    func precacheKokoroNow() async throws {
+        guard KokoroTTSService.shared.isAvailable else { return }
+        let persistenceManager = PersistenceManager.shared
+        var settings = persistenceManager.loadSettings()
+        settings.kokoroPrecacheEnabled = true
+        persistenceManager.saveSettings(settings)
+        let voice = settings.kokoroVoice
+        KokoroTTSService.shared.recordVoiceForWarmup(voice)
+        try await KokoroTTSService.shared.warmUp(preloadVoices: [voice])
+    }
 }
 
-public func ensureIOSOnMacPinnedVoice() -> String? {
-    nil
-}
-#endif
+// MARK: - Shared Audio Utilities and Delegate
+// Note: SoundDelegate, createWavData, isMP3Data, and isAACData are defined in:
+// - Utilities/SoundDelegate.swift
+// - Utilities/AudioUtils.swift
 
 // MARK: - Shortcuts TTS Helper for iOS on Mac
 // This helper provides TTS functionality via macOS Shortcuts when running as an iPad app on Mac
@@ -1967,6 +1586,14 @@ public func ensureIOSOnMacPinnedVoice() -> String? {
 public class ShortcutsTTS {
     public static let shared = ShortcutsTTS()
     private let shortcutName = "Speak Text"
+    #if os(macOS)
+    private struct CLIJob {
+        let process: Process
+        let completion: (() -> Void)?
+    }
+    private let cliQueue = DispatchQueue(label: "ShortcutsTTS.CLIQueue")
+    private var activeJobs: [CLIJob] = []
+    #endif
     
     private init() {}
     
@@ -1981,27 +1608,159 @@ public class ShortcutsTTS {
             completion?()
             return false
         }
-
-#if os(macOS)
-        return speakUsingShortcutsCLI(text, completion: completion)
-#elseif os(iOS)
-    #if targetEnvironment(macCatalyst)
-        return speakUsingShortcutsCLI(text, completion: completion)
-    #else
-        return speakUsingXCallbackOniOS(text, completion: completion)
-    #endif
-#else
-        print("🔊 [ShortcutsTTS] Platform not supported")
+        
+        #if os(iOS)
+        // Check if we're running on Mac
+        guard ProcessInfo.processInfo.isiOSAppOnMac else {
+            print("🔊 [ShortcutsTTS] Not running on Mac, skipping")
+            completion?()
+            return false
+        }
+        
+        // Use URL scheme for both Mac and iOS
+        // The shortcut name has been corrected to "Speak Text"
+        return speakViaURLScheme(text: text, completion: completion)
+        #elseif os(macOS)
+        // Invoke the same shortcut via the Shortcuts CLI on macOS
+        return speakViaCLI(text: text, completion: completion)
+        #else
         completion?()
         return false
-#endif
+        #endif
     }
+    
+    /// Helper method to speak via URL scheme (used on iPad/iPhone and as fallback on Mac)
+    private func speakViaURLScheme(text: String, completion: (() -> Void)?) -> Bool {
+        // Encode the shortcut name and text properly
+        guard let encodedName = shortcutName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let encodedText = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            print("🔊 [ShortcutsTTS] Failed to encode text or name")
+            completion?()
+            return false
+        }
+        
+        // Try x-callback-url format which is more reliable
+        let urlString = "shortcuts://x-callback-url/run-shortcut?name=\(encodedName)&input=\(encodedText)"
+        
+        print("🔊 [ShortcutsTTS] Shortcut name: '\(shortcutName)'")
+        print("🔊 [ShortcutsTTS] Full URL: \(urlString)")
+        
+        guard let url = URL(string: urlString) else {
+            print("🔊 [ShortcutsTTS] Failed to create shortcuts URL")
+            completion?()
+            return false
+        }
+        
+        #if os(iOS)
+        // Open the URL to run the shortcut
+        UIApplication.shared.open(url, options: [:]) { success in
+            if success {
+                print("🔊 [ShortcutsTTS] Launched shortcut successfully")
+                // Call completion after a delay (we can't track when speech finishes)
+                // Estimate based on text length
+                let words = text.split(separator: " ").count
+                let estimatedDuration = Double(words) / 150.0 * 60.0 // ~150 words per minute
+                let delay = min(max(estimatedDuration, 2.0), 30.0) // Between 2-30 seconds
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    completion?()
+                }
+            } else {
+                print("🔊 [ShortcutsTTS] Failed to launch shortcut")
+                completion?()
+            }
+        }
+
+        return true
+        #else
+        completion?()
+        return false
+        #endif
+    }
+
+    #if os(macOS)
+    /// Runs the configured shortcut via the macOS Shortcuts CLI so we avoid
+    /// bringing the Shortcuts app to the foreground.
+    private func speakViaCLI(text: String, completion: (() -> Void)?) -> Bool {
+        let shortcutPath = "/usr/bin/shortcuts"
+        guard FileManager.default.isExecutableFile(atPath: shortcutPath) else {
+            print("🔊 [ShortcutsTTS] CLI not found at \(shortcutPath)")
+            completion?()
+            return false
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shortcutPath)
+        process.arguments = ["run", shortcutName, "--input-path", "-"]
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        let stdinPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        process.standardInput = stdinPipe
+
+        // Capture completion so we can call it after the process terminates.
+        process.terminationHandler = { [weak self] proc in
+            guard let self = self else { return }
+            self.cliQueue.async {
+                guard let index = self.activeJobs.firstIndex(where: { $0.process === proc }) else { return }
+                let job = self.activeJobs.remove(at: index)
+                let status = proc.terminationStatus
+                if status == 0 {
+                    print("🔊 [ShortcutsTTS] CLI shortcut finished successfully")
+                } else {
+                    let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                    if let errorOutput = String(data: errorData, encoding: .utf8), !errorOutput.isEmpty {
+                        print("🔊 [ShortcutsTTS] CLI stderr: \(errorOutput)")
+                    }
+                    print("🔊 [ShortcutsTTS] CLI shortcut exited with status \(status)")
+                }
+                DispatchQueue.main.async {
+                    job.completion?()
+                }
+            }
+        }
+
+        do {
+            try process.run()
+            if let data = text.data(using: .utf8) {
+                stdinPipe.fileHandleForWriting.write(data)
+            }
+            stdinPipe.fileHandleForWriting.closeFile()
+
+            cliQueue.async {
+                self.activeJobs.append(CLIJob(process: process, completion: completion))
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
+                    print("🔊 [ShortcutsTTS] CLI stdout: \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
+                }
+            }
+            return true
+        } catch {
+            print("🔊 [ShortcutsTTS] Failed to run shortcut via CLI: \(error)")
+            completion?()
+            return false
+        }
+    }
+    #endif
     
     /// Stops any current speech
     /// Note: We can't actually stop shortcuts once launched via URL scheme
     public func stopSpeaking() {
+        #if os(macOS)
+        cliQueue.async {
+            let jobs = self.activeJobs
+            for job in jobs {
+                job.process.terminate()
+            }
+        }
+        #else
         // Could potentially open a "stop" shortcut if you create one
         print("🔊 [ShortcutsTTS] Stop not available with URL scheme")
+        #endif
     }
     
     /// Checks if currently speaking
@@ -2010,208 +1769,3 @@ public class ShortcutsTTS {
         return false
     }
 }
-
-#if os(iOS) && !targetEnvironment(macCatalyst)
-extension ShortcutsTTS {
-    @discardableResult
-    fileprivate func speakUsingXCallbackOniOS(_ text: String, completion: (() -> Void)?) -> Bool {
-        // Check if we're running on Mac
-        guard ProcessInfo.processInfo.isiOSAppOnMac else {
-            print("🔊 [ShortcutsTTS] Not running on Mac, skipping")
-            completion?()
-            return false
-        }
-
-        var originalClipboard: String?
-        let pasteboard = UIPasteboard.general
-        originalClipboard = pasteboard.string
-        pasteboard.string = text
-
-        guard let encodedName = shortcutName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let encodedText = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-            print("🔊 [ShortcutsTTS] Failed to encode text or name")
-            if pasteboard.string == text {
-                pasteboard.string = originalClipboard
-            }
-            completion?()
-            return false
-        }
-
-        let urlString = "shortcuts://x-callback-url/run-shortcut?name=\(encodedName)&input=\(encodedText)"
-
-        print("🔊 [ShortcutsTTS] Shortcut name: '\(shortcutName)'")
-        print("🔊 [ShortcutsTTS] Encoded name: '\(encodedName)'")
-        print("🔊 [ShortcutsTTS] Text preview: '\(String(text.prefix(50)))...'")
-        print("🔊 [ShortcutsTTS] Full URL: \(urlString)")
-
-        guard let url = URL(string: urlString) else {
-            print("🔊 [ShortcutsTTS] Failed to create shortcuts URL")
-            if pasteboard.string == text {
-                pasteboard.string = originalClipboard
-            }
-            completion?()
-            return false
-        }
-
-        UIApplication.shared.open(url, options: [:]) { success in
-            if success {
-                print("🔊 [ShortcutsTTS] Launched shortcut successfully")
-                let words = text.split(separator: " ").count
-                let estimatedDuration = Double(words) / 150.0 * 60.0
-                let delay = min(max(estimatedDuration, 2.0), 30.0)
-
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    if pasteboard.string == text {
-                        pasteboard.string = originalClipboard
-                    }
-                    completion?()
-                }
-            } else {
-                print("🔊 [ShortcutsTTS] Failed to launch shortcut")
-                if pasteboard.string == text {
-                    pasteboard.string = originalClipboard
-                }
-                completion?()
-            }
-        }
-
-        return true
-    }
-}
-#endif
-
-#if os(macOS) || targetEnvironment(macCatalyst)
-extension ShortcutsTTS {
-    @discardableResult
-    fileprivate func speakUsingShortcutsCLI(_ text: String, completion: (() -> Void)?) -> Bool {
-        let tempDir = FileManager.default.temporaryDirectory
-        let inputFile = tempDir.appendingPathComponent("shortcut_tts_input_\(UUID().uuidString).txt")
-        let outputFile = tempDir.appendingPathComponent("shortcut_tts_output_\(UUID().uuidString).txt")
-
-        do {
-            try text.write(to: inputFile, atomically: true, encoding: .utf8)
-        } catch {
-            print("⚠️ [ShortcutsTTS] Failed to write CLI input file: \(error.localizedDescription)")
-            return launchShortcutViaURLSchemeForMac(text: text, completion: completion)
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
-        process.arguments = [
-            "run",
-            shortcutName,
-            "--input-path", inputFile.path,
-            "--output-path", outputFile.path,
-            "--output-type", "public.plain-text"
-        ]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            defer {
-                try? FileManager.default.removeItem(at: inputFile)
-                try? FileManager.default.removeItem(at: outputFile)
-            }
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let status = process.terminationStatus
-                let stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                let stdoutData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                DispatchQueue.main.async {
-                    if status == 0 {
-                        print("🔊 [ShortcutsTTS] CLI invocation succeeded for '\(self.shortcutName)'")
-                        completion?()
-                    } else {
-                        let combined = [stderr, stdout].filter { !$0.isEmpty }.joined(separator: " | ")
-                        print("⚠️ [ShortcutsTTS] CLI exited with status \(status): \(combined)")
-                        _ = self.launchShortcutViaURLSchemeForMac(text: text, completion: completion)
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    print("⚠️ [ShortcutsTTS] Failed to run Shortcuts CLI: \(error.localizedDescription)")
-                    _ = self.launchShortcutViaURLSchemeForMac(text: text, completion: completion)
-                }
-            }
-        }
-
-        return true
-    }
-
-    @discardableResult
-    fileprivate func launchShortcutViaURLSchemeForMac(text: String, completion: (() -> Void)?) -> Bool {
-        guard let encodedName = shortcutName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let encodedText = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-            print("⚠️ [ShortcutsTTS] Failed to encode shortcut parameters for fallback")
-            completion?()
-            return false
-        }
-
-        let urlString = "shortcuts://x-callback-url/run-shortcut?name=\(encodedName)&input=\(encodedText)"
-        guard let url = URL(string: urlString) else {
-            print("⚠️ [ShortcutsTTS] Failed to create fallback shortcuts URL")
-            completion?()
-            return false
-        }
-
-        print("🔊 [ShortcutsTTS] Falling back to Shortcuts URL scheme for '\(shortcutName)' (text length: \(text.count))")
-
-        var originalClipboard: String?
-
-        #if os(macOS)
-        let pasteboard = NSPasteboard.general
-        originalClipboard = pasteboard.string(forType: .string)
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-
-        NSWorkspace.shared.open(url)
-        print("🔊 [ShortcutsTTS] Launched fallback shortcut via NSWorkspace")
-        #else
-        let pasteboard = UIPasteboard.general
-        originalClipboard = pasteboard.string
-        pasteboard.string = text
-
-        UIApplication.shared.open(url, options: [:]) { success in
-            if success {
-                print("🔊 [ShortcutsTTS] Launched fallback shortcut via UIApplication")
-            } else {
-                print("⚠️ [ShortcutsTTS] Failed to launch fallback shortcut via UIApplication")
-            }
-        }
-        #endif
-
-        let words = text.split(separator: " ").count
-        let estimatedDuration = Double(words) / 150.0 * 60.0
-        let delay = min(max(estimatedDuration, 2.0), 30.0)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            #if os(macOS)
-            let pasteboard = NSPasteboard.general
-            if pasteboard.string(forType: .string) == text {
-                pasteboard.clearContents()
-                if let original = originalClipboard {
-                    pasteboard.setString(original, forType: .string)
-                }
-            }
-            #else
-            let pasteboard = UIPasteboard.general
-            if pasteboard.string == text {
-                pasteboard.string = originalClipboard
-            }
-            #endif
-            completion?()
-        }
-
-        return true
-    }
-}
-#endif

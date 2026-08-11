@@ -21,21 +21,7 @@ struct GlassNavigationBar: View {
     
     var body: some View {
         HStack {
-            if showBackButton {
-                Button(action: backAction) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .medium))
-                        Text("Back")
-                            .font(.system(size: 17, weight: .medium))
-                    }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-                .glassEffectCompat(in: Capsule())
-                .shadow(radius: 2)
-            } else {
+            if !showBackButton {
                 Button(action: {
                     // Toggle sidebar action will be passed in
                 }) {
@@ -46,6 +32,9 @@ struct GlassNavigationBar: View {
                 }
                 .background(.ultraThinMaterial, in: Circle())
                 .shadow(radius: 2)
+            } else {
+                Color.clear
+                    .frame(width: 40, height: 40)
             }
             
             Spacer()
@@ -66,55 +55,44 @@ struct GlassNavigationBar: View {
         .overlay(
             Rectangle()
                 .frame(height: 0.5)
-                                 .foregroundColor(separatorColor.opacity(0.3)),
+                .foregroundColor(separatorColor().opacity(0.3)),
             alignment: .bottom
         )
     }
 }
 
 // MARK: - Glass Effect View Modifier (Fallback for older iOS)
-struct GlassEffectModifier: ViewModifier {
+struct GlassEffectModifier<S: InsettableShape>: ViewModifier {
     let isInteractive: Bool
-    let shape: any Shape
-    
+    let shape: S
+
     func body(content: Content) -> some View {
+        let borderColors: [Color]
         if #available(iOS 26.0, *) {
-            // This would use the new .glassEffect modifier
-            // For now, we'll use a fallback
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(
-                    shape
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.3),
-                                    Color.white.opacity(0.1)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.5
-                        )
-                )
+            borderColors = [
+                Color.white.opacity(0.3),
+                Color.white.opacity(0.1)
+            ]
         } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(
-                    shape
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.25),
-                                    Color.white.opacity(0.05)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 0.5
-                        )
-                )
+            borderColors = [
+                Color.white.opacity(0.25),
+                Color.white.opacity(0.05)
+            ]
         }
+
+        return content
+            .background(.ultraThinMaterial, in: shape)
+            .overlay(
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: borderColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+            )
+            .allowsHitTesting(isInteractive)
     }
 }
 

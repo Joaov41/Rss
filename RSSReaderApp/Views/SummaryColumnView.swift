@@ -2,28 +2,17 @@ import SwiftUI
 #if os(iOS)
 import AVFoundation
 import UIKit
-
-private func ensureBackgroundTTSReady() {
-    let audioSession = AVAudioSession.sharedInstance()
-    do {
-        try audioSession.setCategory(
-            .playback,
-            mode: .spokenAudio,
-            options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP]
-        )
-        try audioSession.setActive(true)
-    } catch {
-        print("🔊 [SummaryColumnView] Failed to configure audio session: \(error)")
-    }
-}
 #elseif os(macOS)
 import AppKit
 import Cocoa
-private func ensureBackgroundTTSReady() {}
-#else
-private func ensureBackgroundTTSReady() {}
 #endif
 import Foundation
+
+#if os(iOS)
+private typealias KokoroAudioPlayer = AVAudioPlayer
+#elseif os(macOS)
+private typealias KokoroAudioPlayer = NSSound
+#endif
 
 // Import createWavData from SummaryService
 
@@ -34,10 +23,6 @@ struct SummaryColumnView: View {
     @State private var isSynthesizingSpeech: Bool = false
     @State private var isSpeakingLocally: Bool = false
     @State private var speechSynthesisError: String? = nil
-    @State private var isAskingSelectionAI = false
-    @State private var selectionAskAIPrompt = ""
-    @State private var selectionAskAIResponse = ""
-    @State private var showSelectionAskAISheet = false
 #if os(iOS)
     @State private var audioPlayer: AVAudioPlayer?
     @State private var localSpeechSynth: AVSpeechSynthesizer?
@@ -53,7 +38,14 @@ struct SummaryColumnView: View {
     // Holds the next chunk for fast-start playback sequencing
     @State private var nextAudioChunk: Data? = nil
     @State private var ttsCanceled: Bool = false
+    @State private var localTTSTask: Task<Void, Never>? = nil
 #endif
+
+    @State private var showSelectionAskAIResponse = false
+    @State private var isSelectionAskAIInFlight = false
+    @State private var selectionAskAIResponse: String?
+    @State private var selectionAskAIError: String?
+    @State private var selectionAskAITask: Task<Void, Never>?
 
     private var shouldShowExplicitWebAIControls: Bool {
         appState.settings.selectedSummaryProvider != .webAI
@@ -83,19 +75,15 @@ struct SummaryColumnView: View {
                                 .padding()
                         }
                     } else {
-                        VStack(spacing: 8) {
-                            ProgressView()
-                            Text(
-                                appState.isWaitingForAppleIntelligence
-                                    ? appState.appleIntelligenceWaitProgress
-                                    : "Generating summary..."
-                            )
-                            .foregroundColor(.secondary)
-                            .font(.caption)
-                        }
-                        .padding()
+                        ProgressView(
+                            appState.isWaitingForAppleIntelligence
+                                ? appState.appleIntelligenceWaitProgress
+                                : "Generating summary..."
+                        )
+                            .padding()
                     }
-                } else if let summary = article.summary, !summary.isEmpty {
+                } else if let summary = article.summary,
+                          !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     VStack(alignment: .leading) {
                         // Show if summary came from cloud
                         if appState.isSummaryFromCloud {
@@ -179,34 +167,17 @@ struct SummaryColumnView: View {
                         }
                         
                         ScrollView {
-                            SelectableText(
-                                text: summary,
-                                onAskAI: handleAskAISelection(selectedText:context:),
-                                onAskAIWeb: handleAskAIWebSelection(selectedText:context:),
-                                textIsPrecleaned: true
-                            )
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            SelectableText(.init(summary))
+                                .padding()
+                                .onAskAI { selection in
+                                    askAIFromSummaryColumnSelection(selection, article: article, action: .standard)
+                                }
+                                .onAskAIWeb { selection in
+                                    askAIFromSummaryColumnSelection(selection, article: article, action: .web)
+                                }
                         }
                         .frame(maxHeight: .infinity)
-
-                        // On-device throughput badge (MLX + Apple Local)
-                        let _provider = appState.settings.selectedSummaryProvider
-                        if (_provider == .mlxLocal || _provider == .coreAIMLXLocal || _provider == .appleLocal || _provider == .applePCCGateway),
-                           !appState.mlxLastThroughput.isEmpty {
-                            HStack(spacing: 4) {
-                                Image(systemName: "cpu")
-                                    .font(.caption2)
-                                Text(appState.mlxLastThroughput)
-                                    .font(.caption2)
-                                    .monospacedDigit()
-                            }
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal)
-                            .padding(.bottom, 2)
-                        }
-
+                        
                         // TTS status indicators
                         if isSynthesizingSpeech {
                             HStack {
@@ -239,59 +210,30 @@ struct SummaryColumnView: View {
                                 .padding(.horizontal)
                                 .padding(.bottom, 4)
                         }
-                    }
-                } else {
-                    VStack(spacing: 12) {
-                        HStack(spacing: 10) {
-                            Button(action: {
-                                summarizeWithSelectedProvider(article)
-                            }) {
-                                HStack {
-                                    Image(systemName: summaryProviderIcon)
-                                    Text("Summarize Article")
-                                }
-                                .padding()
-                                .frame(maxWidth: .infinity)
-                                .applyGlassStyle(cornerRadius: 8, tintColor: summaryProviderTintColor)
-                            }
 
-                            if shouldShowExplicitWebAIControls {
-                                Button {
-                                    appState.requestWebSummary(for: article)
-                                } label: {
-                                    Image(systemName: "globe")
-                                        .font(.subheadline)
-                                        .frame(width: 44, height: 44)
-                                }
-                                .buttonStyle(LiquidGlassButtonStyle())
-                                .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
+                        // Throughput badge for on-device providers
+                        let _colProvider = appState.settings.selectedSummaryProvider
+                        if (_colProvider == .mlxLocal || _colProvider == .coreAIMLXLocal || _colProvider == .appleLocal || _colProvider == .applePCCGateway || _colProvider == .summarizeDaemon),
+                           !appState.mlxLastThroughput.isEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "cpu").font(.caption2)
+                                Text(appState.mlxLastThroughput).font(.caption2).monospacedDigit()
                             }
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                            .padding(.bottom, 6)
                         }
-
                     }
-                    .padding(.top, 16)
                 }
             } else {
                 Text("Select an article to see its summary.")
                     .foregroundColor(.secondary)
-        .padding()
-        .sheet(isPresented: $showSelectionAskAISheet) {
-            AskAIResponseSheet(
-                question: selectionAskAIPrompt,
-                answer: selectionAskAIResponse,
-                onCopy: { copyToClipboard(selectionAskAIResponse) }
-            )
-            #if os(iOS)
-            .presentationDetents([.medium, .large])
-            .presentationCornerRadius(32)
-            #endif
-        }
-    }
+                    .padding()
+            }
             Spacer()
         }
         .frame(minWidth: 300)
         .padding()
-        .askAILoadingOverlay(isAskingSelectionAI)
         .overlay(
             VStack {
                 if appState.showFallbackNotification {
@@ -353,6 +295,16 @@ struct SummaryColumnView: View {
             }
             #endif
         }
+        .askAILoadingOverlay(isSelectionAskAIInFlight)
+        .sheet(isPresented: $showSelectionAskAIResponse) {
+            AskAIResponseSheet(
+                isLoading: isSelectionAskAIInFlight,
+                response: selectionAskAIResponse,
+                errorMessage: selectionAskAIError,
+                onClose: { showSelectionAskAIResponse = false },
+                onCopy: copySelectionAskAIResponse
+            )
+        }
     }
     
     // MARK: - TTS Methods
@@ -374,6 +326,7 @@ struct SummaryColumnView: View {
         #elseif os(macOS)
         audioPlayer?.stop()
         audioPlayer = nil
+        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynth?.stopSpeaking()
         #endif
         
@@ -416,15 +369,13 @@ struct SummaryColumnView: View {
     private func stopSummarySpeech() {
         ttsCanceled = true
         #if os(iOS)
-        localTTSTask?.cancel()
-        localTTSTask = nil
-        KokoroTTSService.shared.cancelPlayback()
         audioPlayer?.stop()
         audioPlayer = nil
         localSpeechSynth?.stopSpeaking(at: .immediate)
         #elseif os(macOS)
         audioPlayer?.stop()
         audioPlayer = nil
+        ShortcutsTTS.shared.stopSpeaking()
         localSpeechSynth?.stopSpeaking()
         #endif
         nextAudioChunk = nil
@@ -434,7 +385,6 @@ struct SummaryColumnView: View {
     
     private func playAudio(data: Data) {
         #if os(iOS)
-        ensureBackgroundTTSReady()
         // Stop any existing playback
         audioPlayer?.stop()
         
@@ -496,11 +446,92 @@ struct SummaryColumnView: View {
     
     private func speakSummaryLocally(_ text: String) {
         #if os(iOS)
+        // Check if Kokoro engine is selected
+        let settings = PersistenceManager.shared.loadSettings()
+        if settings.localTTSEngine == .kokoro {
+            guard KokoroTTSService.shared.isAvailable else {
+                isSpeakingLocally = false
+                speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
+                return
+            }
+            if isSpeakingLocally {
+                localTTSTask?.cancel()
+                localTTSTask = nil
+                audioPlayer?.stop()
+                localSpeechSynth?.stopSpeaking(at: .immediate)
+                isSpeakingLocally = false
+                return
+            }
+            guard !text.isEmpty else {
+                speechSynthesisError = "No summary available to read."
+                return
+            }
+            audioPlayer?.stop()
+            isSpeakingLocally = true
+            isSynthesizingSpeech = false
+            startKokoroPlayback(
+                text: text,
+                voice: settings.kokoroVoice,
+                speed: settings.kokoroSpeed,
+                setAudioPlayer: { player in audioPlayer = player },
+                soundDelegate: soundDelegate,
+                taskStore: &localTTSTask,
+                onCompleted: {
+                    isSpeakingLocally = false
+                    localTTSTask = nil
+                },
+                onError: { message in
+                    speechSynthesisError = message
+                    isSpeakingLocally = false
+                }
+            )
+            return
+        }
+
+        // Check if running on Mac as iPad app - use Shortcuts instead
+        var isRunningOnMac = false
+        if #available(iOS 14.0, *) {
+            isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
+        }
+        
+        if isRunningOnMac {
+            // Toggle off if already speaking (can't really stop shortcuts)
+            if isSpeakingLocally {
+                ShortcutsTTS.shared.stopSpeaking()
+                isSpeakingLocally = false
+                return
+            }
+            
+            guard !text.isEmpty else {
+                speechSynthesisError = "No summary available to read."
+                return
+            }
+            
+            // Stop any other audio playing
+            audioPlayer?.stop()
+            
+            // Start speaking via Shortcuts
+            isSpeakingLocally = true
+            isSynthesizingSpeech = false
+            
+            let success = ShortcutsTTS.shared.speakText(text) {
+                // Completion handler - called when speech ends (estimated)
+                DispatchQueue.main.async {
+                    self.isSpeakingLocally = false
+                }
+            }
+            
+            if !success {
+                isSpeakingLocally = false
+                speechSynthesisError = "Failed to start Shortcuts TTS"
+            }
+            
+            return
+        }
+        
+        // Original iOS code for real devices
         // Toggle off if already speaking
         if isSpeakingLocally {
-            localTTSTask?.cancel()
-            localTTSTask = nil
-            KokoroTTSService.shared.cancelPlayback()
             localSpeechSynth?.stopSpeaking(at: .immediate)
             isSpeakingLocally = false
             return
@@ -513,67 +544,6 @@ struct SummaryColumnView: View {
         
         // Stop any other audio playing
         audioPlayer?.stop()
-        localSpeechSynth?.stopSpeaking(at: .immediate)
-        ensureBackgroundTTSReady()
-
-        let localEngine = appState.summaryService.getLocalTTSEngine()
-        if localEngine == .kokoro {
-            guard KokoroTTSService.shared.isAvailable else {
-                speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
-                return
-            }
-            isSpeakingLocally = true
-            isSynthesizingSpeech = false
-            speechSynthesisError = nil
-            let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
-            startKokoroPlayback(
-                text: text,
-                voice: appState.summaryService.getKokoroVoice(),
-                speed: appState.summaryService.getKokoroSpeed(),
-                allowCaching: allowCaching,
-                precacheEnabled: allowCaching,
-                setAudioPlayer: { [self] player in audioPlayer = player },
-                soundDelegate: soundDelegate,
-                taskStore: &localTTSTask,
-                onCompleted: {
-                    self.isSpeakingLocally = false
-                    self.localTTSTask = nil
-                },
-                onError: { message in
-                    self.speechSynthesisError = message
-                    self.isSpeakingLocally = false
-                }
-            )
-            return
-        }
-
-        // Check if running on Mac as iPad app - use Shortcuts instead
-        if ProcessInfo.processInfo.isiOSAppOnMac {
-            // Toggle off if already speaking (can't really stop shortcuts)
-            if isSpeakingLocally {
-                ShortcutsTTS.shared.stopSpeaking()
-                isSpeakingLocally = false
-                return
-            }
-
-            // Start speaking via Shortcuts
-            isSpeakingLocally = true
-            isSynthesizingSpeech = false
-
-            let success = ShortcutsTTS.shared.speakText(text) {
-                // Completion handler - called when speech ends (estimated)
-                DispatchQueue.main.async {
-                    self.isSpeakingLocally = false
-                }
-            }
-
-            if !success {
-                isSpeakingLocally = false
-                speechSynthesisError = "Failed to start Shortcuts TTS"
-            }
-
-            return
-        }
         
         // Initialize speech synthesizer
         if localSpeechSynth == nil {
@@ -645,51 +615,74 @@ struct SummaryColumnView: View {
             speechSynthesisError = "Failed to initialize speech synthesizer."
         }
         #elseif os(macOS)
-        // Toggle off if already speaking
+        // Check if Kokoro engine is selected
+        let settings = PersistenceManager.shared.loadSettings()
+        if settings.localTTSEngine == .kokoro {
+            guard KokoroTTSService.shared.isAvailable else {
+                isSpeakingLocally = false
+                speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
+                return
+            }
+            if isSpeakingLocally {
+                localTTSTask?.cancel()
+                localTTSTask = nil
+                audioPlayer?.stop()
+                isSpeakingLocally = false
+                return
+            }
+            guard !text.isEmpty else {
+                speechSynthesisError = "No summary available to read."
+                return
+            }
+            audioPlayer?.stop()
+            isSpeakingLocally = true
+            isSynthesizingSpeech = false
+            startKokoroPlayback(
+                text: text,
+                voice: settings.kokoroVoice,
+                speed: settings.kokoroSpeed,
+                setAudioPlayer: { player in audioPlayer = player },
+                soundDelegate: soundDelegate,
+                taskStore: &localTTSTask,
+                onCompleted: {
+                    isSpeakingLocally = false
+                    localTTSTask = nil
+                },
+                onError: { message in
+                    speechSynthesisError = message
+                    isSpeakingLocally = false
+                }
+            )
+            return
+        }
+
+        // Toggle off if already speaking (CLI shortcut cannot truly stop mid-stream)
         if isSpeakingLocally {
-            localSpeechSynth?.stopSpeaking()
+            ShortcutsTTS.shared.stopSpeaking()
             isSpeakingLocally = false
             return
         }
-        
+
         guard !text.isEmpty else {
             speechSynthesisError = "No summary available to read."
             return
         }
-        
+
         // Stop all other audio
         audioPlayer?.stop()
-        
-        let synth = NSSpeechSynthesizer()
-        
-        // Try to use iOS-on-Mac voice first for better quality
-        var voiceSet = false
-        if let iosVoiceID = ensureIOSOnMacPinnedVoice(), !iosVoiceID.isEmpty {
-            if setMacSpeechVoice(synth, identifier: iosVoiceID) {
-                voiceSet = true
-                print("🔊 [LocalTTS] Using iOS-on-Mac voice: \(iosVoiceID)")
-            }
-        }
-        
-        // Fall back to Mac voice selection
-        if !voiceSet {
-            let override = UserDefaults.standard.string(forKey: "LocalTTS.Mac.SelectedVoiceID") ?? ""
-            if !override.isEmpty {
-                _ = setMacSpeechVoice(synth, identifier: override)
-            } else if let voiceID = preferredMacVoiceIdentifier() {
-                _ = setMacSpeechVoice(synth, identifier: voiceID)
-            }
-        }
-        
-        synth.delegate = soundDelegate
-        
+
         isSpeakingLocally = true
         isSynthesizingSpeech = false
-        if !synth.startSpeaking(text) {
+
+        let success = ShortcutsTTS.shared.speakText(text) {
+            DispatchQueue.main.async {
+                self.isSpeakingLocally = false
+            }
+        }
+
+        if !success {
             isSpeakingLocally = false
-            speechSynthesisError = "Failed to start local speech synthesis."
-        } else {
-            localSpeechSynth = synth
+            speechSynthesisError = "Failed to start Shortcuts TTS on macOS."
         }
         #endif
     }
@@ -702,48 +695,208 @@ struct SummaryColumnView: View {
         NSPasteboard.general.setString(text, forType: .string)
         #endif
     }
-    
-    
+
+    private func startKokoroPlayback(
+        text: String,
+        voice: String,
+        speed: Double,
+        setAudioPlayer: @escaping (KokoroAudioPlayer?) -> Void,
+        soundDelegate: SoundDelegate,
+        taskStore: inout Task<Void, Never>?,
+        onCompleted: @escaping () -> Void,
+        onError: @escaping (String) -> Void
+    ) {
+        _ = soundDelegate
+        taskStore?.cancel()
+        taskStore = Task {
+            defer {
+                if !PersistenceManager.shared.loadSettings().kokoroPrecacheEnabled {
+                    KokoroTTSService.shared.unloadIfAllowed()
+                }
+                Task { @MainActor in
+                    onCompleted()
+                }
+            }
+            do {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+
+                func makeKokoroChunks(from input: String) -> [String] {
+                    let firstSize = min(240, input.count)
+                    let firstChunk = String(input.prefix(firstSize))
+                    let remaining = String(input.dropFirst(firstSize)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !remaining.isEmpty else { return [firstChunk] }
+
+                    var chunks: [String] = [firstChunk]
+                    let sentences = remaining.components(separatedBy: CharacterSet(charactersIn: ".!?"))
+                    var current = ""
+                    let maxChunkSize = 420
+                    for sentence in sentences {
+                        let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmedSentence.isEmpty { continue }
+                        let sentenceWithPunctuation = trimmedSentence + "."
+                        if current.count + sentenceWithPunctuation.count <= maxChunkSize {
+                            current += (current.isEmpty ? "" : " ") + sentenceWithPunctuation
+                        } else {
+                            if !current.isEmpty { chunks.append(current) }
+                            current = sentenceWithPunctuation
+                        }
+                    }
+                    if !current.isEmpty { chunks.append(current) }
+                    return chunks
+                }
+
+                let chunks = makeKokoroChunks(from: trimmed)
+                guard let firstChunk = chunks.first else { return }
+
+                func playChunk(_ data: Data) async throws -> TimeInterval {
+                    try await MainActor.run {
+                        #if os(iOS)
+                        do {
+                            let player = try AVAudioPlayer(data: data)
+                            player.delegate = nil
+                            player.prepareToPlay()
+                            setAudioPlayer(player)
+                            if player.play() == false {
+                                onError("Failed to start audio playback.")
+                                throw NSError(domain: "KokoroPlayback", code: -1)
+                            }
+                            return player.duration
+                        } catch {
+                            onError("Failed to initialize audio player: \(error.localizedDescription)")
+                            throw error
+                        }
+                        #elseif os(macOS)
+                        guard let player = NSSound(data: data) else {
+                            onError("Failed to initialize audio player.")
+                            throw NSError(domain: "KokoroPlayback", code: -1)
+                        }
+                        setAudioPlayer(player)
+                        if player.play() == false {
+                            onError("Failed to start audio playback.")
+                            throw NSError(domain: "KokoroPlayback", code: -1)
+                        }
+                        return player.duration
+                        #endif
+                    }
+                }
+
+                enum KokoroPlaybackError: Error { case timeout }
+
+                func synthesizeWithTimeout(_ text: String) async throws -> Data {
+                    try await withThrowingTaskGroup(of: Data.self) { group in
+                        group.addTask {
+                            try await KokoroTTSService.shared.synthesize(
+                                text: text,
+                                voice: voice,
+                                speed: Float(speed)
+                            )
+                        }
+                        group.addTask {
+                            try await Task.sleep(nanoseconds: 20_000_000_000)
+                            throw KokoroPlaybackError.timeout
+                        }
+                        let result = try await group.next()!
+                        group.cancelAll()
+                        return result
+                    }
+                }
+
+                let firstData = try await synthesizeWithTimeout(firstChunk)
+                if Task.isCancelled { return }
+                var currentDuration = try await playChunk(firstData)
+
+                if chunks.count == 1 { return }
+
+                var nextIndex = 1
+                var nextTask: Task<Data, Error>? = Task {
+                    try await synthesizeWithTimeout(chunks[nextIndex])
+                }
+                defer { nextTask?.cancel() }
+
+                while nextIndex < chunks.count {
+                    try await Task.sleep(nanoseconds: UInt64(currentDuration * 1_000_000_000))
+                    if Task.isCancelled { return }
+
+                    guard let task = nextTask else { return }
+                    let data = try await task.value
+                    nextIndex += 1
+
+                    if nextIndex < chunks.count {
+                        nextTask = Task {
+                            try await synthesizeWithTimeout(chunks[nextIndex])
+                        }
+                    } else {
+                        nextTask = nil
+                    }
+
+                    currentDuration = try await playChunk(data)
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    let message: String
+                    if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
+                        message = "MLX TTS is not available. Add the MLXAudio package and model access."
+                    } else if String(describing: error).contains("timeout") {
+                        message = "Kokoro is still loading models. Please wait a moment and try again."
+                    } else {
+                        message = "Kokoro TTS failed: \(error.localizedDescription)"
+                    }
+                    onError(message)
+                }
+            }
+        }
+    }
+
     private func summarizeWithSelectedProvider(_ article: Article) {
         appState.requestSummary(for: article)
     }
 
-    private func handleAskAISelection(selectedText: String, context: String) {
-        runSelectionAskAI(selectedText: selectedText, context: context, useWebPath: false)
-    }
+    private func askAIFromSummaryColumnSelection(_ selection: String, article: Article, action: AskAISelectionAction) {
+        let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
 
-    private func handleAskAIWebSelection(selectedText: String, context: String) {
-        runSelectionAskAI(selectedText: selectedText, context: context, useWebPath: true)
-    }
+        selectionAskAITask?.cancel()
+        isSelectionAskAIInFlight = true
+        selectionAskAIResponse = nil
+        selectionAskAIError = nil
+        showSelectionAskAIResponse = true
 
-    private func runSelectionAskAI(selectedText: String, context: String, useWebPath: Bool) {
-        guard !isAskingSelectionAI else { return }
-        let sourceContext = appState.selectedArticle.map { appState.articleSelectionSourceContext(for: $0) }
-        let prompt = buildAskAISelectionPrompt(
-            selectedText: selectedText,
-            extractedContext: context,
-            sourceContext: sourceContext?.text ?? "",
-            sourceLabel: sourceContext?.label ?? ""
+        let prompt = appState.articleQAPrompt(
+            article: article,
+            question: "What is said about \(trimmed)?"
         )
-        guard !prompt.isEmpty else { return }
 
-        selectionAskAIPrompt = prompt
-        selectionAskAIResponse = ""
-        isAskingSelectionAI = true
+        selectionAskAITask = Task {
+            let answer = await withCheckedContinuation { continuation in
+                switch action {
+                case .standard:
+                    appState.askQuestionAboutSelection(prompt: prompt) { response in
+                        continuation.resume(returning: response)
+                    }
+                case .web:
+                    appState.askWebQuestionAboutSelection(prompt: prompt, title: "Article Ask AI Web") { response in
+                        continuation.resume(returning: response)
+                    }
+                }
+            }
 
-        let finish: (String) -> Void = { answer in
-            DispatchQueue.main.async {
+            await MainActor.run {
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
-                self.isAskingSelectionAI = false
-                self.showSelectionAskAISheet = true
+                self.isSelectionAskAIInFlight = false
             }
         }
+    }
 
-        if useWebPath {
-            appState.askWebQuestionAboutSelection(prompt: prompt, completion: finish)
-        } else {
-            appState.askQuestionAboutSelection(prompt: prompt, completion: finish)
-        }
+    private func copySelectionAskAIResponse() {
+        guard let selectionAskAIResponse, !selectionAskAIResponse.isEmpty else { return }
+        #if os(iOS)
+        UIPasteboard.general.string = selectionAskAIResponse
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(selectionAskAIResponse, forType: .string)
+        #endif
     }
     
     private var summaryProviderIcon: String {
@@ -755,7 +908,7 @@ struct SummaryColumnView: View {
         case .appleCloud:
             return "cloud.fill"
         case .applePCCGateway:
-            return "network"
+            return "bolt.horizontal.cloud.fill"
         case .mlxLocal, .coreAIMLXLocal:
             return "memorychip"
         case .webAI:
@@ -764,7 +917,7 @@ struct SummaryColumnView: View {
             return "terminal"
         }
     }
-
+    
     private var summaryProviderTintColor: Color {
         switch appState.settings.selectedSummaryProvider {
         case .gemini:
@@ -774,7 +927,7 @@ struct SummaryColumnView: View {
         case .appleCloud:
             return .blue.opacity(0.1)
         case .applePCCGateway:
-            return .cyan.opacity(0.12)
+            return .cyan.opacity(0.14)
         case .mlxLocal, .coreAIMLXLocal:
             return .orange.opacity(0.1)
         case .webAI:

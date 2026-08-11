@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import LocalAuthentication
 import Network
 import Security
 
@@ -147,27 +148,30 @@ enum RSSSummarizeProviderError: LocalizedError {
 }
 
 enum FMPCCGatewayError: LocalizedError {
-    case missingHost
-    case missingToken
-    case invalidPort(Int)
+    case fmNotFound
+    case processFailed(Int32, String)
+    case terminalAutomationFailed(String)
     case emptyResponse
-    case badStatus(Int, String)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
-        case .missingHost:
-            return "Apple PCC Gateway host is not configured. Use 127.0.0.1 in Simulator or your Mac LAN IP on iPhone/iPad."
-        case .missingToken:
-            return "Apple PCC Gateway token is not configured."
-        case .invalidPort(let port):
-            return "Apple PCC Gateway port \(port) is invalid."
-        case .emptyResponse:
-            return "Apple PCC Gateway returned an empty response."
-        case .badStatus(let code, let body):
-            if code == 401 || code == 403 {
-                return "Apple PCC Gateway rejected the token."
+        case .fmNotFound:
+            return "Apple PCC is unavailable on this Mac."
+        case .processFailed(_, let output):
+            if FMPCCGatewayClient.isPCCContextUnavailable(output) {
+                return "Apple PCC is unavailable: \(output)"
             }
-            return "Apple PCC Gateway error \(code): \(body)"
+            if output.localizedCaseInsensitiveContains("quota") || output.localizedCaseInsensitiveContains("rate limit") {
+                return "Apple PCC quota is exhausted or rate-limited: \(output)"
+            }
+            return output.isEmpty ? "Apple PCC failed without an error message." : "Apple PCC failed: \(output)"
+        case .terminalAutomationFailed(let output):
+            return "Apple PCC needs to run through Terminal on this beta. Terminal automation failed: \(output)"
+        case .emptyResponse:
+            return "Apple PCC returned an empty response."
+        case .cancelled:
+            return "Apple PCC request was cancelled."
         }
     }
 }
@@ -182,6 +186,12 @@ enum RSSSummarizeKeychain {
     private static var loadedAccounts = Set<String>()
     private static var cachedStrings: [String: String] = [:]
 
+    private static func nonInteractiveAuthenticationContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
+    }
+
     static func string(for account: String) -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -195,7 +205,8 @@ enum RSSSummarizeKeychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: nonInteractiveAuthenticationContext()
         ]
 
         var item: CFTypeRef?
@@ -217,7 +228,8 @@ enum RSSSummarizeKeychain {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
+            kSecUseAuthenticationContext as String: nonInteractiveAuthenticationContext()
         ]
 
         loadedAccounts.insert(account)
@@ -232,6 +244,7 @@ enum RSSSummarizeKeychain {
         let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
             var attributes = query
+            attributes.removeValue(forKey: kSecUseAuthenticationContext as String)
             attributes[kSecValueData as String] = data
             attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
             SecItemAdd(attributes as CFDictionary, nil)
@@ -334,18 +347,14 @@ final class RSSSummarizeDaemonHTTPClient: @unchecked Sendable {
         return body?.isEmpty == false ? body! : "Connected"
     }
 
-    func generate(
-        prompt: String,
-        timeout: TimeInterval = 300,
-        onPartial: ((String) -> Void)? = nil
-    ) async throws -> String {
+    func generate(prompt: String, onPartial: ((String) -> Void)? = nil) async throws -> String {
         let url = configuration.baseURL
             .appendingPathComponent("v1/agent")
             .appending(queryItems: [URLQueryItem(name: "format", value: "json")])
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = timeout
+        request.timeoutInterval = 300
         request.addValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -453,125 +462,420 @@ final class RSSSummarizeDaemonHTTPClient: @unchecked Sendable {
 }
 
 final class FMPCCGatewayClient: @unchecked Sendable {
-    private let configuration: FMPCCGatewayConfiguration
-    private let session: URLSession
+    private static let fmURL = URL(fileURLWithPath: "/usr/bin/fm")
+    private static let ansiPattern = "\u{001B}\\[[0-9;]*m"
+    private static let helperDirectory = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent(".aiassistant-pcc-helper", isDirectory: true)
 
-    init(configuration: FMPCCGatewayConfiguration) {
-        self.configuration = configuration
+    private let processQueue = DispatchQueue(label: "com.joaovalente.RSSReaderApp.FMPCC.process")
+    private var currentProcess: Process?
+    private var currentTerminalShellPID: Int32?
 
-        let sessionConfiguration = URLSessionConfiguration.ephemeral
-        sessionConfiguration.timeoutIntervalForRequest = 120
-        sessionConfiguration.timeoutIntervalForResource = 300
-        sessionConfiguration.waitsForConnectivity = true
-        self.session = URLSession(configuration: sessionConfiguration)
-    }
+    init(configuration: FMPCCGatewayConfiguration? = nil) {}
 
     func health() async throws -> String {
-        var request = URLRequest(url: configuration.baseURL.appendingPathComponent("health"))
-        request.httpMethod = "GET"
-        request.timeoutInterval = 10
-        request.addValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        try await Self.availabilityDescription()
+    }
 
-        let (data, response) = try await session.data(for: request)
-        try validateHTTPResponse(response, data: data)
+    static func availabilityDescription() async throws -> String {
+        guard FileManager.default.isExecutableFile(atPath: fmURL.path) else {
+            throw FMPCCGatewayError.fmNotFound
+        }
 
-        let body = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return body?.isEmpty == false ? body! : "Connected"
+        let result = try await runProcess(executableURL: fmURL, arguments: ["available", "--model", "pcc"])
+        if result.status == 0 {
+            let output = stripANSI(result.output)
+            return output.isEmpty ? "PCC model available." : output
+        }
+
+        let directOutput = stripANSI(result.output)
+        if isPCCContextUnavailable(directOutput) {
+            let terminalResult = try await runOneShotViaTerminal(arguments: ["available", "--model", "pcc"])
+            if terminalResult.status == 0 {
+                let terminalOutput = stripANSI(terminalResult.output)
+                return terminalOutput.isEmpty ? "PCC model available via Terminal." : "\(terminalOutput) (via Terminal)"
+            }
+            let terminalOutput = stripANSI(terminalResult.output)
+            throw FMPCCGatewayError.processFailed(terminalResult.status, terminalOutput.isEmpty ? directOutput : terminalOutput)
+        }
+
+        throw FMPCCGatewayError.processFailed(result.status, directOutput)
     }
 
     func generate(prompt: String) async throws -> String {
-        let url = configuration.baseURL
-            .appendingPathComponent("v1")
-            .appendingPathComponent("chat")
-            .appendingPathComponent("completions")
+        guard FileManager.default.isExecutableFile(atPath: Self.fmURL.path) else {
+            throw FMPCCGatewayError.fmNotFound
+        }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 300
-        request.addValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            ChatCompletionRequest(
-                model: configuration.model,
-                messages: [ChatMessage(role: "user", content: prompt)],
-                stream: false
-            )
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else { throw FMPCCGatewayError.emptyResponse }
+
+        let arguments = ["respond", "--model", "pcc", "--no-stream", "--text", trimmedPrompt]
+        let result = try await withTaskCancellationHandler {
+            let directResult = try await runFM(arguments: arguments)
+            if directResult.status != 0, Self.isPCCContextUnavailable(directResult.output) {
+                return try await runFMViaTerminalHelper(arguments: arguments)
+            }
+            return directResult
+        } onCancel: {
+            self.cancel()
+        }
+
+        if Task.isCancelled {
+            throw FMPCCGatewayError.cancelled
+        }
+        guard result.status == 0 else {
+            throw FMPCCGatewayError.processFailed(result.status, result.output)
+        }
+
+        let output = Self.cleanFMResponse(result.output)
+        guard !output.isEmpty else { throw FMPCCGatewayError.emptyResponse }
+        return output
+    }
+
+    func cancel() {
+        let process = processQueue.sync {
+            let process = currentProcess
+            currentProcess = nil
+            return process
+        }
+        if let process, process.isRunning {
+            process.terminate()
+        }
+
+        let terminalShellPID = processQueue.sync {
+            let pid = currentTerminalShellPID
+            currentTerminalShellPID = nil
+            return pid
+        }
+        if let terminalShellPID {
+            Self.terminateTerminalJob(shellPID: terminalShellPID)
+        }
+    }
+
+    private func runFM(arguments: [String]) async throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = Self.fmURL
+        process.arguments = arguments
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        let outputBuffer = LockedProcessOutput()
+        let fileHandle = pipe.fileHandleForReading
+        fileHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            outputBuffer.append(data)
+        }
+
+        setCurrentProcess(process)
+        do {
+            try process.run()
+        } catch {
+            fileHandle.readabilityHandler = nil
+            clearCurrentProcess(process)
+            throw FMPCCGatewayError.fmNotFound
+        }
+
+        let status = await withCheckedContinuation { continuation in
+            process.terminationHandler = { terminatedProcess in
+                continuation.resume(returning: terminatedProcess.terminationStatus)
+            }
+        }
+
+        fileHandle.readabilityHandler = nil
+        outputBuffer.append(fileHandle.readDataToEndOfFile())
+        let output = outputBuffer.stringValue()
+        clearCurrentProcess(process)
+        return (status, Self.stripANSI(output))
+    }
+
+    private func setCurrentProcess(_ process: Process?) {
+        processQueue.sync {
+            currentProcess = process
+        }
+    }
+
+    private func clearCurrentProcess(_ process: Process) {
+        processQueue.sync {
+            if currentProcess === process {
+                currentProcess = nil
+            }
+        }
+    }
+
+    private func setCurrentTerminalShellPID(_ pid: Int32?) {
+        processQueue.sync {
+            currentTerminalShellPID = pid
+        }
+    }
+
+    private func runFMViaTerminalHelper(arguments: [String]) async throws -> (status: Int32, output: String) {
+        try await Self.ensureTerminalHelperStarted()
+
+        let jobDirectory = Self.helperDirectory
+            .appendingPathComponent("jobs", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: jobDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: jobDirectory) }
+
+        let scriptURL = jobDirectory.appendingPathComponent("run.zsh")
+        let readyURL = jobDirectory.appendingPathComponent("request.ready")
+        let outputURL = jobDirectory.appendingPathComponent("output.txt")
+        let statusURL = jobDirectory.appendingPathComponent("status.txt")
+        let pidURL = jobDirectory.appendingPathComponent("pid.txt")
+        let doneURL = jobDirectory.appendingPathComponent("done")
+
+        let command = ([Self.fmURL.path] + arguments).map(Self.shellDisplayArgument).joined(separator: " ")
+        let script = """
+        #!/bin/zsh
+        echo $$ > \(Self.shellDisplayArgument(pidURL.path))
+        \(command) > \(Self.shellDisplayArgument(outputURL.path)) 2>&1
+        fm_status=$?
+        echo $fm_status > \(Self.shellDisplayArgument(statusURL.path))
+        touch \(Self.shellDisplayArgument(doneURL.path))
+        exit $fm_status
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+        try Data().write(to: readyURL, options: .atomic)
+
+        for _ in 0..<1200 {
+            if FileManager.default.fileExists(atPath: doneURL.path) {
+                break
+            }
+            if let pidText = try? String(contentsOf: pidURL, encoding: .utf8),
+               let pid = Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                setCurrentTerminalShellPID(pid)
+            }
+            if Task.isCancelled {
+                cancel()
+                throw FMPCCGatewayError.cancelled
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        setCurrentTerminalShellPID(nil)
+
+        guard FileManager.default.fileExists(atPath: doneURL.path) else {
+            throw FMPCCGatewayError.processFailed(1, "Timed out waiting for Terminal to finish the Apple PCC request.")
+        }
+
+        let output = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+        let statusText = (try? String(contentsOf: statusURL, encoding: .utf8)) ?? "1"
+        let fmStatus = Int32(statusText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
+        return (fmStatus, Self.stripANSI(output))
+    }
+
+    private static func ensureTerminalHelperStarted() async throws {
+        try FileManager.default.createDirectory(
+            at: helperDirectory.appendingPathComponent("jobs", isDirectory: true),
+            withIntermediateDirectories: true
         )
 
-        let (data, response) = try await session.data(for: request)
-        try validateHTTPResponse(response, data: data)
-
-        if let decoded = try? JSONDecoder().decode(ChatCompletionResponse.self, from: data),
-           let output = decoded.output {
-            return output
+        let pidURL = helperDirectory.appendingPathComponent("helper.pid")
+        if let pid = readPID(from: pidURL), isProcessRunning(pid: pid) {
+            return
         }
 
-        if let raw = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty {
-            return raw
+        try? FileManager.default.removeItem(at: pidURL)
+        let helperScriptURL = helperDirectory.appendingPathComponent("helper.zsh")
+        let jobsPath = helperDirectory.appendingPathComponent("jobs", isDirectory: true).path
+        let helperScript = """
+        #!/bin/zsh
+        setopt NULL_GLOB
+        echo $$ > \(shellDisplayArgument(pidURL.path))
+        echo -ne "\\033]0;Aiassistant PCC Helper\\007"
+        jobs_dir=\(shellDisplayArgument(jobsPath))
+        mkdir -p "$jobs_dir"
+        while true; do
+          for job_dir in "$jobs_dir"/*; do
+            [ -d "$job_dir" ] || continue
+            [ -f "$job_dir/request.ready" ] || continue
+            [ ! -f "$job_dir/started" ] || continue
+            touch "$job_dir/started"
+            /bin/zsh "$job_dir/run.zsh" > "$job_dir/helper.log" 2>&1
+            touch "$job_dir/done"
+          done
+          sleep 0.2
+        done
+        """
+        try helperScript.write(to: helperScriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helperScriptURL.path)
+
+        let appleScript = """
+        on run argv
+            tell application "Terminal"
+                do script "/bin/zsh " & quoted form of item 1 of argv
+                delay 0.2
+                try
+                    set miniaturized of front window to true
+                end try
+            end tell
+        end run
+        """
+        let launchResult = try await runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
+            arguments: ["-e", appleScript, helperScriptURL.path]
+        )
+        guard launchResult.status == 0 else {
+            throw FMPCCGatewayError.terminalAutomationFailed(stripANSI(launchResult.output))
         }
 
-        throw FMPCCGatewayError.emptyResponse
+        for _ in 0..<40 {
+            if let pid = readPID(from: pidURL), isProcessRunning(pid: pid) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw FMPCCGatewayError.terminalAutomationFailed("Timed out waiting for the persistent PCC helper to start.")
     }
 
-    private func validateHTTPResponse(_ response: URLResponse, data: Data) throws {
-        guard let httpResponse = response as? HTTPURLResponse else { return }
-        guard (200...299).contains(httpResponse.statusCode) else {
-            let body = decodeErrorBody(data)
-            throw FMPCCGatewayError.badStatus(httpResponse.statusCode, body)
+    private static func runOneShotViaTerminal(arguments: [String]) async throws -> (status: Int32, output: String) {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RSSReader-FMPCC-Availability-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let scriptURL = tempDirectory.appendingPathComponent("check-fm-pcc.zsh")
+        let outputURL = tempDirectory.appendingPathComponent("output.txt")
+        let statusURL = tempDirectory.appendingPathComponent("status.txt")
+        let doneURL = tempDirectory.appendingPathComponent("done")
+
+        let command = ([fmURL.path] + arguments).map(shellDisplayArgument).joined(separator: " ")
+        let script = """
+        #!/bin/zsh
+        \(command) > \(shellDisplayArgument(outputURL.path)) 2>&1
+        fm_status=$?
+        echo $fm_status > \(shellDisplayArgument(statusURL.path))
+        touch \(shellDisplayArgument(doneURL.path))
+        exit $fm_status
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+
+        let appleScript = """
+        on run argv
+            tell application "Terminal"
+                do script "/bin/zsh " & quoted form of item 1 of argv
+            end tell
+        end run
+        """
+        let launchResult = try await runProcess(
+            executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
+            arguments: ["-e", appleScript, scriptURL.path]
+        )
+        guard launchResult.status == 0 else {
+            throw FMPCCGatewayError.terminalAutomationFailed(stripANSI(launchResult.output))
         }
+
+        for _ in 0..<120 {
+            if FileManager.default.fileExists(atPath: doneURL.path) {
+                let output = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
+                let statusText = (try? String(contentsOf: statusURL, encoding: .utf8)) ?? "1"
+                let fmStatus = Int32(statusText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
+                return (fmStatus, stripANSI(output))
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return (1, "Timed out waiting for Terminal to check PCC availability.")
     }
 
-    private func decodeErrorBody(_ data: Data) -> String {
-        if let decoded = try? JSONDecoder().decode(ChatCompletionResponse.self, from: data),
-           let message = decoded.error?.message.trimmingCharacters(in: .whitespacesAndNewlines),
-           !message.isEmpty {
-            return message
-        }
+    private static func runProcess(executableURL: URL, arguments: [String]) async throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
 
-        return String(data: data, encoding: .utf8)?
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+    }
+
+    private static func stripANSI(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: ansiPattern) else {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex
+            .stringByReplacingMatches(in: text, range: range, withTemplate: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nilIfEmpty ?? "Unknown error"
     }
 
-    private struct ChatCompletionRequest: Encodable {
-        let model: String
-        let messages: [ChatMessage]
-        let stream: Bool
+    static func isPCCContextUnavailable(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        return normalized.contains("pcc inference is not available in this context")
+            || normalized.contains("private cloud compute is not available in this context")
+            || normalized.contains("please use the terminal app")
     }
 
-    private struct ChatMessage: Codable {
-        let role: String
-        let content: String
+    private static func cleanFMResponse(_ output: String) -> String {
+        output
+            .components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Session saved:") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private struct ChatCompletionResponse: Decodable {
-        let choices: [Choice]?
-        let error: ErrorBody?
-        let text: String?
-        let content: String?
-        let summary: String?
+    private static func terminateTerminalJob(shellPID: Int32) {
+        let shellPIDText = String(shellPID)
+        _ = try? runDetachedProcess(executableURL: URL(fileURLWithPath: "/usr/bin/pkill"), arguments: ["-TERM", "-P", shellPIDText])
+        _ = try? runDetachedProcess(executableURL: URL(fileURLWithPath: "/bin/kill"), arguments: ["-TERM", shellPIDText])
+    }
 
-        var output: String? {
-            [
-                choices?.first?.message.content,
-                text,
-                content,
-                summary
-            ]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
+    private static func runDetachedProcess(executableURL: URL, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        try process.run()
+    }
+
+    private static func readPID(from url: URL) -> Int32? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func isProcessRunning(pid: Int32) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/kill")
+        process.arguments = ["-0", String(pid)]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
         }
     }
 
-    private struct Choice: Decodable {
-        let message: ChatMessage
+    private static func shellDisplayArgument(_ argument: String) -> String {
+        if argument.contains(" ") || argument.contains("\n") || argument.contains("'") || argument.contains("\"") {
+            return "'\(argument.replacingOccurrences(of: "'", with: "'\\''"))'"
+        }
+        return argument
+    }
+}
+
+private final class LockedProcessOutput: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.joaovalente.RSSReaderApp.FMPCC.output")
+    private var data = Data()
+
+    func append(_ newData: Data) {
+        queue.sync {
+            data.append(newData)
+        }
     }
 
-    private struct ErrorBody: Decodable {
-        let message: String
+    func stringValue() -> String {
+        queue.sync {
+            String(data: data, encoding: .utf8) ?? ""
+        }
     }
 }
 
@@ -603,12 +907,32 @@ private enum RSSSummarizeTimeout {
         let seconds: TimeInterval
         var errorDescription: String? { "Summarize request timed out after \(Int(seconds)) seconds." }
     }
+
+    static func run<T: Sendable>(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw Error(seconds: seconds)
+            }
+
+            guard let value = try await group.next() else {
+                throw Error(seconds: seconds)
+            }
+            group.cancelAll()
+            return value
+        }
+    }
 }
 
 private final class RSSBridgeContinuationBox<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var didResume = false
-    private var timeoutWorkItem: DispatchWorkItem?
     private let connection: NWConnection?
     private let continuation: CheckedContinuation<T, Error>
 
@@ -617,41 +941,24 @@ private final class RSSBridgeContinuationBox<T>: @unchecked Sendable {
         self.continuation = continuation
     }
 
-    func installTimeoutWorkItem(_ workItem: DispatchWorkItem) {
-        lock.lock()
-        if didResume {
-            lock.unlock()
-            workItem.cancel()
-            return
-        }
-        timeoutWorkItem = workItem
-        lock.unlock()
-    }
-
     func resume(returning value: T) {
-        let terminal = markResumed()
-        guard terminal.didResume else { return }
-        terminal.timeoutWorkItem?.cancel()
+        guard markResumed() else { return }
         connection?.cancel()
         continuation.resume(returning: value)
     }
 
     func resume(throwing error: Error) {
-        let terminal = markResumed()
-        guard terminal.didResume else { return }
-        terminal.timeoutWorkItem?.cancel()
+        guard markResumed() else { return }
         connection?.cancel()
         continuation.resume(throwing: error)
     }
 
-    private func markResumed() -> (didResume: Bool, timeoutWorkItem: DispatchWorkItem?) {
+    private func markResumed() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !didResume else { return (false, nil) }
+        guard !didResume else { return false }
         didResume = true
-        let workItem = timeoutWorkItem
-        timeoutWorkItem = nil
-        return (true, workItem)
+        return true
     }
 }
 
@@ -689,12 +996,8 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
         return response.text?.isEmpty == false ? response.text! : "Connected"
     }
 
-    func generate(
-        prompt: String,
-        timeout: TimeInterval = 300,
-        onPartial: ((String) -> Void)? = nil
-    ) async throws -> String {
-        let response = try await send(kind: .generate, prompt: prompt, timeout: timeout)
+    func generate(prompt: String, onPartial: ((String) -> Void)? = nil) async throws -> String {
+        let response = try await send(kind: .generate, prompt: prompt, timeout: 300)
         guard response.ok, let text = response.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             throw RSSSummarizeProviderError.bridgeRejected(response.error ?? "Summarize bridge returned an empty response.")
         }
@@ -706,23 +1009,22 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
         let request = RSSSummarizeBridgeRequest(kind: kind, secret: configuration.secret, prompt: prompt)
         let endpoint = try await resolveEndpoint()
 
-        return try await send(request: request, endpoint: endpoint, timeout: timeout)
+        return try await RSSSummarizeTimeout.run(seconds: timeout) {
+            try await self.send(request: request, endpoint: endpoint)
+        }
     }
 
     private func resolveEndpoint() async throws -> NWEndpoint {
-        let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !host.isEmpty,
-           let port = NWEndpoint.Port(rawValue: UInt16(configuration.port)) {
-            print("Summarize bridge endpoint: manual \(host):\(configuration.port), secretLength=\(configuration.secret.count)")
-            return .hostPort(host: NWEndpoint.Host(host), port: port)
-        }
-
         if let discovered = await discoverBridgeEndpoint(timeout: 1.5) {
-            print("Summarize bridge endpoint: discovered \(discovered), secretLength=\(configuration.secret.count)")
             return discovered
         }
 
-        throw RSSSummarizeProviderError.bridgeUnavailable
+        let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty,
+              let port = NWEndpoint.Port(rawValue: UInt16(configuration.port)) else {
+            throw RSSSummarizeProviderError.bridgeUnavailable
+        }
+        return .hostPort(host: NWEndpoint.Host(host), port: port)
     }
 
     private func discoverBridgeEndpoint(timeout: TimeInterval) async -> NWEndpoint? {
@@ -754,19 +1056,10 @@ final class RSSSummarizeBridgeClient: @unchecked Sendable {
         }
     }
 
-    private func send(
-        request: RSSSummarizeBridgeRequest,
-        endpoint: NWEndpoint,
-        timeout: TimeInterval
-    ) async throws -> RSSSummarizeBridgeResponse {
+    private func send(request: RSSSummarizeBridgeRequest, endpoint: NWEndpoint) async throws -> RSSSummarizeBridgeResponse {
         try await withCheckedThrowingContinuation { continuation in
             let connection = NWConnection(to: endpoint, using: .tcp)
             let box = RSSBridgeContinuationBox<RSSSummarizeBridgeResponse>(connection: connection, continuation: continuation)
-            let timeoutWorkItem = DispatchWorkItem {
-                box.resume(throwing: RSSSummarizeTimeout.Error(seconds: timeout))
-            }
-            box.installTimeoutWorkItem(timeoutWorkItem)
-            queue.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
 
             connection.stateUpdateHandler = { state in
                 switch state {
@@ -853,18 +1146,17 @@ enum RSSSummarizeProviderClient {
     static func generate(
         prompt: String,
         settings: AppSettings,
-        timeout: TimeInterval = 300,
         onPartial: ((String) -> Void)? = nil
     ) async throws -> String {
         #if os(iOS)
         if !AppSettings.sanitizedSummarizeSecret(settings.summarizeBridgeSecret).isEmpty {
             return try await RSSSummarizeBridgeClient(configuration: bridgeConfiguration(from: settings))
-                .generate(prompt: prompt, timeout: timeout, onPartial: onPartial)
+                .generate(prompt: prompt, onPartial: onPartial)
         }
         #endif
 
         return try await RSSSummarizeDaemonHTTPClient(configuration: daemonConfiguration(from: settings))
-            .generate(prompt: prompt, timeout: timeout, onPartial: onPartial)
+            .generate(prompt: prompt, onPartial: onPartial)
     }
 
     static func daemonConfiguration(from settings: AppSettings) throws -> RSSSummarizeDaemonConfiguration {
@@ -892,7 +1184,7 @@ enum RSSSummarizeProviderClient {
         guard !secret.isEmpty else { throw RSSSummarizeProviderError.missingBridgeSecret }
 
         return RSSSummarizeBridgeConfiguration(
-            host: settings.summarizeBridgeHost.trimmingCharacters(in: .whitespacesAndNewlines),
+            host: AppSettings.sanitizedSummarizeHost(settings.summarizeBridgeHost),
             port: port,
             secret: secret
         )

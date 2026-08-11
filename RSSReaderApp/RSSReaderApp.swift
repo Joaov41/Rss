@@ -3,19 +3,8 @@ import Combine
 
 @main
 struct RSSReaderApp: App {
-    @StateObject private var appState: AppState
+    @StateObject private var appState = AppState()
     @AppStorage("appearanceMode") private var appearanceMode: Int = 0 // 0: System, 1: Light, 2: Dark
-    
-    init() {
-        print("🚀🚀🚀 APP STARTUP - DIAGNOSTIC BUILD v1 🚀🚀🚀")
-        _appState = StateObject(wrappedValue: AppState())
-        #if os(iOS)
-        // Initialize background task manager for long-running Gemini operations
-        // This enables summaries and Q&A to complete even when device is locked
-        GeminiBackgroundTaskManager.shared.prepareForLaunch()
-        print("✅ RSSReaderApp: Background task manager initialized (supports locked device execution)")
-        #endif
-    }
     
     var colorScheme: ColorScheme? {
         switch appearanceMode {
@@ -35,6 +24,9 @@ struct RSSReaderApp: App {
                 .modifier(WebAIHandoffFloatingPanelModifier(appState: appState))
                 .onOpenURL { url in
                     handleURLCallback(url)
+                }
+                .onAppear {
+                    appState.summaryService.warmUpKokoroIfNeeded()
                 }
         }
         .commands {
@@ -80,7 +72,8 @@ struct RSSReaderApp: App {
                     if let article = appState.selectedArticle {
                         appState.requestSummary(for: article)
                     } else if let post = appState.selectedRedditPost {
-                        appState.requestSummary(for: nil, redditPost: post)
+                        // Menu command won't have comments, so pass empty array
+                        appState.requestSummary(for: nil, redditPost: post, redditComments: [])
                     }
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
@@ -92,17 +85,21 @@ struct RSSReaderApp: App {
                 iPadContentView()
                     .environmentObject(appState)
                     .preferredColorScheme(colorScheme)
-                    .modifier(WebAIHandoffIOSPresenterModifier(appState: appState))
                     .onOpenURL { url in
                         handleURLCallback(url)
+                    }
+                    .onAppear {
+                        appState.summaryService.warmUpKokoroIfNeeded()
                     }
             } else {
                 iPhoneContentView()
                     .environmentObject(appState)
                     .preferredColorScheme(colorScheme)
-                    .modifier(WebAIHandoffIOSPresenterModifier(appState: appState))
                     .onOpenURL { url in
                         handleURLCallback(url)
+                    }
+                    .onAppear {
+                        appState.summaryService.warmUpKokoroIfNeeded()
                     }
             }
         }
@@ -111,50 +108,37 @@ struct RSSReaderApp: App {
     
     private func handleURLCallback(_ url: URL) {
         print("🔗 Received URL callback: \(url.absoluteString)")
-        
+
+        // Handle Reddit OAuth callback
+        if url.scheme == "redapp" && url.host == "auth" {
+            print("🔐 Received Reddit OAuth callback: \(url.absoluteString)")
+            #if os(macOS)
+            appState.redditOAuthManager.handleMacOSCallback(url: url)
+            #endif
+            return
+        }
+
         // Handle success callback from x-callback-url
         if url.scheme == "rssreader" && url.host == "success" {
             print("✅ Shortcut executed successfully via x-callback-url")
-            
-            // Extract result from URL if present (mirrors red sample approach)
-            var userInfo: [String: Any] = [:]
-            if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-               let queryItems = components.queryItems,
-               let resultValue = queryItems.first(where: { $0.name == "result" })?.value {
-                var decodedResult = resultValue.removingPercentEncoding ?? resultValue
-                if decodedResult.hasPrefix("rssreader://success?result=") {
-                    decodedResult = String(decodedResult.dropFirst("rssreader://success?result=".count))
-                }
-                print("📝 Shortcut callback returned result: \(decodedResult.prefix(100))...")
-                userInfo["result"] = decodedResult
-            }
-            
-            NotificationCenter.default.post(
-                name: Notification.Name("ShortcutCallbackReceived"),
-                object: nil,
-                userInfo: userInfo.isEmpty ? nil : userInfo
-            )
+            // The shortcut ran successfully, clipboard monitoring will handle the result
             return
         }
-        
+
         // Handle error callback from x-callback-url
         if url.scheme == "rssreader" && url.host == "error" {
             print("❌ Shortcut execution failed via x-callback-url")
             // Parse error details if available
-            var userInfo: [String: Any] = ["error": true]
             if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                let queryItems = components.queryItems {
-                
+
                 if let errorMessage = queryItems.first(where: { $0.name == "errorMessage" })?.value {
-                    let decodedMessage = errorMessage.removingPercentEncoding ?? errorMessage
-                    print("❌ Error details: \(decodedMessage)")
-                    userInfo["message"] = decodedMessage
+                    print("❌ Error details: \(errorMessage)")
                 }
             }
-            NotificationCenter.default.post(name: Notification.Name("ShortcutCallbackReceived"), object: nil, userInfo: userInfo)
             return
         }
-        
+
         // Handle the callback from Shortcuts
         if url.scheme == "rssreader" && url.host == "summary" {
             // Parse the query parameters

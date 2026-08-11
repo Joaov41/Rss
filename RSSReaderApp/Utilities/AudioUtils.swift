@@ -79,31 +79,24 @@ public func isMP3Data(_ data: Data) -> Bool {
     return false
 }
 
-#if os(iOS)
-// Ensures the app's audio session stays in playback mode so TTS continues while locked/backgrounded
-public func configureAudioSessionForTTSPlayback() {
-    let audioSession = AVAudioSession.sharedInstance()
-    do {
-        try audioSession.setCategory(
-            .playback,
-            mode: .spokenAudio,
-            options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP]
-        )
-        try audioSession.setActive(true)
-    } catch {
-        print("🔊 [AudioUtils] Failed to configure audio session for TTS: \(error)")
-    }
+/// Detect AAC (ADTS) data format by header bytes (0xFFF..)
+public func isAACData(_ data: Data) -> Bool {
+    guard data.count >= 2 else { return false }
+    let bytes = [UInt8](data.prefix(2))
+    // AAC ADTS header starts with 12 bits set (0xFFFx)
+    return (bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0)
 }
-#else
-// No-op on platforms that don't use AVAudioSession
-public func configureAudioSessionForTTSPlayback() {}
-#endif
 
 #if os(macOS)
+// Convenience init for VoiceName to accept String without 'rawValue:' label
+public extension NSSpeechSynthesizer.VoiceName {
+    init(_ raw: String) { self.init(rawValue: raw) }
+}
+
 // MARK: - macOS Voice Selection Helpers
 // Returns the best quality macOS voice identifier available
 public func preferredMacVoiceIdentifier() -> String? {
-    let available = NSSpeechSynthesizer.availableVoices()
+    let availableNames = NSSpeechSynthesizer.availableVoices
     
     struct VoiceInfo {
         let id: String
@@ -112,11 +105,11 @@ public func preferredMacVoiceIdentifier() -> String? {
     }
     
     var voiceInfos: [VoiceInfo] = []
-    for id in available {
-        let attrs = NSSpeechSynthesizer.attributes(forVoice: id)
-        let name = (attrs[.name] as? String) ?? ""
-        let locale = (attrs[.localeIdentifier] as? String) ?? ""
-        voiceInfos.append(VoiceInfo(id: id, name: name, locale: locale))
+    for voiceName in availableNames {
+        let attrs = NSSpeechSynthesizer.attributes(forVoice: voiceName)
+        let displayName = (attrs[NSSpeechSynthesizer.VoiceAttributeKey.name] as? String) ?? ""
+        let locale = (attrs[NSSpeechSynthesizer.VoiceAttributeKey.localeIdentifier] as? String) ?? ""
+        voiceInfos.append(VoiceInfo(id: voiceName.rawValue, name: displayName, locale: locale))
     }
     
     // Score each voice based on quality preferences
@@ -164,7 +157,7 @@ public func preferredMacVoiceIdentifier() -> String? {
         return best.id
     }
     
-    return available.first
+    return availableNames.first?.rawValue
 }
 
 // Stubs to satisfy shared code paths when building macOS target
@@ -345,13 +338,18 @@ public enum LocalTTSVoicePrefs {
 }
 
 #if os(macOS)
+@discardableResult
+public func setMacSpeechVoice(_ synthesizer: NSSpeechSynthesizer, identifier: String) -> Bool {
+    synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: identifier))
+}
+
 // List available macOS voices with display names
 public func availableMacVoices() -> [(id: String, name: String)] {
-    let ids = NSSpeechSynthesizer.availableVoices()
+    let ids = NSSpeechSynthesizer.availableVoices
     return ids.map { id in
         let attrs = NSSpeechSynthesizer.attributes(forVoice: id)
-        let name = (attrs[.name] as? String) ?? id
-        return (id: id, name: name)
+        let name = (attrs[NSSpeechSynthesizer.VoiceAttributeKey.name] as? String) ?? id.rawValue
+        return (id: id.rawValue, name: name)
     }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 }
 #endif

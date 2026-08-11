@@ -2,56 +2,112 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(iOS)
 import AVFoundation
-import UIKit
 #elseif os(macOS)
 import AppKit
 #endif
 
-private struct SettingsFormWidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+#if os(macOS)
+private let macSettingsGlassTint = Color(red: 0.30, green: 0.46, blue: 0.64).opacity(0.16)
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+@available(macOS 26.0, *)
+private struct MacSettingsGlassButtonStyle: ButtonStyle {
+    let prominent: Bool
+    let tintColor: Color?
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .glassEffect(
+                .regular.tint(
+                    tintColor ?? (prominent ? Color.accentColor.opacity(0.42) : macSettingsGlassTint)
+                ),
+                in: .capsule
+            )
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
-#if os(iOS)
-struct RSSSettingsPresentationBackground: View {
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 40, style: .continuous)
+private struct MacSettingsSelectorSurface: ViewModifier {
+    let isSelected: Bool
 
-        if #available(iOS 26.0, *) {
-            shape
-                .fill(.clear)
-                .glassEffect(.regular, in: .rect(cornerRadius: 40))
-                .overlay {
-                    shape.stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.28),
-                                Color.white.opacity(0.08)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 0.8
+    func body(content: Content) -> some View {
+        content
+            .font(.body.weight(.semibold))
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+            .background {
+                Capsule()
+                    .fill(
+                        isSelected
+                            ? Color.accentColor.opacity(0.78)
+                            : Color(red: 0.30, green: 0.38, blue: 0.48).opacity(0.34)
                     )
-                }
-        } else {
-            shape
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    shape.stroke(Color.white.opacity(0.2), lineWidth: 0.8)
-                }
-        }
+            }
+            .overlay {
+                Capsule()
+                    .stroke(Color.black.opacity(0.38), lineWidth: 1)
+            }
+            .contentShape(Capsule())
+    }
+}
+
+private struct MacSettingsSelectorButtonStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .modifier(MacSettingsSelectorSurface(isSelected: isSelected))
+            .opacity(configuration.isPressed ? 0.76 : 1)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 #endif
 
+private extension View {
+    @ViewBuilder
+    func settingsGlassButtonStyle(prominent: Bool = false, tintColor: Color? = nil) -> some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            self.buttonStyle(MacSettingsGlassButtonStyle(prominent: prominent, tintColor: tintColor))
+        } else if prominent {
+            self.buttonStyle(.borderedProminent)
+        } else {
+            self.buttonStyle(.bordered)
+        }
+        #else
+        if prominent {
+            self.buttonStyle(.borderedProminent)
+        } else {
+            self.buttonStyle(.bordered)
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    func settingsGlassPanel() -> some View {
+        #if os(macOS)
+        if #available(macOS 26.0, *) {
+            self
+                .glassEffect(
+                    .regular.tint(macSettingsGlassTint),
+                    in: .rect(cornerRadius: 40)
+                )
+        } else {
+            self.modifier(AdaptiveGlassModifier(cornerRadius: 40))
+        }
+        #else
+        self.modifier(AdaptiveGlassModifier(cornerRadius: 40))
+        #endif
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.presentationMode) var presentationMode
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @State private var showingFileImporter = false
     @State private var showingFileExporter = false
@@ -106,18 +162,8 @@ struct SettingsView: View {
     
     // Local TTS voice picker state
     @State private var localVoiceID: String = ""
-    @State private var settingsFormWidth: CGFloat = 0
     private let iosVoiceKey = "LocalTTS.iOSOnMac.SelectedVoiceID"
     private let macVoiceKey = "LocalTTS.Mac.SelectedVoiceID"
-    private var usesCompactSettingsLayout: Bool {
-        #if os(iOS)
-        horizontalSizeClass == .compact ||
-            UIDevice.current.userInterfaceIdiom == .phone ||
-            (settingsFormWidth > 0 && settingsFormWidth < 560)
-        #else
-        false
-        #endif
-    }
     #if os(iOS)
     @State private var iosVoices: [(id: String, title: String)] = []
     @State private var testSynthIOS: AVSpeechSynthesizer? = nil
@@ -162,9 +208,13 @@ struct SettingsView: View {
     }
 
     private var settingsBackground: Color {
+        #if os(macOS)
+        return .clear
+        #else
         effectiveSettingsColorScheme == .dark
             ? Color(red: 0.05, green: 0.05, blue: 0.1)
             : AppColors.background
+        #endif
     }
 
     private func launchWebAILogin(_ provider: WebAIProvider) {
@@ -173,14 +223,82 @@ struct SettingsView: View {
             appState.openWebAILoginSession(for: provider)
         }
     }
+
+    private func summaryProviderDidChange(_ newValue: AppSettings.SummaryProvider) {
+        appState.mlxLastThroughput = ""
+        appState.mlxLastQAThroughput = ""
+        var newSettings = appState.settings
+        newSettings.selectedSummaryProvider = newValue
+        appState.updateSettings(newSettings)
+
+        if newValue != .mlxLocal && newValue != .coreAIMLXLocal {
+            Task {
+                await LiteRTLocalService.shared.unloadAllModels()
+                await MLXLocalService.shared.unloadAllModels()
+            }
+        } else {
+            Task { await appState.warmUpMLXIfNeeded() }
+        }
+    }
+
+    #if os(macOS)
+    private var macAppearanceSelector: some View {
+        HStack(spacing: 8) {
+            Button("System") { appearanceMode = 0 }
+                .buttonStyle(MacSettingsSelectorButtonStyle(isSelected: appearanceMode == 0))
+            Button("Light") { appearanceMode = 1 }
+                .buttonStyle(MacSettingsSelectorButtonStyle(isSelected: appearanceMode == 1))
+            Button("Dark") { appearanceMode = 2 }
+                .buttonStyle(MacSettingsSelectorButtonStyle(isSelected: appearanceMode == 2))
+        }
+    }
+
+    private var macSummaryProviderSelector: some View {
+        Menu {
+            ForEach(AppSettings.SummaryProvider.allCases, id: \.self) { provider in
+                Button(provider.displayName) {
+                    appState.settings.selectedSummaryProvider = provider
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Text(appState.settings.selectedSummaryProvider.displayName)
+                Image(systemName: "chevron.up.chevron.down")
+            }
+            .modifier(MacSettingsSelectorSurface(isSelected: false))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private var macWebAISelector: some View {
+        HStack(spacing: 8) {
+            ForEach(WebAIProvider.allCases) { provider in
+                Button(provider.displayName) {
+                    var newSettings = appState.settings
+                    newSettings.selectedWebAIProvider = provider
+                    appState.updateSettings(newSettings)
+                }
+                .buttonStyle(MacSettingsSelectorButtonStyle(
+                    isSelected: appState.settings.selectedWebAIProvider == provider
+                ))
+            }
+        }
+    }
+    #endif
     
     var body: some View {
-        NavigationView {
+        settingsNavigationContainer {
             ZStack {
                 settingsBackground
+                    .ignoresSafeArea()
                 
                 Form {
                     Section("Appearance") {
+                        #if os(macOS)
+                        macAppearanceSelector
+                            .padding(.vertical, 4)
+                        #else
                         Picker("Theme", selection: $appearanceMode) {
                             Label("System", systemImage: "circle.lefthalf.filled").tag(0)
                             Label("Light", systemImage: "sun.max.fill").tag(1)
@@ -188,26 +306,17 @@ struct SettingsView: View {
                         }
                         .pickerStyle(SegmentedPickerStyle())
                         .padding(.vertical, 4)
+                        #endif
                     }
-
-                    #if os(iOS)
-                    Section("Experimental YouTube") {
-                        Toggle("YouTube Support", isOn: Binding(
-                            get: { appState.settings.youtubeSupportEnabled },
-                            set: { enabled in
-                                var newSettings = appState.settings
-                                newSettings.youtubeSupportEnabled = enabled
-                                appState.updateSettings(newSettings)
-                            }
-                        ))
-
-                        Text("When enabled, you can search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for summaries and Q&A. When disabled, the existing RSS and Reddit interface is unchanged.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    #endif
                     
                     Section("Summary Provider") {
+                        #if os(macOS)
+                        macSummaryProviderSelector
+                            .padding(.vertical, 4)
+                            .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
+                                summaryProviderDidChange(newValue)
+                            }
+                        #else
                         Picker("Summary Source", selection: $appState.settings.selectedSummaryProvider) {
                             ForEach(AppSettings.SummaryProvider.allCases, id: \.self) { provider in
                                 Text(provider.displayName)
@@ -217,30 +326,19 @@ struct SettingsView: View {
                         .pickerStyle(.menu)
                         .padding(.vertical, 4)
                         .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
-                            // Clear stale throughput labels immediately on provider switch
-                            appState.mlxLastThroughput = ""
-                            appState.mlxLastQAThroughput = ""
-                            var newSettings = appState.settings
-                            newSettings.selectedSummaryProvider = newValue
-                            appState.updateSettings(newSettings)
-
-                            if newValue != .mlxLocal && newValue != .coreAIMLXLocal {
-                                // Offload local models when switching to a different provider
-                                Task {
-                                    await LiteRTLocalService.shared.unloadAllModels()
-                                    await MLXLocalService.shared.unloadAllModels()
-                                }
-                            } else {
-                                // Preload and warm up when switching to a local model
-                                appState.warmUpMLXIfNeeded()
-                            }
+                            summaryProviderDidChange(newValue)
                         }
+                        #endif
                         
                     Text(summaryProviderDescription)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.top, 4)
 
+                        #if os(macOS)
+                        macWebAISelector
+                            .padding(.top, 6)
+                        #else
                         Picker("Web AI Destination", selection: Binding(
                             get: { appState.settings.selectedWebAIProvider },
                             set: { newValue in
@@ -255,6 +353,7 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .padding(.top, 6)
+                        #endif
 
                         Text(
                             appState.settings.selectedSummaryProvider == .webAI
@@ -277,24 +376,24 @@ struct SettingsView: View {
                                 Button("Log In to ChatGPT") {
                                     launchWebAILogin(.chatgpt)
                                 }
-                                .buttonStyle(.bordered)
+                                .settingsGlassButtonStyle()
 
                                 Button("Reset ChatGPT") {
                                     appState.resetWebAISession(for: .chatgpt)
                                 }
-                                .buttonStyle(.bordered)
+                                .settingsGlassButtonStyle()
                             }
 
                             HStack(spacing: 10) {
                                 Button("Log In to Gemini") {
                                     launchWebAILogin(.gemini)
                                 }
-                                .buttonStyle(.bordered)
+                                .settingsGlassButtonStyle()
 
                                 Button("Reset Gemini") {
                                     appState.resetWebAISession(for: .gemini)
                                 }
-                                .buttonStyle(.bordered)
+                                .settingsGlassButtonStyle()
                             }
                         }
 
@@ -306,13 +405,33 @@ struct SettingsView: View {
                             coreAIMLXSettingsView
                         }
 
+                        #if os(iOS)
                         if appState.settings.selectedSummaryProvider == .summarizeDaemon {
                             summarizeSettingsView
                         }
+                        #endif
 
                         if appState.settings.selectedSummaryProvider == .applePCCGateway {
                             pccGatewaySettingsView
                         }
+                }
+
+                Section("YouTube") {
+                    Toggle("YouTube Support", isOn: Binding(
+                        get: { appState.settings.youtubeSupportEnabled },
+                        set: { enabled in
+                            var newSettings = appState.settings
+                            newSettings.youtubeSupportEnabled = enabled
+                            appState.updateSettings(newSettings)
+                            if enabled {
+                                appState.refreshAllFeeds()
+                            }
+                        }
+                    ))
+
+                    Text("When enabled, search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for transcript-grounded summaries and Q&A. When disabled, the existing RSS and Reddit interface remains unchanged.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("Cloud Sync") {
@@ -329,7 +448,7 @@ struct SettingsView: View {
                             Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .settingsGlassButtonStyle(prominent: true)
                     .tint(.blue)
                     .disabled(appState.manualCloudSyncState == .syncing)
 
@@ -356,7 +475,7 @@ struct SettingsView: View {
                                 Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
                             }
                         }
-                        .buttonStyle(.bordered)
+                        .settingsGlassButtonStyle()
                         .tint(.purple)
                         .disabled(isMigratingReadHistory)
 
@@ -419,7 +538,7 @@ struct SettingsView: View {
                         } label: {
                             Label("Make this device primary", systemImage: "arrow.triangle.2.circlepath")
                         }
-                        .buttonStyle(.bordered)
+                        .settingsGlassButtonStyle()
                         .tint(.orange)
                     } else {
                         // No primary device set
@@ -441,7 +560,7 @@ struct SettingsView: View {
                         } label: {
                             Label("Make this device primary", systemImage: "checkmark.circle")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .settingsGlassButtonStyle(prominent: true)
                         .tint(.green)
                     }
                 }
@@ -599,7 +718,7 @@ struct SettingsView: View {
                                     Text("Pre-cache MLX TTS")
                                 }
                             }
-                            .buttonStyle(LiquidGlassButtonStyle(isProminent: true))
+                            .settingsGlassButtonStyle(prominent: true)
                             .disabled(isKokoroPrewarming || !KokoroTTSService.shared.isAvailable)
 
                             if kokoroPrecacheEnabled {
@@ -615,7 +734,7 @@ struct SettingsView: View {
                                     newSettings.kokoroPrecacheEnabled = false
                                     appState.updateSettings(newSettings)
                                 }
-                                .buttonStyle(LiquidGlassButtonStyle())
+                                .settingsGlassButtonStyle()
                             }
 
                             if let status = kokoroPrewarmStatus {
@@ -705,7 +824,7 @@ struct SettingsView: View {
                             }
                         }
                         .disabled(isImporting || isExporting)
-                        .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .blue.opacity(0.3)))
+                        .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
                         
                         Button(action: {
                             exportOPML()
@@ -722,7 +841,7 @@ struct SettingsView: View {
                             }
                         }
                         .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
-                        .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .green.opacity(0.3)))
+                        .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
                     }
 
                     Section("Cache Management") {
@@ -756,7 +875,7 @@ struct SettingsView: View {
                                 .frame(maxWidth: .infinity)
                             }
                             .disabled(isClearingCaches)
-                            .buttonStyle(.borderedProminent)
+                            .settingsGlassButtonStyle(prominent: true)
                             .tint(.red)
 
                             Text("Clears removable caches and preserves downloaded LiteRT and MLX models.")
@@ -788,7 +907,7 @@ struct SettingsView: View {
                                 .frame(maxWidth: .infinity)
                             }
                             .disabled(isCleaningFailedModelDownloads)
-                            .buttonStyle(.bordered)
+                            .settingsGlassButtonStyle()
 
                             Text("Removes only incomplete .download files. Completed LiteRT and MLX models are kept.")
                                 .font(.caption)
@@ -828,38 +947,46 @@ struct SettingsView: View {
                                     .foregroundColor(.secondary)
                             } else {
                                 ForEach(storageBreakdownItems) { item in
-                                    HStack(alignment: .top, spacing: 10) {
+                                    HStack(alignment: .top, spacing: 12) {
                                         Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
                                             .foregroundStyle(.secondary)
-                                            .frame(width: 22)
+                                            .frame(width: 22, alignment: .center)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.name)
                                                 .font(.subheadline)
                                                 .fontWeight(.semibold)
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
                                             Text(item.detail)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
-                                                .lineLimit(2)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
                                         }
-
-                                        Spacer()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
                                         Text(item.sizeText)
                                             .font(.caption)
                                             .fontWeight(.semibold)
                                             .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                            .fixedSize()
+                                            .frame(minWidth: 64, alignment: .trailing)
 
-                                        if item.cleanupKind != nil || item.isModelStorage {
-                                            Button(role: .destructive) {
-                                                pendingStorageBreakdownDelete = item
-                                                showStorageBreakdownDeleteConfirm = true
-                                            } label: {
-                                                Image(systemName: "trash")
+                                        ZStack {
+                                            if item.cleanupKind != nil || item.isModelStorage {
+                                                Button(role: .destructive) {
+                                                    pendingStorageBreakdownDelete = item
+                                                    showStorageBreakdownDeleteConfirm = true
+                                                } label: {
+                                                    Image(systemName: "trash")
+                                                }
+                                                .buttonStyle(.borderless)
+                                                .disabled(isDeletingStorageBreakdown)
                                             }
-                                            .buttonStyle(.borderless)
-                                            .disabled(isDeletingStorageBreakdown)
                                         }
+                                        .frame(width: 24, alignment: .center)
                                     }
                                     .padding(.vertical, 3)
                                 }
@@ -874,8 +1001,10 @@ struct SettingsView: View {
                             Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 8)
+                        .padding(.horizontal, 4)
                     }
 
                     Section("Local Model Storage") {
@@ -903,17 +1032,18 @@ struct SettingsView: View {
                                     .foregroundColor(.secondary)
                             } else {
                                 ForEach(modelStorageItems) { item in
-                                    HStack(alignment: .top, spacing: 10) {
+                                    HStack(alignment: .top, spacing: 12) {
                                         Image(systemName: item.kind == .liteRT ? "cube.box.fill" : "cpu.fill")
                                             .foregroundStyle(.secondary)
-                                            .frame(width: 22)
+                                            .frame(width: 22, alignment: .center)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             HStack(spacing: 6) {
                                                 Text(item.name)
                                                     .font(.subheadline)
                                                     .fontWeight(.semibold)
-                                                    .lineLimit(2)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
                                                 if item.isCurrentSelection {
                                                     Text("Current")
                                                         .font(.caption2)
@@ -926,12 +1056,18 @@ struct SettingsView: View {
                                             Text("\(item.kind.rawValue) • \(item.detail)")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
-                                            Text(item.sizeText)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
                                         }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                                        Spacer()
+                                        Text(item.sizeText)
+                                            .font(.caption)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                            .fixedSize()
+                                            .frame(minWidth: 64, alignment: .trailing)
 
                                         Button(role: .destructive) {
                                             pendingModelStorageDelete = item
@@ -941,6 +1077,7 @@ struct SettingsView: View {
                                         }
                                         .buttonStyle(.borderless)
                                         .disabled(isDeletingModelStorage)
+                                        .frame(width: 24, alignment: .center)
                                     }
                                     .padding(.vertical, 4)
                                 }
@@ -955,40 +1092,36 @@ struct SettingsView: View {
                             Text("Deleting a model removes only that selected model. Other app caches and other models are left alone.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.vertical, 8)
+                        .padding(.horizontal, 4)
                     }
 
                     Section("Actions") {
                         Button("Clear All Data") {
                             // Clear data action
                         }
-                        .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .red.opacity(0.3)))
+                        .settingsGlassButtonStyle(tintColor: .red.opacity(0.3))
 
                         Button("Reset to Defaults") {
                             // Reset action
                         }
-                        .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .orange.opacity(0.3)))
+                        .settingsGlassButtonStyle(tintColor: .orange.opacity(0.3))
                     }
                 }
                 .scrollContentBackground(.hidden) // Hide default form background
+                #if os(macOS)
+                .formStyle(.grouped)
+                .frame(minWidth: 700, idealWidth: 820, maxWidth: .infinity)
+                #endif
                 .safeAreaPadding(.horizontal, 24)
                 .safeAreaPadding(.vertical, 8)
                 .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                 .padding()
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear
-                            .preference(key: SettingsFormWidthPreferenceKey.self, value: proxy.size.width)
-                    }
-                )
-                .onPreferenceChange(SettingsFormWidthPreferenceKey.self) { width in
-                    settingsFormWidth = width
-                }
             }
             .navigationTitle("Settings")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(
                 trailing: Button("Done") {
                     presentationMode.wrappedValue.dismiss()
@@ -1072,14 +1205,20 @@ struct SettingsView: View {
         }
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
-        .modifier(AdaptiveGlassModifier(cornerRadius: 40))
-        #if os(iOS)
-        .background(Color.clear)
-        .background(AskAISheetTransparencyBridge())
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .bottomBar)
-        .presentationBackground {
-            RSSSettingsPresentationBackground()
+        .settingsGlassPanel()
+    }
+
+    @ViewBuilder
+    private func settingsNavigationContainer<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        #if os(macOS)
+        NavigationStack {
+            content()
+        }
+        #else
+        NavigationView {
+            content()
         }
         #endif
     }
@@ -1295,16 +1434,7 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
     private var redditAuthenticatedView: some View {
-        if usesCompactSettingsLayout {
-            redditAuthenticatedPhoneView
-        } else {
-            redditAuthenticatedRegularView
-        }
-    }
-
-    private var redditAuthenticatedRegularView: some View {
         Group {
             HStack(spacing: 12) {
                 VStack(alignment: .leading) {
@@ -1316,20 +1446,21 @@ struct SettingsView: View {
                 }
                 Spacer()
                 Button("Refresh Token") {
-                    refreshRedditToken()
+                    appState.redditOAuthManager.refreshAccessToken { result in
+                        switch result {
+                        case .success:
+                            print("🔐 RedditOAuth: Token refreshed manually from SettingsView")
+                        case .failure(let error):
+                            print("❌ RedditOAuth: Manual token refresh failed: \(error.localizedDescription)")
+                        }
+                    }
                 }
-                .buttonStyle(.bordered)
-
-                Button("Reconnect") {
-                    reconnectReddit()
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .settingsGlassButtonStyle()
 
                 Button("Logout") {
                     appState.redditOAuthManager.logout()
                 }
-                .buttonStyle(.borderedProminent)
+                .settingsGlassButtonStyle(prominent: true)
                 .tint(.red)
             }
             .padding(.vertical, 8)
@@ -1337,129 +1468,32 @@ struct SettingsView: View {
             Text("✅ Using OAuth - Higher rate limits (600 req/10min)")
                 .font(.caption)
                 .foregroundColor(.green)
-
-            Text(appState.redditOAuthManager.hasReplyPermission ? "✅ Reply permission granted" : "⚠️ Reconnect to grant reply permission")
-                .font(.caption)
-                .foregroundColor(appState.redditOAuthManager.hasReplyPermission ? .green : .orange)
         }
-    }
-
-    private var redditAuthenticatedPhoneView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Logged in as")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("u/\(appState.redditOAuthManager.username)")
-                    .font(.headline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 8)
-
-            redditAuthButtons
-
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Using OAuth - higher rate limits", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-
-                Label(
-                    appState.redditOAuthManager.hasReplyPermission ? "Reply permission granted" : "Reconnect to grant reply permission",
-                    systemImage: appState.redditOAuthManager.hasReplyPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                )
-                .foregroundColor(appState.redditOAuthManager.hasReplyPermission ? .green : .orange)
-            }
-            .font(.caption)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder
-    private var redditAuthButtons: some View {
-        VStack(spacing: 8) {
-            refreshRedditTokenButton
-            reconnectRedditButton
-            logoutRedditButton
-        }
-    }
-
-    private var refreshRedditTokenButton: some View {
-        Button("Refresh Token") {
-            refreshRedditToken()
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
-        .lineLimit(1)
-        .frame(maxWidth: .infinity)
-    }
-
-    private var reconnectRedditButton: some View {
-        Button("Reconnect") {
-            reconnectReddit()
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.orange)
-        .controlSize(.regular)
-        .lineLimit(1)
-        .frame(maxWidth: .infinity)
-    }
-
-    private var logoutRedditButton: some View {
-        Button("Logout") {
-            appState.redditOAuthManager.logout()
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.red)
-        .controlSize(.regular)
-        .lineLimit(1)
-        .frame(maxWidth: .infinity)
     }
 
     private var redditSignInView: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Group {
             Button(action: {
-                signInWithReddit()
+                appState.redditOAuthManager.startOAuthFlow { result in
+                    switch result {
+                    case .success:
+                        print("✅ Successfully authenticated with Reddit")
+                    case .failure(let error):
+                        print("❌ Reddit auth failed: \(error.localizedDescription)")
+                    }
+                }
             }) {
                 HStack {
                     Image(systemName: "person.circle.fill")
                     Text("Sign in with Reddit")
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .settingsGlassButtonStyle(prominent: true)
             .tint(.orange)
 
             Text("⚠️ Using public API - Limited to ~60 requests/min")
                 .font(.caption)
                 .foregroundColor(.orange)
-        }
-    }
-
-    private func reconnectReddit() {
-        appState.redditOAuthManager.logout()
-        signInWithReddit()
-    }
-
-    private func refreshRedditToken() {
-        appState.redditOAuthManager.refreshAccessToken { result in
-            switch result {
-            case .success:
-                print("🔐 RedditOAuth: Token refreshed manually from SettingsView")
-            case .failure(let error):
-                print("❌ RedditOAuth: Manual token refresh failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func signInWithReddit() {
-        appState.redditOAuthManager.startOAuthFlow { result in
-            switch result {
-            case .success:
-                print("✅ Successfully authenticated with Reddit")
-            case .failure(let error):
-                print("❌ Reddit auth failed: \(error.localizedDescription)")
-            }
         }
     }
 
@@ -1472,7 +1506,11 @@ struct SettingsView: View {
         case .appleCloud:
             return "Uses Apple Intelligence cloud AI via Shortcuts"
         case .applePCCGateway:
+            #if os(macOS)
+            return "Runs /usr/bin/fm respond --model pcc locally on this Mac"
+            #else
             return "Uses a token-protected Mac gateway that forwards OpenAI-style requests to fm serve with the pcc model"
+            #endif
         case .mlxLocal:
             return "Runs Gemma locally with LiteRT-LM acceleration using .litertlm model files"
         case .coreAIMLXLocal:
@@ -1480,7 +1518,11 @@ struct SettingsView: View {
         case .webAI:
             return "Uses the selected web AI destination as the live summary provider and captures replies back into the app"
         case .summarizeDaemon:
+            #if os(macOS)
+            return "Uses the Summarize client directly with Codex gpt-5.5 on fast tier, low reasoning, and low verbosity"
+            #else
             return "Uses the local Summarize daemon with Codex gpt-5.5 on fast tier, low reasoning, and low verbosity"
+            #endif
         }
     }
 
@@ -1488,6 +1530,43 @@ struct SettingsView: View {
     @ViewBuilder
     private var pccGatewaySettingsView: some View {
         VStack(alignment: .leading, spacing: 10) {
+            #if os(macOS)
+            Text("Apple PCC")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text("Runs /usr/bin/fm respond --model pcc locally on this Mac. If this beta blocks PCC from the app process, RSSReader retries through a minimized Terminal helper.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button {
+                isTestingPCCGatewayConnection = true
+                pccGatewayConnectionStatus = "Testing..."
+                appState.testPCCGatewayConnection { result in
+                    isTestingPCCGatewayConnection = false
+                    switch result {
+                    case .success(let message):
+                        pccGatewayConnectionStatus = message.isEmpty ? "Connected" : message
+                    case .failure(let error):
+                        pccGatewayConnectionStatus = "Connection failed: \(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                if isTestingPCCGatewayConnection {
+                    Label("Testing...", systemImage: "arrow.triangle.2.circlepath")
+                } else {
+                    Label("Check PCC", systemImage: "bolt.horizontal.circle")
+                }
+            }
+            .settingsGlassButtonStyle()
+            .disabled(isTestingPCCGatewayConnection)
+
+            if let pccGatewayConnectionStatus {
+                Text(pccGatewayConnectionStatus)
+                    .font(.caption)
+                    .foregroundStyle(pccGatewayConnectionStatus.localizedCaseInsensitiveContains("failed") ? Color.secondary : Color.green)
+            }
+            #else
             Text("Apple PCC Gateway")
                 .font(.subheadline)
                 .fontWeight(.semibold)
@@ -1564,7 +1643,7 @@ struct SettingsView: View {
                     Label("Test Connection", systemImage: "bolt.horizontal.circle")
                 }
             }
-            .buttonStyle(.bordered)
+            .settingsGlassButtonStyle()
             .disabled(isTestingPCCGatewayConnection)
 
             if let pccGatewayConnectionStatus {
@@ -1572,6 +1651,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(pccGatewayConnectionStatus == "Connected" ? .green : .secondary)
             }
+            #endif
         }
         .padding(.top, 8)
     }
@@ -1580,6 +1660,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var summarizeSettingsView: some View {
         VStack(alignment: .leading, spacing: 10) {
+            #if os(iOS)
             Text("Summarize Bridge")
                 .font(.subheadline)
                 .fontWeight(.semibold)
@@ -1628,7 +1709,11 @@ struct SettingsView: View {
             .autocorrectionDisabled()
             #endif
 
-            #if os(macOS)
+            #elseif os(macOS)
+            Text("Summarize Daemon")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
             SecureField("Daemon token (Mac)", text: Binding(
                 get: { appState.settings.summarizeDaemonToken },
                 set: { appState.setSummarizeDaemonToken($0) }
@@ -1637,10 +1722,6 @@ struct SettingsView: View {
                 cornerRadius: 12,
                 tintColor: .indigo.opacity(0.3)
             ))
-
-            Text("The gateway config should use \(RSSSummarizeGatewayConfig.codexModel) with fast service tier, low reasoning, and low verbosity. The in-app model label is \(appState.settings.summarizeDaemonModel).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             #endif
 
             Button {
@@ -1662,7 +1743,7 @@ struct SettingsView: View {
                     Label("Test Connection", systemImage: "bolt.horizontal.circle")
                 }
             }
-            .buttonStyle(.bordered)
+            .settingsGlassButtonStyle()
             .disabled(isTestingSummarizeConnection)
 
             if let summarizeConnectionStatus {
@@ -1686,7 +1767,7 @@ struct SettingsView: View {
     private var mlxSettingsView: some View {
         VStack(alignment: .leading, spacing: 10) {
             let effectiveContextTokens = AppSettings.effectiveLiteRTContextTokens(appState.settings.mlxMaxContextTokens)
-            let maxOutputTokens = max(64, min(4096, effectiveContextTokens - max(256, effectiveContextTokens / 4)))
+            let maxOutputTokens = max(64, min(1024, effectiveContextTokens - max(256, effectiveContextTokens / 4)))
 
             TextField("LiteRT Hugging Face Repo", text: Binding(
                 get: { appState.settings.mlxModelID },
@@ -1701,7 +1782,7 @@ struct SettingsView: View {
                 tintColor: .orange.opacity(0.3)
             ))
             .onSubmit {
-                appState.warmUpMLXIfNeeded()
+                Task { await appState.warmUpMLXIfNeeded() }
             }
 
             Text("Use a LiteRT-LM repo such as \(LiteRTLocalService.defaultModelRepo).")
@@ -1762,7 +1843,7 @@ struct SettingsView: View {
                     Text("Download LiteRT Model")
                 }
             }
-            .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .blue.opacity(0.3)))
+            .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
             .disabled(isLoadingMLXModel)
 
             if let progress = mlxDownloadProgress {
@@ -1801,7 +1882,7 @@ struct SettingsView: View {
                 tintColor: .orange.opacity(0.3)
             ))
             .onSubmit {
-                appState.warmUpMLXIfNeeded()
+                Task { await appState.warmUpMLXIfNeeded() }
             }
 
             Text("Uses an MLX-format Gemma 4 E2B model for comparison with the LiteRT Gemma 4 E2B model.")
@@ -1862,7 +1943,7 @@ struct SettingsView: View {
                     Text("Download CoreAI MLX Model")
                 }
             }
-            .buttonStyle(AdaptiveLiquidGlassButtonStyle(tintColor: .blue.opacity(0.3)))
+            .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
             .disabled(isLoadingMLXModel)
 
             if let progress = mlxDownloadProgress {
@@ -1913,8 +1994,8 @@ struct SettingsView: View {
                 await MainActor.run {
                     progress.completedUnitCount = 100
                     mlxDownloadProgress = progress
-                    appState.warmUpMLXIfNeeded()
                 }
+                await appState.warmUpMLXIfNeeded()
             } catch {
                 await MainActor.run {
                     mlxLoadError = error.localizedDescription
@@ -1942,9 +2023,7 @@ struct SettingsView: View {
                         }
                     }
                 )
-                await MainActor.run {
-                    appState.warmUpMLXIfNeeded()
-                }
+                await appState.warmUpMLXIfNeeded()
             } catch {
                 await MainActor.run {
                     mlxLoadError = error.localizedDescription

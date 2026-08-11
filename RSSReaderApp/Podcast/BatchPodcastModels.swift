@@ -104,9 +104,8 @@ struct BatchPodcastSource: Codable, Equatable, Hashable {
     let ordinal: Int
 }
 
-/// Immutable evidence captured at the moment the user opens Batch Podcast.
-/// It contains only material already retained by AppState; constructing it has
-/// no network or extraction side effects.
+/// Immutable evidence captured when the user opens Batch Podcast. Building it
+/// only reads AppState's retained values and never performs network work.
 struct BatchPodcastSnapshot {
     let posts: [RedditPost]
     let articles: [Article]
@@ -426,9 +425,6 @@ enum PodcastEpisodeWordLimiter {
             overflow -= removed
         }
 
-        // A pathological response can contain more than 1,060 one-word turns.
-        // Drop only trailing turns in that case so the automatic cap remains a
-        // guarantee without adding a spoken-text rejection rule.
         while overflow > 0, let last = turns.last {
             turns.removeLast()
             overflow -= last.text.split(whereSeparator: \.isWhitespace).count

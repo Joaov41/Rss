@@ -1,14 +1,14 @@
+import AppKit
 import SwiftUI
-import UIKit
+import UniformTypeIdentifiers
 
 struct BatchPodcastGlassModifier<S: Shape>: ViewModifier {
     let shape: S
-    var isClear = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(isClear ? .clear : .regular.interactive(), in: shape)
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: shape)
         } else {
             content
                 .background(.ultraThinMaterial, in: shape)
@@ -29,17 +29,32 @@ struct BatchPodcastGlassModifier<S: Shape>: ViewModifier {
     }
 }
 
+private struct BatchPodcastClearGlassModifier<S: Shape>: ViewModifier {
+    let shape: S
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.clear, in: shape)
+        } else {
+            content
+                .background(Color.white.opacity(0.06), in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.16), lineWidth: 0.5))
+        }
+    }
+}
+
 extension View {
     func batchPodcastGlass<S: Shape>(in shape: S) -> some View {
         modifier(BatchPodcastGlassModifier(shape: shape))
     }
 
     func batchPodcastClearGlass<S: Shape>(in shape: S) -> some View {
-        modifier(BatchPodcastGlassModifier(shape: shape, isClear: true))
+        modifier(BatchPodcastClearGlassModifier(shape: shape))
     }
 }
 
-struct BatchPodcastGlassButtonStyle: ButtonStyle {
+private struct BatchPodcastGlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .padding(.horizontal, 12)
@@ -55,40 +70,43 @@ struct BatchPodcastPresentationHost: View {
     @ObservedObject var session: BatchPodcastSession
 
     var body: some View {
-        Color.clear
-            .ignoresSafeArea()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .fullScreenCover(
-                isPresented: Binding(
-                    get: { session.isPresented },
-                    set: { isPresented in
-                        if !isPresented, session.isPresented { session.minimize() }
-                    }
-                )
-            ) {
-                BatchPodcastView(session: session)
-                    .environmentObject(appState)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if session.isMinimized {
-                    Button {
-                        session.restore()
-                    } label: {
-                        Label("Podcast", systemImage: "waveform.badge.mic")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                    }
-                    .buttonStyle(.plain)
-                    .batchPodcastGlass(in: Capsule())
-                    .accessibilityLabel("Restore podcast")
-                    .help("Restore podcast")
+        ZStack(alignment: .bottomTrailing) {
+            Color.clear
+                .ignoresSafeArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+
+            if session.isMinimized {
+                Button {
+                    session.restore()
+                } label: {
+                    Label("Podcast", systemImage: "waveform.badge.mic")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .batchPodcastGlass(in: Capsule(style: .continuous))
+                .accessibilityLabel("Restore podcast")
+                .help("Restore podcast")
                     .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                     .padding(.trailing, 16)
                     .padding(.bottom, 96)
-                }
             }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { session.isPresented },
+                set: { isPresented in
+                    if !isPresented, session.isPresented { session.minimize() }
+                }
+            )
+        ) {
+            BatchPodcastView(session: session)
+                .environmentObject(appState)
+                .frame(minWidth: 720, idealWidth: 820, minHeight: 600, idealHeight: 760)
+        }
     }
 }
 
@@ -154,13 +172,11 @@ struct BatchPodcastView: View {
                     .help("Keep the podcast working while you use the app")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Close") {
-                        session.close()
-                    }
-                    .buttonStyle(BatchPodcastGlassButtonStyle())
+                    Button("Close") { session.close() }
+                        .buttonStyle(BatchPodcastGlassButtonStyle())
                 }
             }
-            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .windowToolbar)
         }
         .overlay(alignment: .bottomTrailing) {
             if session.state == .saving {
@@ -173,7 +189,7 @@ struct BatchPodcastView: View {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .batchPodcastClearGlass(in: Capsule())
+                .batchPodcastClearGlass(in: Capsule(style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                 .padding(20)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -182,20 +198,9 @@ struct BatchPodcastView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: session.state == .saving)
-        .sheet(
-            isPresented: Binding(
-                get: { session.exportURL != nil },
-                set: { isPresented in
-                    if !isPresented { session.finishExport() }
-                }
-            )
-        ) {
-            if let url = session.exportURL {
-                BatchPodcastFileExporter(url: url) {
-                    session.finishExport()
-                }
-                .ignoresSafeArea()
-            }
+        .onChange(of: session.exportURL) { _, exportURL in
+            guard let exportURL else { return }
+            presentSavePanel(for: exportURL)
         }
     }
 
@@ -299,7 +304,7 @@ struct BatchPodcastView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
     }
 
     @ViewBuilder
@@ -374,7 +379,7 @@ struct BatchPodcastView: View {
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
             }
         }
     }
@@ -407,14 +412,13 @@ struct BatchPodcastView: View {
 
                 Spacer()
 
-                Button {
-                    session.exportPodcast()
-                } label: {
-                    Label("Save Podcast", systemImage: "square.and.arrow.down")
+                Button { session.exportPodcast() } label: {
+                    Label("Save Podcast…", systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(BatchPodcastGlassButtonStyle())
                 .disabled(session.state == .saving || playbackController.state == .preparing || playbackController.state == .saving)
                 .accessibilityLabel("Save podcast as WAV")
+                .help("Export the complete podcast as a WAV file")
             }
 
             ProgressView(value: playbackController.progress)
@@ -423,8 +427,8 @@ struct BatchPodcastView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-        .onChange(of: episode.id) { _ in session.stopPlayback() }
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+        .onChange(of: episode.id) { _, _ in session.stopPlayback() }
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -434,37 +438,30 @@ struct BatchPodcastView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
     }
-}
 
-private struct BatchPodcastFileExporter: UIViewControllerRepresentable {
-    let url: URL
-    let onFinish: () -> Void
+    private func presentSavePanel(for url: URL) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.wav]
+        panel.nameFieldStringValue = url.lastPathComponent
+        panel.canCreateDirectories = true
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onFinish: onFinish)
-    }
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onFinish: () -> Void
-
-        init(onFinish: @escaping () -> Void) {
-            self.onFinish = onFinish
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            defer { session.finishExport() }
+            guard response == .OK, let destination = panel.url else { return }
+            do {
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    throw BatchPodcastError.audioExportFailed("A file already exists at that location.")
+                }
+                try FileManager.default.copyItem(at: url, to: destination)
+            } catch {
+                session.presentError(error.localizedDescription)
+            }
         }
 
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            onFinish()
-        }
-
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onFinish()
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
         }
     }
 }

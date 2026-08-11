@@ -45,15 +45,13 @@ enum BatchPodcastContextBuilder {
         var chunks: [BatchPodcastEvidenceChunk] = []
 
         let summaryByReference = summaries.reduce(into: [String: GlobalSummaryItem]()) { result, item in
-                guard let reference = item.referenceId?.trimmingCharacters(in: .whitespacesAndNewlines), !reference.isEmpty else { return }
-                if result[reference] == nil { result[reference] = item }
+            guard let reference = item.referenceId?.trimmingCharacters(in: .whitespacesAndNewlines), !reference.isEmpty else { return }
+            if result[reference] == nil { result[reference] = item }
         }
 
         if isReddit {
             var postsByID: [String: RedditPost] = [:]
-            for post in posts {
-                postsByID[post.id] = post
-            }
+            for post in posts { postsByID[post.id] = post }
             for (post, _) in cachedComments where postsByID[post.id] == nil {
                 postsByID[post.id] = post
             }
@@ -93,9 +91,7 @@ enum BatchPodcastContextBuilder {
             }
 
             var commentsByPostID: [String: [String]] = [:]
-            for (post, comments) in cachedComments {
-                commentsByPostID[post.id] = comments
-            }
+            for (post, comments) in cachedComments { commentsByPostID[post.id] = comments }
             for post in orderedPosts {
                 guard let savedComments = commentsByPostID[post.id] else { continue }
                 for (index, comment) in savedComments.enumerated() {

@@ -159,8 +159,9 @@ final class KokoroTTSService {
         #endif
     }
 
-    /// Returns bounded, sentence-aware chunks for callers that need to stream
-    /// MLX audio without changing the existing Read Aloud playback path.
+    /// Model-safe chunks used by the Batch Podcast player. The first short
+    /// chunk lets playback begin quickly; later chunks are kept bounded and
+    /// end at sentence boundaries when possible.
     func speechChunks(
         from input: String,
         firstChunkCharacters: Int = 140,

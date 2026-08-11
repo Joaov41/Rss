@@ -4,6 +4,90 @@ import FeedKit
 import SwiftUI // For UIImage
 import SwiftSoup
 
+private let articleAntiBlockTextPhrases = [
+    "ad or script blocking software",
+    "ad blocking software is interfering",
+    "script blocking software is interfering",
+    "disable any ad or script blocking software",
+    "disable any ad blocking software",
+    "disable any script blocking software"
+]
+
+private let articleAdvertisingSelectors = [
+    "script",
+    "style",
+    "iframe",
+    "frame",
+    "ins",
+    "noscript",
+    "object",
+    "embed",
+    "form",
+    "amp-ad",
+    "amp-embed",
+    "[role=\"advertisement\"]",
+    "[data-ad]",
+    "[data-ads]",
+    "[data-ad-client]",
+    "[data-ad-slot]",
+    "[data-ad-unit]",
+    "[data-dfp]",
+    "[data-gpt]",
+    "[data-google-query-id]",
+    "[data-taboola]",
+    "[data-outbrain]",
+    "[data-sponsored]",
+    ".advertisement",
+    ".ad-container",
+    ".ad-container--leaderboard",
+    ".ad-container--river",
+    ".adsbygoogle",
+    ".author_ad",
+    ".inlinead",
+    ".google-auto-placed",
+    ".googlepublisherpluginad",
+    ".sponsor-block",
+    ".newsletter-block",
+    ".comments-link",
+    ".st-related-posts"
+]
+
+private func containsArticleAntiBlockText(_ text: String) -> Bool {
+    let normalized = text
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+
+    guard !normalized.isEmpty else { return false }
+    return articleAntiBlockTextPhrases.contains { normalized.contains($0) }
+}
+
+private func stripArticleAdvertisingElements(in document: SwiftSoup.Document) {
+    for selector in articleAdvertisingSelectors {
+        try? document.select(selector).remove()
+    }
+
+    try? document.select("p, div, section, aside, figure, span, strong, b").forEach { element in
+        let text = (try? element.text().trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+        if !text.isEmpty && text.count < 900 && containsArticleAntiBlockText(text) {
+            try? element.remove()
+        }
+    }
+}
+
+private func stripArticleAdvertisingElements(in element: SwiftSoup.Element) {
+    for selector in articleAdvertisingSelectors {
+        try? element.select(selector).remove()
+    }
+
+    try? element.select("p, div, section, aside, figure, span, strong, b").forEach { candidate in
+        let text = (try? candidate.text().trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+        if !text.isEmpty && text.count < 900 && containsArticleAntiBlockText(text) {
+            try? candidate.remove()
+        }
+    }
+}
+
 // MARK: - String Extension for HTML Processing
 extension String {
     func removingHTML() -> String {
@@ -20,6 +104,7 @@ extension String {
         // Just clean up the HTML without inserting image markers
         do {
             let document = try SwiftSoup.parse(self)
+            stripArticleAdvertisingElements(in: document)
             
             // Fix image URLs to ensure they're absolute
             let imgElements = try document.select("img")
@@ -112,31 +197,6 @@ extension String {
 // MARK: - FeedService Class
 class FeedService {
     private var cancellables = Set<AnyCancellable>()
-
-    private final class CachedArticleContent {
-        let sourceContentFingerprint: Int
-        let content: String
-        let previewText: String
-        let expiresAt: Date
-
-        init(sourceContentFingerprint: Int, content: String, previewText: String, expiresAt: Date) {
-            self.sourceContentFingerprint = sourceContentFingerprint
-            self.content = content
-            self.previewText = previewText
-            self.expiresAt = expiresAt
-        }
-    }
-
-    // Full-article HTML is expensive to download and parse. Keep the cache
-    // bounded so it cannot become another source of sustained memory growth.
-    private let fullArticleCache: NSCache<NSString, CachedArticleContent> = {
-        let cache = NSCache<NSString, CachedArticleContent>()
-        cache.countLimit = 64
-        cache.totalCostLimit = 16 * 1024 * 1024
-        return cache
-    }()
-    private let fullArticleCacheTTL: TimeInterval = 10 * 60
-    private let maxConcurrentFullArticleFetches = 4
     
     // MARK: - Feed Fetching
     func fetchFeed(url: String) -> AnyPublisher<Feed, Never> {
@@ -343,7 +403,7 @@ class FeedService {
                 title: rawTitle,
                 feedURL: url
             )
-            
+
             var article = Article(
                 id: articleId,
                 title: rawTitle.removingHTML(),
@@ -424,118 +484,36 @@ class FeedService {
     
     /// For each article in the feed that appears truncated, fetch the full content from the webpage.
     private func fetchFullArticlesIfNeeded(for feed: Feed) -> AnyPublisher<Feed, Never> {
-        feed.articles.publisher
-            .flatMap(maxPublishers: .max(maxConcurrentFullArticleFetches)) { article -> AnyPublisher<Article, Never> in
-            if self.isTruncated(article.content), let link = article.url {
-                return self.fetchFullArticle(for: article, from: link)
+        let articlePublishers = feed.articles.map { article -> AnyPublisher<Article, Never> in
+            if isTruncated(article.content), let link = article.url {
+                return fetchFullArticle(for: article, from: link)
             } else {
                 return Just(article).eraseToAnyPublisher()
             }
         }
+        
+        return Publishers.MergeMany(articlePublishers)
             .collect()
             .map { updatedArticles -> Feed in
                 // Sort articles by publishDate descending (most recent first)
                 let sortedArticles = updatedArticles.sorted { $0.publishDate > $1.publishDate }
+                // 🐞 DEBUG LOG: Print publishDate for each article after sorting
+                print("🐞 Article publish dates after sorting:")
+                for article in sortedArticles {
+                    print(article.publishDate)
+                }
                 var finalFeed = feed
                 finalFeed.articles = sortedArticles
                 return finalFeed
             }
             .eraseToAnyPublisher()
     }
-
-    private func articleContentFingerprint(_ content: String) -> Int {
-        var hasher = Hasher()
-        hasher.combine(content)
-        return hasher.finalize()
-    }
-
-    private func canonicalArticleURL(_ url: URL) -> String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url.absoluteString
-        }
-
-        components.fragment = nil
-        components.scheme = components.scheme?.lowercased()
-        components.host = components.host?.lowercased()
-
-        if let port = components.port, port == 80 || port == 443 {
-            components.port = nil
-        }
-
-        if var path = components.percentEncodedPath.removingPercentEncoding {
-            if path.count > 1 && path.hasSuffix("/") {
-                path.removeLast()
-            }
-            components.percentEncodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? components.percentEncodedPath
-        }
-
-        return components.string ?? url.absoluteString
-    }
-
-    private func cachedFullArticle(for article: Article, from url: URL) -> Article? {
-        let cacheKey = canonicalArticleURL(url) as NSString
-        guard let cached = fullArticleCache.object(forKey: cacheKey) else {
-            return nil
-        }
-
-        guard cached.expiresAt > Date() else {
-            fullArticleCache.removeObject(forKey: cacheKey)
-            return nil
-        }
-
-        guard cached.sourceContentFingerprint == articleContentFingerprint(article.content) else {
-            return nil
-        }
-
-        var updated = article
-        updated.content = cached.content
-        updated.previewText = cached.previewText
-        return updated
-    }
-
-    private func cacheFullArticle(_ article: Article, for url: URL, sourceContentFingerprint: Int) {
-        guard !article.content.isEmpty else { return }
-        guard articleContentFingerprint(article.content) != sourceContentFingerprint else { return }
-
-        let cacheEntry = CachedArticleContent(
-            sourceContentFingerprint: sourceContentFingerprint,
-            content: article.content,
-            previewText: article.previewText,
-            expiresAt: Date().addingTimeInterval(fullArticleCacheTTL)
-        )
-        let cost = max(1, article.content.utf8.count + article.previewText.utf8.count)
-        fullArticleCache.setObject(
-            cacheEntry,
-            forKey: canonicalArticleURL(url) as NSString,
-            cost: cost
-        )
-    }
     
     /// Fetch the full article content by performing a secondary network request and scraping the webpage.
     private func fetchFullArticle(for article: Article, from url: URL) -> AnyPublisher<Article, Never> {
-        if let cachedArticle = cachedFullArticle(for: article, from: url) {
-            return Just(cachedArticle).eraseToAnyPublisher()
-        }
-
-        let sourceContentFingerprint = articleContentFingerprint(article.content)
-
         return URLSession.shared.dataTaskPublisher(for: url)
-            .tryMap { output -> Data in
-                if let response = output.response as? HTTPURLResponse {
-                    guard (200..<300).contains(response.statusCode) else {
-                        throw URLError(.badServerResponse)
-                    }
-
-                    if let mimeType = response.mimeType?.lowercased(),
-                       ["application/pdf", "image/", "audio/", "video/"].contains(where: mimeType.hasPrefix) {
-                        throw URLError(.cannotParseResponse)
-                    }
-                }
-                return output.data
-            }
+            .map { $0.data }
             .catch { _ in Just(Data()) } // Fallback to empty data if network fails
-            // Ensure HTML decoding and SwiftSoup work stay off the main thread.
-            .receive(on: DispatchQueue.global(qos: .utility))
             .map { data -> Article in
                 guard let html = String(data: data, encoding: .utf8) else {
                     return article
@@ -543,23 +521,21 @@ class FeedService {
                 
                 do {
                     let doc = try SwiftSoup.parse(html)
+                    stripArticleAdvertisingElements(in: doc)
                     
                     // Site-specific handling for known problematic sites
                     let host = url.host?.lowercased() ?? ""
                     
                     // Special handling for 9to5Mac
                     if host.contains("9to5mac.com") {
-                        let updated = self.handle9to5Mac(doc: doc, article: article)
-                        self.cacheFullArticle(updated, for: url, sourceContentFingerprint: sourceContentFingerprint)
-                        return updated
+                        return self.handle9to5Mac(doc: doc, article: article)
                     }
                     
                     // Remove common "read more" elements and other distractions
                     try doc.select("a.more-link, .more-link, .read-more, .readmore, " +
                                   ".sharedaddy, .share-buttons, .social-share, " +
                                   ".comments, .article-comments, " +
-                                  ".related-posts, .recommended, " +
-                                  "script, style, iframe, .advertisement, .ad-container").remove()
+                                  ".related-posts, .recommended").remove()
                     
                     // Try multiple content selectors in order of specificity
                     let potentialContentSelectors = [
@@ -590,6 +566,8 @@ class FeedService {
                     
                     // Fix images to ensure they have proper src attributes
                     if let element = mainElement {
+                        stripArticleAdvertisingElements(in: element)
+
                         let imgElements = try element.select("img")
                         for img in imgElements {
                             // Handle data-lazy-src which is common in WordPress sites
@@ -628,8 +606,6 @@ class FeedService {
                     
                     var updated = article
                     updated.content = contentHTML
-                    updated.previewText = Article.makePreviewText(from: contentHTML)
-                    self.cacheFullArticle(updated, for: url, sourceContentFingerprint: sourceContentFingerprint)
                     return updated
                     
                 } catch {
@@ -646,7 +622,7 @@ class FeedService {
     private func handle9to5Mac(doc: SwiftSoup.Document, article: Article) -> Article {
         do {
             // Remove sponsor blocks, newsletter forms, and other clutter
-            try doc.select(".sponsor-block, .newsletter-block, .comments-link, .st-related-posts, script, style, form").remove()
+            stripArticleAdvertisingElements(in: doc)
             
             // 9to5Mac uses a specific content structure
             let contentSelectors = [
@@ -666,6 +642,8 @@ class FeedService {
             guard let contentElement = mainElement else {
                 return article
             }
+
+            stripArticleAdvertisingElements(in: contentElement)
             
             // Fix images to ensure they have proper src attributes
             let imgElements = try contentElement.select("img")
@@ -711,7 +689,6 @@ class FeedService {
             // Create updated article with full content
             var updated = article
             updated.content = contentHTML
-            updated.previewText = Article.makePreviewText(from: contentHTML)
             return updated
             
         } catch {

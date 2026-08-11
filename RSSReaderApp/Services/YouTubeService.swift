@@ -673,7 +673,6 @@ private final class YouTubeAtomParser: NSObject, XMLParserDelegate {
             id: "youtube:\(videoID)",
             title: entry.title ?? "YouTube Video",
             content: content,
-            previewText: Article.makePreviewText(from: content),
             url: url,
             publishDate: date,
             author: entry.author ?? feedAuthor,
