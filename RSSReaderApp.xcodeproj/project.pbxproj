@@ -360,6 +360,7 @@
 			);
 			name = "Sign embedded dylibs";
 			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libCLiteRTLM_mac.dylib",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -551,7 +552,7 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 21;
+					CURRENT_PROJECT_VERSION = 22;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
@@ -588,7 +589,7 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 21;
+					CURRENT_PROJECT_VERSION = 22;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
