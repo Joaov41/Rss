@@ -273,6 +273,7 @@
 				A1B2C3D4E5F6A7B8C9D0E226 /* Frameworks */,
 				A1B2C3D4E5F6A7B8C9D0E235 /* Sources */,
 				A1B2C3D4E5F6A7B8C9D0E236 /* Resources */,
+				E1B2C3D4E5F6A7B8C9D0E240 /* Sign embedded dylibs */,
 			);
 			buildRules = (
 			);
@@ -347,6 +348,21 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E1B2C3D4E5F6A7B8C9D0E240 /* Sign embedded dylibs */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			name = "Sign embedded dylibs";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nif [ \"${CODE_SIGNING_ALLOWED:-NO}\" != \"YES\" ] || [ -z \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n    exit 0\nfi\ndylib=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libCLiteRTLM_mac.dylib\"\nif [ -f \"$dylib\" ]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --entitlements \"${SRCROOT}/RSSReaderApp/EmbeddedDylib.entitlements\" --timestamp=none \"$dylib\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A1B2C3D4E5F6A7B8C9D0E235 /* Sources */ = {
@@ -532,7 +548,7 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 3;
+					CURRENT_PROJECT_VERSION = 20;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
@@ -569,7 +585,7 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 3;
+					CURRENT_PROJECT_VERSION = 20;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
