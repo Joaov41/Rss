@@ -528,7 +528,7 @@
 				CLANG_ENABLE_EXPLICIT_MODULES = NO;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				CODE_SIGN_ENTITLEMENTS = RSSReaderApp/RSSReaderApp.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_IDENTITY = "Apple Distribution";
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
@@ -565,7 +565,7 @@
 				CLANG_ENABLE_EXPLICIT_MODULES = NO;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				CODE_SIGN_ENTITLEMENTS = RSSReaderApp/RSSReaderApp.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_IDENTITY = "Apple Distribution";
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
