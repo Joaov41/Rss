@@ -213,6 +213,7 @@ struct RedditDetailView: View {
     
     // TTS state variables for Q&A
     @State private var isSynthesizingSpeechQA: Bool = false
+    @State private var isPreparingLocalTTSQA: Bool = false
     @State private var isSpeakingLocallyQA: Bool = false
     @State private var speechSynthesisErrorQA: String? = nil
     @State private var ttsCanceledQA: Bool = false
@@ -1319,10 +1320,10 @@ struct RedditDetailView: View {
             HStack(spacing: 0) {
                 SummaryTTSMiniPlayer(
                     isReddit: true,
-                    playDisabled: isSynthesizingSpeechQA || isSpeakingLocallyQA || qaAnswerUnavailable,
-                    stopDisabled: !isSynthesizingSpeechQA && !isSpeakingLocallyQA,
+                    playDisabled: isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || qaAnswerUnavailable,
+                    stopDisabled: !isSynthesizingSpeechQA && !isPreparingLocalTTSQA && !isSpeakingLocallyQA,
                     localDisabled: isSynthesizingSpeechQA || qaAnswerUnavailable,
-                    localIsActive: isSpeakingLocallyQA,
+                    localIsActive: isPreparingLocalTTSQA || isSpeakingLocallyQA,
                     onPlay: { speakAnswerQA(answerText) },
                     onStop: stopQASpeech,
                     onLocal: { speakAnswerLocallyQA(answerText) },
@@ -1359,6 +1360,16 @@ struct RedditDetailView: View {
                     .scaleEffect(0.7)
                     .padding(.trailing, 5)
                 Text("Reading answer...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top, 4)
+        } else if isPreparingLocalTTSQA {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.trailing, 5)
+                Text("Preparing local TTS...")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -2410,6 +2421,7 @@ struct RedditDetailView: View {
         #endif
         nextAudioChunkQA = nil
         isSynthesizingSpeechQA = false
+        isPreparingLocalTTSQA = false
         isSpeakingLocallyQA = false
     }
 
@@ -2419,6 +2431,15 @@ struct RedditDetailView: View {
             speechSynthesisErrorQA = "No answer available to read."
             return
         }
+
+        #if os(iOS)
+        if appState.summaryService.getOpenAIApiKey()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty {
+            speakAnswerLocallyQA(text)
+            return
+        }
+        #endif
         
         // Stop any currently playing sounds before starting a new one
         #if os(iOS)
@@ -2555,11 +2576,12 @@ struct RedditDetailView: View {
     private func speakAnswerLocallyQA(_ text: String) {
         #if os(iOS)
         // Toggle off if already speaking
-        if isSpeakingLocallyQA {
+        if isPreparingLocalTTSQA || isSpeakingLocallyQA {
             localTTSTaskQA?.cancel()
             localTTSTaskQA = nil
             KokoroTTSService.shared.cancelPlayback()
             localSpeechSynthQA?.stopSpeaking(at: .immediate)
+            isPreparingLocalTTSQA = false
             isSpeakingLocallyQA = false
             return
         }
@@ -2580,7 +2602,8 @@ struct RedditDetailView: View {
                 speechSynthesisErrorQA = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            isSpeakingLocallyQA = true
+            isPreparingLocalTTSQA = true
+            isSpeakingLocallyQA = false
             isSynthesizingSpeechQA = false
             speechSynthesisErrorQA = nil
             let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
@@ -2594,12 +2617,18 @@ struct RedditDetailView: View {
                 soundDelegate: soundDelegateQA,
                 taskStore: &localTTSTaskQA,
                 onCompleted: {
+                    self.isPreparingLocalTTSQA = false
                     self.isSpeakingLocallyQA = false
                     self.localTTSTaskQA = nil
                 },
                 onError: { message in
                     self.speechSynthesisErrorQA = message
+                    self.isPreparingLocalTTSQA = false
                     self.isSpeakingLocallyQA = false
+                },
+                onPlaybackStarted: {
+                    self.isPreparingLocalTTSQA = false
+                    self.isSpeakingLocallyQA = true
                 }
             )
             return
@@ -3899,6 +3928,7 @@ struct GlassyCommentSummary: View {
     
     // TTS state variables
     @State private var isSynthesizingSpeech: Bool = false
+    @State private var isPreparingLocalTTS: Bool = false
     @State private var isSpeakingLocally: Bool = false
     @State private var speechSynthesisError: String? = nil
     @State private var ttsCanceled: Bool = false
@@ -3928,10 +3958,10 @@ VStack(alignment: .leading, spacing: 14) {
             // Mac voice picker removed (avoids cross-scope state). TTS uses current system voice.
                 SummaryTTSMiniPlayer(
                     isReddit: true,
-                    playDisabled: isSynthesizingSpeech || isSpeakingLocally,
-                    stopDisabled: !isSynthesizingSpeech && !isSpeakingLocally,
+                    playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+                    stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
                     localDisabled: isSynthesizingSpeech,
-                    localIsActive: isSpeakingLocally,
+                    localIsActive: isPreparingLocalTTS || isSpeakingLocally,
                     onPlay: speakSummary,
                     onStop: stopRedditSummarySpeech,
                     onLocal: speakSummaryLocally,
@@ -3969,6 +3999,16 @@ VStack(alignment: .leading, spacing: 14) {
                         .scaleEffect(0.7)
                         .padding(.trailing, 5)
                     Text("Reading summary...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 20)
+            } else if isPreparingLocalTTS {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .padding(.trailing, 5)
+                    Text("Preparing local TTS...")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -4098,6 +4138,15 @@ VStack(alignment: .leading, spacing: 14) {
             speechSynthesisError = "No summary available to read."
             return
         }
+
+        #if os(iOS)
+        if appState.summaryService.getOpenAIApiKey()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty {
+            speakSummaryLocally()
+            return
+        }
+        #endif
         
         // Stop any currently playing sounds before starting a new one
         #if os(iOS)
@@ -4162,6 +4211,7 @@ VStack(alignment: .leading, spacing: 14) {
         #endif
         nextAudioChunk = nil
         isSynthesizingSpeech = false
+        isPreparingLocalTTS = false
         isSpeakingLocally = false
     }
 
@@ -4243,17 +4293,19 @@ VStack(alignment: .leading, spacing: 14) {
         #endif
         nextAudioChunk = nil
         isSynthesizingSpeech = false
+        isPreparingLocalTTS = false
         isSpeakingLocally = false
     }
 
     private func speakSummaryLocally() {
         #if os(iOS)
         // Toggle off if already speaking
-        if isSpeakingLocally {
+        if isPreparingLocalTTS || isSpeakingLocally {
             localTTSTask?.cancel()
             localTTSTask = nil
             KokoroTTSService.shared.cancelPlayback()
             localSpeechSynth?.stopSpeaking(at: .immediate)
+            isPreparingLocalTTS = false
             isSpeakingLocally = false
             return
         }
@@ -4274,7 +4326,8 @@ VStack(alignment: .leading, spacing: 14) {
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            isSpeakingLocally = true
+            isPreparingLocalTTS = true
+            isSpeakingLocally = false
             isSynthesizingSpeech = false
             speechSynthesisError = nil
             let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
@@ -4288,12 +4341,18 @@ VStack(alignment: .leading, spacing: 14) {
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
+                    self.isPreparingLocalTTS = false
                     self.isSpeakingLocally = false
                     self.localTTSTask = nil
                 },
                 onError: { message in
                     self.speechSynthesisError = message
+                    self.isPreparingLocalTTS = false
                     self.isSpeakingLocally = false
+                },
+                onPlaybackStarted: {
+                    self.isPreparingLocalTTS = false
+                    self.isSpeakingLocally = true
                 }
             )
             return
@@ -4439,6 +4498,7 @@ struct GlassySummary: View {
     
     // TTS state variables
     @State private var isSynthesizingSpeech: Bool = false
+    @State private var isPreparingLocalTTS: Bool = false
     @State private var isSpeakingLocally: Bool = false
     @State private var speechSynthesisError: String? = nil
     @State private var ttsCanceled: Bool = false
@@ -4494,10 +4554,10 @@ VStack(alignment: .leading) {
                     HStack(spacing: 0) {
                         SummaryTTSMiniPlayer(
                             isReddit: true,
-                            playDisabled: isSynthesizingSpeech || isSpeakingLocally,
-                            stopDisabled: !isSynthesizingSpeech && !isSpeakingLocally,
+                            playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+                            stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
                             localDisabled: isSynthesizingSpeech,
-                            localIsActive: isSpeakingLocally,
+                            localIsActive: isPreparingLocalTTS || isSpeakingLocally,
                             onPlay: speakSummary,
                             onStop: stopRedditSummarySpeech,
                             onLocal: speakSummaryLocally,
@@ -4547,6 +4607,17 @@ VStack(alignment: .leading) {
                         .scaleEffect(0.7)
                         .padding(.trailing, 5)
                     Text("Reading summary...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            } else if isPreparingLocalTTS {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .padding(.trailing, 5)
+                    Text("Preparing local TTS...")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -4621,6 +4692,15 @@ VStack(alignment: .leading) {
             speechSynthesisError = "No summary available to read."
             return
         }
+
+        #if os(iOS)
+        if appState.summaryService.getOpenAIApiKey()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty {
+            speakSummaryLocally()
+            return
+        }
+        #endif
         
         // Stop any currently playing sounds before starting a new one
         #if os(iOS)
@@ -4765,17 +4845,19 @@ VStack(alignment: .leading) {
         #endif
         nextAudioChunk = nil
         isSynthesizingSpeech = false
+        isPreparingLocalTTS = false
         isSpeakingLocally = false
     }
 
     private func speakSummaryLocally() {
         #if os(iOS)
         // Toggle off if already speaking
-        if isSpeakingLocally {
+        if isPreparingLocalTTS || isSpeakingLocally {
             localTTSTask?.cancel()
             localTTSTask = nil
             KokoroTTSService.shared.cancelPlayback()
             localSpeechSynth?.stopSpeaking(at: .immediate)
+            isPreparingLocalTTS = false
             isSpeakingLocally = false
             return
         }
@@ -4796,7 +4878,8 @@ VStack(alignment: .leading) {
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            isSpeakingLocally = true
+            isPreparingLocalTTS = true
+            isSpeakingLocally = false
             isSynthesizingSpeech = false
             speechSynthesisError = nil
             let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
@@ -4810,12 +4893,18 @@ VStack(alignment: .leading) {
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
+                    self.isPreparingLocalTTS = false
                     self.isSpeakingLocally = false
                     self.localTTSTask = nil
                 },
                 onError: { message in
                     self.speechSynthesisError = message
+                    self.isPreparingLocalTTS = false
                     self.isSpeakingLocally = false
+                },
+                onPlaybackStarted: {
+                    self.isPreparingLocalTTS = false
+                    self.isSpeakingLocally = true
                 }
             )
             return

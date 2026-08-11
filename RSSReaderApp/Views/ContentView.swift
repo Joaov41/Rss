@@ -1129,7 +1129,7 @@ extension View {
                 )
             )
     }
-
+    
     // Navigation gesture extensions
     func navigationGestures() -> some View {
         self.modifier(NavigationGestureModifier())
@@ -1180,7 +1180,7 @@ struct NavigationGestureModifier: ViewModifier {
             .onEnded { value in
                 let horizontalAmount = value.translation.width
                 let verticalAmount = value.translation.height
-
+                
                 // Ensure horizontal swipe is dominant (at least roughly 3:2 ratio)
                 guard abs(horizontalAmount) > abs(verticalAmount) * 1.5 else { return }
                 
@@ -1256,7 +1256,7 @@ struct NavigationFeedbackOverlay: View {
                 }
                 .padding(.horizontal, 30)
             }
-
+            
             // Forward indicator
             if showForwardIndicator {
                 HStack {
@@ -4055,7 +4055,7 @@ struct ContentView: View {
                         }
                     }
                 }
-
+                
                 Section(header: Text("Reddit Posts")) {
                     let unreadPosts = appState.redditFeeds.flatMap { $0.posts }
                         .filter { !$0.isRead }
@@ -4135,103 +4135,95 @@ struct ContentView: View {
         }
     }
     
-    private var favoriteArticlesForList: [Article] {
-        appState.feeds.flatMap { $0.articles }
-            .filter { $0.isFavorite }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoritePostsForList: [RedditPost] {
-        appState.redditFeeds.flatMap { $0.posts }
-            .filter { $0.isFavorite }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoriteTrackedItemIDs: [String] {
-        favoriteArticlesForList.map(\.id) + favoritePostsForList.map(\.id)
-    }
-
-    @ViewBuilder
-    private var favoritesArticlesSection: some View {
-        Section(header: Text("RSS Articles")) {
-            if favoriteArticlesForList.isEmpty {
-                Text("No favorite articles")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoriteArticlesForList) { article in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
-                        appState.selectedArticle = article
-                        if !article.isRead {
-                            appState.markArticleAsRead(article)
-                        }
-                    }) {
-                        ArticleRow(article: article)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .id(articleListID(for: article))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleArticleFavorite(article)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var favoritesRedditSection: some View {
-        Section(header: Text("Reddit Posts")) {
-            if favoritePostsForList.isEmpty {
-                Text("No favorite posts")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoritePostsForList) { post in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
-                        appState.selectedRedditPost = post
-                        if !post.isRead {
-                            appState.markRedditPostAsRead(post)
-                        }
-                    }) {
-                        RedditPostRow(post: post)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .id(redditPostListID(for: post))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleRedditPostFavorite(post)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     var favoritesView: some View {
         List {
-            favoritesArticlesSection
-            favoritesRedditSection
+            Section(header: Text("RSS Articles")) {
+                let favoriteArticles = appState.feeds.flatMap { $0.articles }
+                    .filter { $0.isFavorite }
+                    .sorted(by: { $0.publishDate > $1.publishDate })
+                
+                if favoriteArticles.isEmpty {
+                    Text("No favorite articles")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(favoriteArticles) { article in
+                        Button(action: {
+                            // Set article and navigate
+                            appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
+                            appState.selectedArticle = article
+                            if !article.isRead {
+                                appState.markArticleAsRead(article)
+                            }
+                        }) {
+                            ArticleRow(article: article)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(articleListID(for: article))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleArticleFavorite(article)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Section(header: Text("Reddit Posts")) {
+                let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
+                    .filter { $0.isFavorite }
+                    .sorted(by: { $0.publishDate > $1.publishDate })
+                
+                if favoritePosts.isEmpty {
+                    Text("No favorite posts")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(favoritePosts) { post in
+                        Button(action: {
+                            // Set post and navigate
+                            appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
+                            appState.selectedRedditPost = post
+                            if !post.isRead {
+                                appState.markRedditPostAsRead(post)
+                            }
+                        }) {
+                            RedditPostRow(post: post)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(redditPostListID(for: post))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleRedditPostFavorite(post)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.plain)
         .feedListColumnStyle(
             colorScheme: colorScheme,
             scrollOffset: feedListScrollOffset,
             restorationKey: "favorites_category",
-            trackedItemIDs: favoriteTrackedItemIDs
+            trackedItemIDs: appState.feeds.flatMap { $0.articles }
+                .filter(\.isFavorite)
+                .sorted(by: { $0.publishDate > $1.publishDate })
+                .map(\.id)
+                + appState.redditFeeds.flatMap { $0.posts }
+                .filter(\.isFavorite)
+                .sorted(by: { $0.publishDate > $1.publishDate })
+                .map(\.id)
         ) { offset in
             feedListScrollOffset = offset
         }
@@ -10734,6 +10726,7 @@ struct ArticleDetailView: View {
     
     // TTS state variables for Q&A
     @State private var isSynthesizingSpeechQA: Bool = false
+    @State private var isPreparingLocalTTSQA: Bool = false
     @State private var isSpeakingLocallyQA: Bool = false
     @State private var speechSynthesisErrorQA: String? = nil
     @State private var isAskingSelectionAI = false
@@ -12006,10 +11999,10 @@ struct ArticleDetailView: View {
             HStack(spacing: 0) {
                 SummaryTTSMiniPlayer(
                     isReddit: false,
-                    playDisabled: isSynthesizingSpeechQA || isSpeakingLocallyQA || qaAnswerUnavailable,
-                    stopDisabled: !isSynthesizingSpeechQA && !isSpeakingLocallyQA,
+                    playDisabled: isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || qaAnswerUnavailable,
+                    stopDisabled: !isSynthesizingSpeechQA && !isPreparingLocalTTSQA && !isSpeakingLocallyQA,
                     localDisabled: isSynthesizingSpeechQA || qaAnswerUnavailable,
-                    localIsActive: isSpeakingLocallyQA,
+                    localIsActive: isPreparingLocalTTSQA || isSpeakingLocallyQA,
                     onPlay: { speakAnswerQA(qaState.answerText) },
                     onStop: stopQASpeech,
                     onLocal: { speakAnswerLocallyQA(qaState.answerText) },
@@ -12039,6 +12032,16 @@ struct ArticleDetailView: View {
                     .scaleEffect(0.7)
                     .padding(.trailing, 5)
                 Text("Reading answer...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.top, 4)
+        } else if isPreparingLocalTTSQA {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.trailing, 5)
+                Text("Preparing local TTS...")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -12360,6 +12363,15 @@ struct ArticleDetailView: View {
             speechSynthesisErrorQA = "No answer available to read."
             return
         }
+
+        #if os(iOS)
+        if appState.summaryService.getOpenAIApiKey()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty {
+            speakAnswerLocallyQA(text)
+            return
+        }
+        #endif
         
         // Stop any currently playing sounds before starting a new one
         #if os(iOS)
@@ -12427,6 +12439,7 @@ struct ArticleDetailView: View {
         #endif
         nextAudioChunkQA = nil
         isSynthesizingSpeechQA = false
+        isPreparingLocalTTSQA = false
         isSpeakingLocallyQA = false
     }
 
@@ -12495,12 +12508,13 @@ struct ArticleDetailView: View {
     private func speakAnswerLocallyQA(_ text: String) {
         #if os(iOS)
         // Toggle off if already speaking
-        if isSpeakingLocallyQA {
+        if isPreparingLocalTTSQA || isSpeakingLocallyQA {
             stopAnyKokoroPlaybackNow()
             localTTSTaskQA?.cancel()
             localTTSTaskQA = nil
             KokoroTTSService.shared.cancelPlayback()
             localSpeechSynthQA?.stopSpeaking(at: .immediate)
+            isPreparingLocalTTSQA = false
             isSpeakingLocallyQA = false
             return
         }
@@ -12523,7 +12537,8 @@ struct ArticleDetailView: View {
                 speechSynthesisErrorQA = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            isSpeakingLocallyQA = true
+            isPreparingLocalTTSQA = true
+            isSpeakingLocallyQA = false
             isSynthesizingSpeechQA = false
             speechSynthesisErrorQA = nil
             let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
@@ -12537,12 +12552,18 @@ struct ArticleDetailView: View {
                 soundDelegate: soundDelegateQA,
                 taskStore: &localTTSTaskQA,
                 onCompleted: {
+                    self.isPreparingLocalTTSQA = false
                     self.isSpeakingLocallyQA = false
                     self.localTTSTaskQA = nil
                 },
                 onError: { message in
                     self.speechSynthesisErrorQA = message
+                    self.isPreparingLocalTTSQA = false
                     self.isSpeakingLocallyQA = false
+                },
+                onPlaybackStarted: {
+                    self.isPreparingLocalTTSQA = false
+                    self.isSpeakingLocallyQA = true
                 }
             )
             return
@@ -15155,6 +15176,15 @@ struct ArticleGlassySummary: View {
             speechSynthesisError = "No summary available to read."
             return
         }
+
+        #if os(iOS)
+        if appState.summaryService.getOpenAIApiKey()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty {
+            speakSummaryLocally()
+            return
+        }
+        #endif
         
         // Stop any currently playing sounds before starting a new one
         #if os(iOS)
@@ -15344,8 +15374,8 @@ struct ArticleGlassySummary: View {
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            isSpeakingLocally = true
             isPreparingLocalTTS = true
+            isSpeakingLocally = false
             isSynthesizingSpeech = false
             speechSynthesisError = nil
             let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
@@ -15370,6 +15400,7 @@ struct ArticleGlassySummary: View {
                 },
                 onPlaybackStarted: {
                     self.isPreparingLocalTTS = false
+                    self.isSpeakingLocally = true
                 },
                 stopCurrentPlayback: {
                     self.audioPlayer?.stop()
@@ -15551,8 +15582,8 @@ private struct ArticleGlassySummaryContent: View {
                 Spacer()
                 SummaryTTSMiniPlayer(
                     isReddit: borderStyle == .reddit,
-                    playDisabled: isSynthesizingSpeech || isSpeakingLocally || summary.isEmpty,
-                    stopDisabled: !isSynthesizingSpeech && !isSpeakingLocally,
+                    playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally || summary.isEmpty,
+                    stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
                     localDisabled: isSynthesizingSpeech || summary.isEmpty,
                     localIsActive: isSpeakingLocally || isPreparingLocalTTS,
                     onPlay: speakSummary,
