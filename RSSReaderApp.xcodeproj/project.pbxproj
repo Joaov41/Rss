@@ -355,6 +355,9 @@
 			buildActionMask = 2147483647;
 			files = (
 			);
+			inputPaths = (
+				"$(SRCROOT)/RSSReaderApp/EmbeddedDylib.entitlements",
+			);
 			name = "Sign embedded dylibs";
 			outputPaths = (
 			);
@@ -548,7 +551,7 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 20;
+					CURRENT_PROJECT_VERSION = 21;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
@@ -585,7 +588,7 @@
 					CODE_SIGN_STYLE = Automatic;
 					COMBINE_HIDPI_IMAGES = YES;
 					COMPILER_INDEX_STORE_ENABLE = NO;
-					CURRENT_PROJECT_VERSION = 20;
+					CURRENT_PROJECT_VERSION = 21;
 					DEAD_CODE_STRIPPING = YES;
 					DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 					DEVELOPMENT_TEAM = HNG8WV554B;
