@@ -397,6 +397,12 @@ struct BatchPodcastView: View {
                         Label("Resume", systemImage: "play.fill")
                     }
                     .buttonStyle(BatchPodcastGlassButtonStyle())
+                } else if playbackController.state == .preparing {
+                    Button {} label: {
+                        Label("Preparing Audio", systemImage: "waveform.badge.magnifyingglass")
+                    }
+                    .buttonStyle(BatchPodcastGlassButtonStyle())
+                    .disabled(true)
                 } else {
                     Button { session.play() } label: {
                         Label("Play", systemImage: "play.fill")

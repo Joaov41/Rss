@@ -50,9 +50,9 @@ enum MLXPodcastPlaybackPlan {
     }
 }
 
-/// Keeps one bounded WAV file per synthesized podcast chunk. The cache is
-/// episode/voice/speed-specific so Save Podcast can reuse audio already made
-/// for playback without retaining the complete episode in memory.
+/// Keeps one bounded WAV file per synthesized podcast chunk plus the completed
+/// episode WAV. The cache is episode/voice/speed-specific so Save Podcast can
+/// export the exact audio already prepared for playback.
 private final class PodcastAudioCache {
     let cacheKey: String
     private let directory: URL
@@ -94,6 +94,53 @@ private final class PodcastAudioCache {
         try? data.write(to: url, options: .atomic)
     }
 
+    func prepareCompleteEpisode(from plan: [MLXPodcastPlaybackChunk]) throws -> URL {
+        let finalURL = directory.appendingPathComponent("prepared-episode.wav")
+        if Self.isUsableWAV(at: finalURL) { return finalURL }
+
+        let temporaryURL = directory.appendingPathComponent(".\(UUID().uuidString).partial.wav")
+        var writer: BatchPodcastWAVWriter? = try BatchPodcastWAVWriter(url: temporaryURL)
+        do {
+            for chunk in plan {
+                guard let data = read(chunkID: chunk.id) else {
+                    throw BatchPodcastError.audioExportFailed("Prepared podcast audio is incomplete. Please tap Play again.")
+                }
+                try writer?.append(wavData: data)
+            }
+            try writer?.finish()
+            writer = nil
+            if FileManager.default.fileExists(atPath: finalURL.path) {
+                try FileManager.default.removeItem(at: temporaryURL)
+            } else {
+                try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
+            }
+            return finalURL
+        } catch {
+            try? writer?.finish()
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+        }
+    }
+
+    func copyPreparedEpisode(to destinationURL: URL) throws -> Bool {
+        let sourceURL = directory.appendingPathComponent("prepared-episode.wav")
+        guard Self.isUsableWAV(at: sourceURL) else { return false }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        return true
+    }
+
+    func storePreparedEpisode(from sourceURL: URL) throws {
+        let finalURL = directory.appendingPathComponent("prepared-episode.wav")
+        guard !Self.isUsableWAV(at: finalURL) else { return }
+        let temporaryURL = directory.appendingPathComponent(".\(UUID().uuidString).copy.wav")
+        try FileManager.default.copyItem(at: sourceURL, to: temporaryURL)
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            try? FileManager.default.removeItem(at: temporaryURL)
+        } else {
+            try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
+        }
+    }
+
     func remove() {
         try? FileManager.default.removeItem(at: directory)
         let root = directory.deletingLastPathComponent()
@@ -106,6 +153,12 @@ private final class PodcastAudioCache {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         let safe = chunkID.unicodeScalars.map { allowed.contains($0) ? String($0) : "_" }.joined()
         return "\(safe).wav"
+    }
+
+    private static func isUsableWAV(at url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize else { return false }
+        return size > 44
     }
 }
 
@@ -271,6 +324,10 @@ final class MLXPodcastPlaybackController: ObservableObject {
             hostBVoice: hostBVoice,
             speed: Float(min(max(speed, 0.5), 2.0))
         )
+        if try cache?.copyPreparedEpisode(to: url) == true {
+            progressHandler?(plan.count, plan.count)
+            return url
+        }
         var writer: BatchPodcastWAVWriter?
         do {
             for (index, chunk) in plan.enumerated() {
@@ -289,6 +346,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
             }
             try writer?.finish()
             writer = nil
+            try cache?.storePreparedEpisode(from: url)
             return url
         } catch {
             try? writer?.finish()
@@ -382,6 +440,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
         }
 
         progress = 1
+        try? audioCache?.prepareCompleteEpisode(from: plan)
     }
 
     private func makeSynthesisTask(

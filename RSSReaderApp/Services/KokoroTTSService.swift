@@ -123,6 +123,28 @@ final class KokoroTTSService {
         #endif
     }
 
+    /// Indicates whether the Pocket TTS model is ready to synthesize audio.
+    /// Cold playback gets a longer bounded preparation window; warm playback
+    /// keeps the existing short timeout.
+    var isModelReady: Bool {
+        #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
+        return currentModel() != nil
+        #else
+        return false
+        #endif
+    }
+
+    /// Indicates that shared model initialization is currently in flight.
+    var isModelLoading: Bool {
+        #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
+        initLock.lock()
+        defer { initLock.unlock() }
+        return model == nil && initTask != nil
+        #else
+        return false
+        #endif
+    }
+
     func synthesize(text: String, voice: String, speed: Float, allowCaching: Bool = true) async throws -> Data {
         #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
         if allowCaching {

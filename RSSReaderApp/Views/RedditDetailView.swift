@@ -180,6 +180,7 @@ struct RedditDetailView: View {
     
     // TTS state variables for Q&A
     @State private var isSynthesizingSpeechQA: Bool = false
+    @State private var isPreparingLocalTTSQA: Bool = false
     @State private var isSpeakingLocallyQA: Bool = false
     @State private var speechSynthesisErrorQA: String? = nil
     @State private var ttsCanceledQA: Bool = false
@@ -199,6 +200,7 @@ struct RedditDetailView: View {
 
     // TTS state variables for Post Summary
     @State private var isSynthesizingSpeechSummary: Bool = false
+    @State private var isPreparingLocalTTSSummary: Bool = false
     @State private var isSpeakingLocallySummary: Bool = false
     @State private var speechSynthesisErrorSummary: String? = nil
     @State private var ttsCanceledSummary: Bool = false
@@ -522,6 +524,15 @@ struct RedditDetailView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
+                        } else if isPreparingLocalTTSSummary {
+                            HStack {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .padding(.trailing, 5)
+                                Text("Preparing local TTS...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         } else if isSpeakingLocallySummary {
                             HStack {
                                 ProgressView()
@@ -734,10 +745,10 @@ struct RedditDetailView: View {
                                 Spacer()
                                 SummaryTTSMiniPlayer(
                                     isReddit: true,
-                                    playDisabled: isSynthesizingSpeechSummary || isSpeakingLocallySummary || summary.summary.isEmpty,
-                                    stopDisabled: !isSynthesizingSpeechSummary && !isSpeakingLocallySummary,
+                                    playDisabled: isSynthesizingSpeechSummary || isPreparingLocalTTSSummary || isSpeakingLocallySummary || summary.summary.isEmpty,
+                                    stopDisabled: !isSynthesizingSpeechSummary && !isPreparingLocalTTSSummary && !isSpeakingLocallySummary,
                                     localDisabled: isSynthesizingSpeechSummary || summary.summary.isEmpty,
-                                    localIsActive: isSpeakingLocallySummary,
+                                    localIsActive: isPreparingLocalTTSSummary || isSpeakingLocallySummary,
                                     onPlay: { speakPostSummary(summary.summary) },
                                     onStop: stopPostSummarySpeech,
                                     onLocal: { speakPostSummaryLocally(summary.summary) },
@@ -959,7 +970,7 @@ struct RedditDetailView: View {
                                     #endif
                                     .ttsActiveGlow(isSynthesizingSpeechQA, color: .blue)
                                     .help("Read aloud (Cloud)")
-                                    .disabled(isSynthesizingSpeechQA || isSpeakingLocallyQA || answerText.isEmpty || answerText == "Ask a question about this post or its comments...")
+                                    .disabled(isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || answerText.isEmpty || answerText == "Ask a question about this post or its comments...")
                                     
                                     // Stop speech
                                     Button {
@@ -987,7 +998,7 @@ struct RedditDetailView: View {
                                     #else
                                     .buttonStyle(LiquidGlassButtonStyle())
                                     #endif
-                                    .ttsActiveGlow(isSpeakingLocallyQA, color: .green)
+                                    .ttsActiveGlow(isPreparingLocalTTSQA || isSpeakingLocallyQA, color: .green)
                                     .help("Read aloud (Local)")
                                     .disabled(isSynthesizingSpeechQA || answerText.isEmpty || answerText == "Ask a question about this post or its comments...")
                                     
@@ -1023,6 +1034,16 @@ struct RedditDetailView: View {
                                             .scaleEffect(0.7)
                                             .padding(.trailing, 5)
                                         Text("Reading answer...")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.top, 4)
+                                } else if isPreparingLocalTTSQA {
+                                    HStack {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .padding(.trailing, 5)
+                                        Text("Preparing local TTS...")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
@@ -2079,6 +2100,7 @@ Each item ≤ 2–3 sentences.
         #endif
         nextAudioChunkQA = nil
         isSynthesizingSpeechQA = false
+        isPreparingLocalTTSQA = false
         isSpeakingLocallyQA = false
     }
 
@@ -2394,10 +2416,11 @@ Each item ≤ 2–3 sentences.
                 speechSynthesisErrorQA = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocallyQA {
+            if isPreparingLocalTTSQA || isSpeakingLocallyQA {
                 localTTSTaskQA?.cancel()
                 localTTSTaskQA = nil
                 audioPlayerQA?.stop()
+                isPreparingLocalTTSQA = false
                 isSpeakingLocallyQA = false
                 return
             }
@@ -2406,7 +2429,8 @@ Each item ≤ 2–3 sentences.
                 return
             }
             audioPlayerQA?.stop()
-            isSpeakingLocallyQA = true
+            isPreparingLocalTTSQA = true
+            isSpeakingLocallyQA = false
             isSynthesizingSpeechQA = false
             startKokoroPlaybackRedditQA(
                 text: text,
@@ -2416,12 +2440,18 @@ Each item ≤ 2–3 sentences.
                 soundDelegate: soundDelegateQA,
                 taskStore: &localTTSTaskQA,
                 onCompleted: {
+                    isPreparingLocalTTSQA = false
                     isSpeakingLocallyQA = false
                     localTTSTaskQA = nil
                 },
                 onError: { message in
                     speechSynthesisErrorQA = message
+                    isPreparingLocalTTSQA = false
                     isSpeakingLocallyQA = false
+                },
+                onPlaybackStarted: {
+                    isPreparingLocalTTSQA = false
+                    isSpeakingLocallyQA = true
                 }
             )
             return
@@ -2875,6 +2905,7 @@ Each item ≤ 2–3 sentences.
         #endif
         nextAudioChunkSummary = nil
         isSynthesizingSpeechSummary = false
+        isPreparingLocalTTSSummary = false
         isSpeakingLocallySummary = false
     }
     
@@ -3101,10 +3132,11 @@ Each item ≤ 2–3 sentences.
                 speechSynthesisErrorSummary = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocallySummary {
+            if isPreparingLocalTTSSummary || isSpeakingLocallySummary {
                 localTTSTaskSummary?.cancel()
                 localTTSTaskSummary = nil
                 audioPlayerSummary?.stop()
+                isPreparingLocalTTSSummary = false
                 isSpeakingLocallySummary = false
                 return
             }
@@ -3113,7 +3145,8 @@ Each item ≤ 2–3 sentences.
                 return
             }
             audioPlayerSummary?.stop()
-            isSpeakingLocallySummary = true
+            isPreparingLocalTTSSummary = true
+            isSpeakingLocallySummary = false
             isSynthesizingSpeechSummary = false
             startKokoroPlaybackRedditQA(
                 text: text,
@@ -3123,12 +3156,18 @@ Each item ≤ 2–3 sentences.
                 soundDelegate: soundDelegateSummary,
                 taskStore: &localTTSTaskSummary,
                 onCompleted: {
+                    isPreparingLocalTTSSummary = false
                     isSpeakingLocallySummary = false
                     localTTSTaskSummary = nil
                 },
                 onError: { message in
                     speechSynthesisErrorSummary = message
+                    isPreparingLocalTTSSummary = false
                     isSpeakingLocallySummary = false
+                },
+                onPlaybackStarted: {
+                    isPreparingLocalTTSSummary = false
+                    isSpeakingLocallySummary = true
                 }
             )
             return
@@ -3171,7 +3210,8 @@ Each item ≤ 2–3 sentences.
         soundDelegate: SoundDelegate,
         taskStore: inout Task<Void, Never>?,
         onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
+        onError: @escaping (String) -> Void,
+        onPlaybackStarted: (() -> Void)? = nil
     ) {
         _ = soundDelegate
         taskStore?.cancel()
@@ -3240,6 +3280,7 @@ Each item ≤ 2–3 sentences.
                             onError("Failed to start audio playback.")
                             throw NSError(domain: "KokoroPlayback", code: -1)
                         }
+                        onPlaybackStarted?()
                         return player.duration
                         #endif
                     }
@@ -3248,12 +3289,15 @@ Each item ≤ 2–3 sentences.
                 enum KokoroPlaybackError: Error { case timeout }
 
                 func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
+                    let timeoutNanoseconds: UInt64 = KokoroTTSService.shared.isModelReady
+                        ? 20_000_000_000
+                        : 120_000_000_000
+                    return try await withThrowingTaskGroup(of: Data.self) { group in
                         group.addTask {
                             try await KokoroTTSService.shared.synthesize(text: text, voice: voice, speed: Float(speed))
                         }
                         group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
+                            try await Task.sleep(nanoseconds: timeoutNanoseconds)
                             throw KokoroPlaybackError.timeout
                         }
                         let result = try await group.next()!
@@ -3288,8 +3332,12 @@ Each item ≤ 2–3 sentences.
                     let message: String
                     if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
                         message = "MLX TTS is not available. Add the MLXAudio package and model access."
+                    } else if KokoroTTSService.shared.isModelLoading {
+                        message = "Local TTS is still preparing its model. Keep the app open, then try again."
+                    } else if !KokoroTTSService.shared.isModelReady {
+                        message = "Local TTS could not finish preparing its model. Please try again."
                     } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
+                        message = "MLX TTS timed out while preparing audio. Please try again."
                     } else {
                         message = "Kokoro TTS failed: \(error.localizedDescription)"
                     }
@@ -3307,7 +3355,8 @@ Each item ≤ 2–3 sentences.
         soundDelegate: SoundDelegate,
         taskStore: inout Task<Void, Never>?,
         onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
+        onError: @escaping (String) -> Void,
+        onPlaybackStarted: (() -> Void)? = nil
     ) {
         _ = soundDelegate
         taskStore?.cancel()
@@ -3376,6 +3425,7 @@ Each item ≤ 2–3 sentences.
                             onError("Failed to start audio playback.")
                             throw NSError(domain: "KokoroPlayback", code: -1)
                         }
+                        onPlaybackStarted?()
                         return player.duration
                         #endif
                     }
@@ -3384,12 +3434,15 @@ Each item ≤ 2–3 sentences.
                 enum KokoroPlaybackError: Error { case timeout }
 
                 func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
+                    let timeoutNanoseconds: UInt64 = KokoroTTSService.shared.isModelReady
+                        ? 20_000_000_000
+                        : 120_000_000_000
+                    return try await withThrowingTaskGroup(of: Data.self) { group in
                         group.addTask {
                             try await KokoroTTSService.shared.synthesize(text: text, voice: voice, speed: Float(speed))
                         }
                         group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
+                            try await Task.sleep(nanoseconds: timeoutNanoseconds)
                             throw KokoroPlaybackError.timeout
                         }
                         let result = try await group.next()!
@@ -3424,8 +3477,12 @@ Each item ≤ 2–3 sentences.
                     let message: String
                     if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
                         message = "MLX TTS is not available. Add the MLXAudio package and model access."
+                    } else if KokoroTTSService.shared.isModelLoading {
+                        message = "Local TTS is still preparing its model. Keep the app open, then try again."
+                    } else if !KokoroTTSService.shared.isModelReady {
+                        message = "Local TTS could not finish preparing its model. Please try again."
                     } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
+                        message = "MLX TTS timed out while preparing audio. Please try again."
                     } else {
                         message = "Kokoro TTS failed: \(error.localizedDescription)"
                     }
@@ -4148,6 +4205,7 @@ struct GlassyCommentSummary: View {
     @EnvironmentObject var appState: AppState
     // TTS state variables
     @State private var isSynthesizingSpeech: Bool = false
+    @State private var isPreparingLocalTTS: Bool = false
     @State private var isSpeakingLocally: Bool = false
     @State private var speechSynthesisError: String? = nil
     @State private var ttsCanceled: Bool = false
@@ -4173,10 +4231,10 @@ VStack(alignment: .leading, spacing: 14) {
                 
                 SummaryTTSMiniPlayer(
                     isReddit: true,
-                    playDisabled: isSynthesizingSpeech || isSpeakingLocally,
-                    stopDisabled: !isSynthesizingSpeech && !isSpeakingLocally,
+                    playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+                    stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
                     localDisabled: isSynthesizingSpeech,
-                    localIsActive: isSpeakingLocally,
+                    localIsActive: isPreparingLocalTTS || isSpeakingLocally,
                     onPlay: speakSummary,
                     onStop: stopRedditSummarySpeech,
                     onLocal: speakSummaryLocally,
@@ -4203,6 +4261,16 @@ VStack(alignment: .leading, spacing: 14) {
                         .scaleEffect(0.7)
                         .padding(.trailing, 5)
                     Text("Reading summary...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 20)
+            } else if isPreparingLocalTTS {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .padding(.trailing, 5)
+                    Text("Preparing local TTS...")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -4388,6 +4456,7 @@ VStack(alignment: .leading, spacing: 14) {
         #endif
         nextAudioChunk = nil
         isSynthesizingSpeech = false
+        isPreparingLocalTTS = false
         isSpeakingLocally = false
     }
 
@@ -4466,6 +4535,7 @@ VStack(alignment: .leading, spacing: 14) {
         #endif
         nextAudioChunk = nil
         isSynthesizingSpeech = false
+        isPreparingLocalTTS = false
         isSpeakingLocally = false
     }
 
@@ -4643,10 +4713,11 @@ VStack(alignment: .leading, spacing: 14) {
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocally {
+            if isPreparingLocalTTS || isSpeakingLocally {
                 localTTSTask?.cancel()
                 localTTSTask = nil
                 audioPlayer?.stop()
+                isPreparingLocalTTS = false
                 isSpeakingLocally = false
                 return
             }
@@ -4655,7 +4726,8 @@ VStack(alignment: .leading, spacing: 14) {
                 return
             }
             audioPlayer?.stop()
-            isSpeakingLocally = true
+            isPreparingLocalTTS = true
+            isSpeakingLocally = false
             isSynthesizingSpeech = false
             startKokoroPlaybackGlassy(
                 text: summary.summary,
@@ -4665,12 +4737,18 @@ VStack(alignment: .leading, spacing: 14) {
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
+                    isPreparingLocalTTS = false
                     isSpeakingLocally = false
                     localTTSTask = nil
                 },
                 onError: { message in
                     speechSynthesisError = message
+                    isPreparingLocalTTS = false
                     isSpeakingLocally = false
+                },
+                onPlaybackStarted: {
+                    isPreparingLocalTTS = false
+                    isSpeakingLocally = true
                 }
             )
             return
@@ -4715,7 +4793,8 @@ VStack(alignment: .leading, spacing: 14) {
         soundDelegate: SoundDelegate,
         taskStore: inout Task<Void, Never>?,
         onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
+        onError: @escaping (String) -> Void,
+        onPlaybackStarted: (() -> Void)? = nil
     ) {
         _ = soundDelegate
         taskStore?.cancel()
@@ -4787,6 +4866,7 @@ VStack(alignment: .leading, spacing: 14) {
                             onError("Failed to start audio playback.")
                             throw NSError(domain: "KokoroPlayback", code: -1)
                         }
+                        onPlaybackStarted?()
                         return player.duration
                         #endif
                     }
@@ -4795,7 +4875,10 @@ VStack(alignment: .leading, spacing: 14) {
                 enum KokoroPlaybackError: Error { case timeout }
 
                 func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
+                    let timeoutNanoseconds: UInt64 = KokoroTTSService.shared.isModelReady
+                        ? 20_000_000_000
+                        : 120_000_000_000
+                    return try await withThrowingTaskGroup(of: Data.self) { group in
                         group.addTask {
                             try await KokoroTTSService.shared.synthesize(
                                 text: text,
@@ -4804,7 +4887,7 @@ VStack(alignment: .leading, spacing: 14) {
                             )
                         }
                         group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
+                            try await Task.sleep(nanoseconds: timeoutNanoseconds)
                             throw KokoroPlaybackError.timeout
                         }
                         let result = try await group.next()!
@@ -4849,8 +4932,12 @@ VStack(alignment: .leading, spacing: 14) {
                     let message: String
                     if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
                         message = "MLX TTS is not available. Add the MLXAudio package and model access."
+                    } else if KokoroTTSService.shared.isModelLoading {
+                        message = "Local TTS is still preparing its model. Keep the app open, then try again."
+                    } else if !KokoroTTSService.shared.isModelReady {
+                        message = "Local TTS could not finish preparing its model. Please try again."
                     } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
+                        message = "MLX TTS timed out while preparing audio. Please try again."
                     } else {
                         message = "Kokoro TTS failed: \(error.localizedDescription)"
                     }
@@ -4870,6 +4957,7 @@ struct GlassySummary: View {
 
     // TTS state variables
     @State private var isSynthesizingSpeech: Bool = false
+    @State private var isPreparingLocalTTS: Bool = false
     @State private var isSpeakingLocally: Bool = false
     @State private var speechSynthesisError: String? = nil
     @State private var ttsCanceled: Bool = false
@@ -4893,10 +4981,10 @@ VStack(alignment: .leading) {
                 Spacer()
                 SummaryTTSMiniPlayer(
                     isReddit: true,
-                    playDisabled: isSynthesizingSpeech || isSpeakingLocally,
-                    stopDisabled: !isSynthesizingSpeech && !isSpeakingLocally,
+                    playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+                    stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
                     localDisabled: isSynthesizingSpeech,
-                    localIsActive: isSpeakingLocally,
+                    localIsActive: isPreparingLocalTTS || isSpeakingLocally,
                     onPlay: speakSummary,
                     onStop: stopRedditSummarySpeech,
                     onLocal: speakSummaryLocally,
@@ -4938,6 +5026,16 @@ VStack(alignment: .leading) {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
+            } else if isPreparingLocalTTS {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .padding(.trailing, 5)
+                    Text("Preparing local TTS...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 20)
             } else if isSpeakingLocally {
                 HStack {
                     ProgressView()
@@ -5329,10 +5427,11 @@ VStack(alignment: .leading) {
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            if isSpeakingLocally {
+            if isPreparingLocalTTS || isSpeakingLocally {
                 localTTSTask?.cancel()
                 localTTSTask = nil
                 audioPlayer?.stop()
+                isPreparingLocalTTS = false
                 isSpeakingLocally = false
                 return
             }
@@ -5341,7 +5440,8 @@ VStack(alignment: .leading) {
                 return
             }
             audioPlayer?.stop()
-            isSpeakingLocally = true
+            isPreparingLocalTTS = true
+            isSpeakingLocally = false
             isSynthesizingSpeech = false
             startKokoroPlaybackGlassy(
                 text: summary,
@@ -5351,12 +5451,18 @@ VStack(alignment: .leading) {
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
+                    isPreparingLocalTTS = false
                     isSpeakingLocally = false
                     localTTSTask = nil
                 },
                 onError: { message in
                     speechSynthesisError = message
+                    isPreparingLocalTTS = false
                     isSpeakingLocally = false
+                },
+                onPlaybackStarted: {
+                    isPreparingLocalTTS = false
+                    isSpeakingLocally = true
                 }
             )
             return
@@ -5410,7 +5516,8 @@ VStack(alignment: .leading) {
         soundDelegate: SoundDelegate,
         taskStore: inout Task<Void, Never>?,
         onCompleted: @escaping () -> Void,
-        onError: @escaping (String) -> Void
+        onError: @escaping (String) -> Void,
+        onPlaybackStarted: (() -> Void)? = nil
     ) {
         _ = soundDelegate
         taskStore?.cancel()
@@ -5482,6 +5589,7 @@ VStack(alignment: .leading) {
                             onError("Failed to start audio playback.")
                             throw NSError(domain: "KokoroPlayback", code: -1)
                         }
+                        onPlaybackStarted?()
                         return player.duration
                         #endif
                     }
@@ -5490,7 +5598,10 @@ VStack(alignment: .leading) {
                 enum KokoroPlaybackError: Error { case timeout }
 
                 func synthesizeWithTimeout(_ text: String) async throws -> Data {
-                    try await withThrowingTaskGroup(of: Data.self) { group in
+                    let timeoutNanoseconds: UInt64 = KokoroTTSService.shared.isModelReady
+                        ? 20_000_000_000
+                        : 120_000_000_000
+                    return try await withThrowingTaskGroup(of: Data.self) { group in
                         group.addTask {
                             try await KokoroTTSService.shared.synthesize(
                                 text: text,
@@ -5499,7 +5610,7 @@ VStack(alignment: .leading) {
                             )
                         }
                         group.addTask {
-                            try await Task.sleep(nanoseconds: 20_000_000_000)
+                            try await Task.sleep(nanoseconds: timeoutNanoseconds)
                             throw KokoroPlaybackError.timeout
                         }
                         let result = try await group.next()!
@@ -5544,8 +5655,12 @@ VStack(alignment: .leading) {
                     let message: String
                     if let kokoroError = error as? KokoroTTSServiceError, kokoroError == .notAvailable {
                         message = "MLX TTS is not available. Add the MLXAudio package and model access."
+                    } else if KokoroTTSService.shared.isModelLoading {
+                        message = "Local TTS is still preparing its model. Keep the app open, then try again."
+                    } else if !KokoroTTSService.shared.isModelReady {
+                        message = "Local TTS could not finish preparing its model. Please try again."
                     } else if String(describing: error).contains("timeout") {
-                        message = "Kokoro is still loading models. Please wait a moment and try again."
+                        message = "MLX TTS timed out while preparing audio. Please try again."
                     } else {
                         message = "Kokoro TTS failed: \(error.localizedDescription)"
                     }
