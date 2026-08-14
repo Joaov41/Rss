@@ -24,7 +24,7 @@ import FoundationModels
 /// equality for free; we only provide `id` + `content`. Include it in a prompt
 /// via the `@PromptBuilder` overloads of `respond`/`streamResponse`.
 @available(iOS 27.0, macOS 27.0, *)
-public struct LiteRTAudioSegment: Transcript.CustomSegment {
+public struct LiteRTAudioSegment: Sendable {
   /// The segment payload. Must be `Codable`/`Equatable`/`Sendable` per the
   /// protocol; raw audio bytes (e.g. a WAV file's contents) satisfy that.
   public struct Content: Codable, Equatable, Sendable {
@@ -49,5 +49,12 @@ public struct LiteRTAudioSegment: Transcript.CustomSegment {
     self.content = Content(data: try Data(contentsOf: fileURL))
   }
 }
+
+// Apple's macOS 27 Foundation Models SDK has changed this beta protocol more
+// than once. Keep the optional FM custom-segment bridge available for SDKs that
+// expose it, without making the RSS app depend on a beta-only symbol.
+#if LITERT_FOUNDATION_MODELS_CUSTOM_SEGMENTS
+extension LiteRTAudioSegment: Transcript.CustomSegment {}
+#endif
 
 #endif

@@ -19,7 +19,7 @@ import FoundationModels
 
 /// A Foundation Models prompt segment carrying sampled video frames.
 @available(iOS 27.0, macOS 27.0, *)
-public struct LiteRTVideoSegment: Transcript.CustomSegment {
+public struct LiteRTVideoSegment: Sendable {
   /// Sampled frames as image bytes (e.g. PNG), in temporal order.
   public struct Content: Codable, Equatable, Sendable {
     public var frames: [Data]
@@ -34,5 +34,9 @@ public struct LiteRTVideoSegment: Transcript.CustomSegment {
     self.content = Content(frames: frames)
   }
 }
+
+#if LITERT_FOUNDATION_MODELS_CUSTOM_SEGMENTS
+extension LiteRTVideoSegment: Transcript.CustomSegment {}
+#endif
 
 #endif

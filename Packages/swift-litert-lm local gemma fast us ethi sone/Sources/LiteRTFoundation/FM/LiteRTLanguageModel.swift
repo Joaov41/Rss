@@ -48,7 +48,7 @@ public struct LiteRTLanguageModel: LanguageModel {
     // custom-segment hook and are not capability-gated.
     var capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration, .toolCalling]
     if model.supportedModalities.contains(.vision) { capabilities.append(.vision) }
-    self.capabilities = LanguageModelCapabilities(capabilities: capabilities)
+    self.capabilities = LanguageModelCapabilities(capabilities)
   }
 
   /// Create the backend from a **local `.litertlm` file** — no catalog, no
@@ -83,7 +83,7 @@ public struct LiteRTLanguageModel: LanguageModel {
       maxTokens: maxTokens)
     var capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration, .toolCalling]
     if modalities.contains(.vision) { capabilities.append(.vision) }
-    self.capabilities = LanguageModelCapabilities(capabilities: capabilities)
+    self.capabilities = LanguageModelCapabilities(capabilities)
   }
 
   /// Release every cached LiteRT engine built for FM sessions, freeing their
@@ -354,24 +354,28 @@ public final class LiteRTExecutor: LanguageModelExecutor {
   private static func contents(of segments: [Transcript.Segment]) -> [Content] {
     var out: [Content] = []
     for segment in segments {
-      switch segment {
-      case .text(let t):
+      if case .text(let t) = segment {
         if !t.content.isEmpty { out.append(.text(t.content)) }
-      case .attachment(let attachment):
+        continue
+      }
+      if case .attachment(let attachment) = segment {
         if case .image(let image) = attachment.content, let png = pngData(from: image.cgImage) {
           out.append(.imageData(png))
         }
-      case .custom(let custom):
+        continue
+      }
+      #if LITERT_FOUNDATION_MODELS_CUSTOM_SEGMENTS
+      if case .custom(let custom) = segment {
         if let audio = custom as? LiteRTAudioSegment {
           out.append(.audioData(audio.content.data))
         } else if let video = custom as? LiteRTVideoSegment {
           out.append(contentsOf: video.content.frames.map { Content.imageData($0) })
         }
-      case .structure:
-        break  // structured (guided-generation) content — a later phase
-      @unknown default:
-        break
+        continue
       }
+      #endif
+      // Structured (guided-generation) content and future segment kinds are
+      // intentionally ignored by this input bridge.
     }
     return out.isEmpty ? [.text("")] : out
   }
