@@ -3153,45 +3153,54 @@ struct ContentView: View {
     }
     
     var favoritesView: some View {
+        favoritesList
+            .feedListColumnStyle(
+                colorScheme: colorScheme,
+                scrollOffset: feedListScrollOffset,
+                restorationKey: "favorites_category",
+                trackedItemIDs: favoriteTrackedItemIDs
+            ) { offset in
+                feedListScrollOffset = offset
+            }
+            .onAppear {
+                #if os(iOS)
+                // Update navigation state for iPhone
+                if UIDevice.current.userInterfaceIdiom == .phone {
+                    selectedCategory = .favorites
+                    appState.lastSelectedCategory = .favorites
+                    appState.activeSubscriptionURL = nil
+                }
+                #endif
+            }
+            .navigationTitle("Favorites")
+    }
+
+    private var favoritesList: some View {
         List {
             favoriteArticlesSection
             favoriteRedditPostsSection
         }
         .listStyle(.plain)
-	            .feedListColumnStyle(
-	                colorScheme: colorScheme,
-	                scrollOffset: feedListScrollOffset,
-                    restorationKey: "favorites_category",
-                    trackedItemIDs: appState.feeds.flatMap { $0.articles }
-                        .filter(\.isFavorite)
-                        .sorted(by: { $0.publishDate > $1.publishDate })
-                        .map(\.id)
-                        + appState.redditFeeds.flatMap { $0.posts }
-                        .filter(\.isFavorite)
-                        .sorted(by: { $0.publishDate > $1.publishDate })
-                        .map(\.id)
-	            ) { offset in
-	                feedListScrollOffset = offset
-	            }
-	            .onAppear {
-            #if os(iOS)
-            // Update navigation state for iPhone
-            if UIDevice.current.userInterfaceIdiom == .phone {
-                selectedCategory = .favorites
-                appState.lastSelectedCategory = .favorites
-                appState.activeSubscriptionURL = nil
-            }
-            #endif
-        }
-        .navigationTitle("Favorites")
+    }
+
+    private var favoriteArticles: [Article] {
+        appState.feeds.flatMap { $0.articles }
+            .filter(\.isFavorite)
+            .sorted(by: { $0.publishDate > $1.publishDate })
+    }
+
+    private var favoriteRedditPosts: [RedditPost] {
+        appState.redditFeeds.flatMap { $0.posts }
+            .filter(\.isFavorite)
+            .sorted(by: { $0.publishDate > $1.publishDate })
+    }
+
+    private var favoriteTrackedItemIDs: [String] {
+        favoriteArticles.map(\.id) + favoriteRedditPosts.map(\.id)
     }
 
     private var favoriteArticlesSection: some View {
         Section(header: Text("RSS Articles")) {
-            let favoriteArticles = appState.feeds.flatMap { $0.articles }
-                .filter { $0.isFavorite }
-                .sorted(by: { $0.publishDate > $1.publishDate })
-
             if favoriteArticles.isEmpty {
                 Text("No favorite articles")
                     .foregroundColor(.secondary)
@@ -3224,16 +3233,12 @@ struct ContentView: View {
 
     private var favoriteRedditPostsSection: some View {
         Section(header: Text("Reddit Posts")) {
-            let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
-                .filter { $0.isFavorite }
-                .sorted(by: { $0.publishDate > $1.publishDate })
-
-            if favoritePosts.isEmpty {
+            if favoriteRedditPosts.isEmpty {
                 Text("No favorite posts")
                     .foregroundColor(.secondary)
                     .padding()
             } else {
-                ForEach(favoritePosts) { post in
+                ForEach(favoriteRedditPosts) { post in
                     Button(action: {
                         appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
                         appState.setSelectedRedditPost(post)
