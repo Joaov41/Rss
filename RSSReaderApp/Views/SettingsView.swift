@@ -464,6 +464,72 @@ struct SettingsView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var localTTSVoiceSection: some View {
+        if localTTSEngine == .system {
+            Section("Local TTS Voice") {
+                #if os(iOS)
+                // iOS-on-Mac: show only ttsbundle English voices that AVSpeech can use
+                if iosVoices.isEmpty {
+                    Text("No iOS voices available. Install voices in System Settings → Accessibility → Spoken Content → System Voice, then relaunch the app.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("Voice", selection: $localVoiceID) {
+                        ForEach(iosVoices, id: \.id) { voice in
+                            Text(voice.title).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: localVoiceID) { newID in
+                        UserDefaults.standard.set(newID, forKey: iosVoiceKey)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Test") {
+                            let utterance = AVSpeechUtterance(string: "This is a test of the selected voice.")
+                            if let voice = AVSpeechSynthesisVoice(identifier: localVoiceID) {
+                                utterance.voice = voice
+                            }
+                            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+                            if testSynthIOS == nil { testSynthIOS = AVSpeechSynthesizer() }
+                            testSynthIOS?.speak(utterance)
+                        }
+                        Button("Set as Default") {
+                            UserDefaults.standard.set(localVoiceID, forKey: iosVoiceKey)
+                        }
+                    }
+                }
+                #elseif os(macOS)
+                // macOS: list NSSpeechSynthesizer voices (includes Ava Enhanced)
+                if macVoices.isEmpty {
+                    Text("No macOS voices found.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("Voice", selection: $localVoiceID) {
+                        ForEach(macVoices, id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: localVoiceID) { newID in
+                        UserDefaults.standard.set(newID, forKey: macVoiceKey)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Test") {
+                            let synth = NSSpeechSynthesizer()
+                            _ = setMacSpeechVoice(synth, identifier: localVoiceID)
+                            synth.startSpeaking("This is a test of the selected voice.")
+                            testSynthMac = synth
+                        }
+                        Button("Set as Default") {
+                            UserDefaults.standard.set(localVoiceID, forKey: macVoiceKey)
+                        }
+                    }
+                }
+                #endif
+            }
+        }
+    }
     
     var body: some View {
         settingsNavigationContainer {
@@ -832,66 +898,7 @@ struct SettingsView: View {
                     mlxTTSSection
                     
                     // Local TTS voice picker (platform-specific, only lists working voices)
-                    if localTTSEngine == .system {
-                        Section("Local TTS Voice") {
-                        #if os(iOS)
-                        // iOS-on-Mac: show only ttsbundle English voices that AVSpeech can use
-                        if iosVoices.isEmpty {
-                            Text("No iOS voices available. Install voices in System Settings → Accessibility → Spoken Content → System Voice, then relaunch the app.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Picker("Voice", selection: $localVoiceID) {
-                                ForEach(iosVoices, id: \.id) { v in
-                                    Text(v.title).tag(v.id)
-                                }
-                            }
-                            .onChange(of: localVoiceID) { newID in
-                                UserDefaults.standard.set(newID, forKey: iosVoiceKey)
-                            }
-                            HStack(spacing: 12) {
-                                Button("Test") {
-                                    let utterance = AVSpeechUtterance(string: "This is a test of the selected voice.")
-                                    if let v = AVSpeechSynthesisVoice(identifier: localVoiceID) { utterance.voice = v }
-                                    utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-                                    if testSynthIOS == nil { testSynthIOS = AVSpeechSynthesizer() }
-                                    testSynthIOS?.speak(utterance)
-                                }
-                                Button("Set as Default") {
-                                    UserDefaults.standard.set(localVoiceID, forKey: iosVoiceKey)
-                                }
-                            }
-                        }
-                        #elseif os(macOS)
-                        // macOS: list NSSpeechSynthesizer voices (includes Ava Enhanced)
-                        if macVoices.isEmpty {
-                            Text("No macOS voices found.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Picker("Voice", selection: $localVoiceID) {
-                                ForEach(macVoices, id: \.id) { v in
-                                    Text(v.name).tag(v.id)
-                                }
-                            }
-                            .onChange(of: localVoiceID) { newID in
-                                UserDefaults.standard.set(newID, forKey: macVoiceKey)
-                            }
-                            HStack(spacing: 12) {
-                                Button("Test") {
-                                    let synth = NSSpeechSynthesizer()
-                                    _ = setMacSpeechVoice(synth, identifier: localVoiceID)
-                                    synth.startSpeaking("This is a test of the selected voice.")
-                                    testSynthMac = synth
-                                }
-                                Button("Set as Default") {
-                                    UserDefaults.standard.set(localVoiceID, forKey: macVoiceKey)
-                                }
-                            }
-                        }
-                        #endif
-                    }
-                    }
+                    localTTSVoiceSection
                     
                     Section("OPML Management") {
                         Button(action: {
