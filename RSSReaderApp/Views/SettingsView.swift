@@ -623,6 +623,223 @@ struct SettingsView: View {
             .padding(.horizontal, 4)
         }
     }
+
+    private var cloudSyncSection: some View {
+        Section("Cloud Sync") {
+            let persistenceManager = PersistenceManager.shared
+
+            Button {
+                appState.manualCloudRefresh()
+            } label: {
+                if appState.manualCloudSyncState == .syncing {
+                    Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                } else if appState.manualCloudSyncState == .completed {
+                    Label("Synced", systemImage: "checkmark.circle.fill")
+                } else {
+                    Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
+                }
+            }
+            .settingsGlassButtonStyle(prominent: true)
+            .tint(.blue)
+            .disabled(appState.manualCloudSyncState == .syncing)
+
+            Text("Pull the latest read states and subscriptions from iCloud immediately.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let status = appState.manualCloudSyncStatusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            if persistenceManager.isThisDevicePrimaryForSubscriptions {
+                Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
+                    .font(.subheadline)
+
+                Button {
+                    showReadHistoryMigrationConfirm = true
+                } label: {
+                    if isMigratingReadHistory {
+                        Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
+                    } else {
+                        Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
+                    }
+                }
+                .settingsGlassButtonStyle()
+                .tint(.purple)
+                .disabled(isMigratingReadHistory)
+
+                if isMigratingReadHistory {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                Text("One-time: seeds the new sync format so unread badge counts match across devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var primaryDeviceSection: some View {
+        Section("Primary Device for Subscriptions") {
+            let persistenceManager = PersistenceManager.shared
+
+            if persistenceManager.isThisDevicePrimaryForSubscriptions {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    VStack(alignment: .leading) {
+                        Text("This device is primary")
+                            .font(.headline)
+                        Text(persistenceManager.thisDeviceName)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Text("Subscription changes made here sync to all your devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if let primaryName = persistenceManager.primaryDeviceNameForSubscriptions {
+                HStack {
+                    Image(systemName: "icloud.fill")
+                        .foregroundColor(.blue)
+                    VStack(alignment: .leading) {
+                        Text("Syncing from:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(primaryName)
+                            .font(.headline)
+                    }
+                }
+
+                Text("Subscriptions are managed by the primary device. Changes made here won't sync to other devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button {
+                    persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
+                    appState.objectWillChange.send()
+                } label: {
+                    Label("Make this device primary", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .settingsGlassButtonStyle()
+                .tint(.orange)
+            } else {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("No primary device set")
+                        .font(.headline)
+                }
+
+                Text("Set a primary device to prevent subscription duplicates across your devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button {
+                    persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
+                    appState.objectWillChange.send()
+                } label: {
+                    Label("Make this device primary", systemImage: "checkmark.circle")
+                }
+                .settingsGlassButtonStyle(prominent: true)
+                .tint(.green)
+            }
+        }
+    }
+
+    private var storageBreakdownSection: some View {
+        Section("Storage Breakdown") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("App Container")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if isLoadingStorageBreakdown {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Button {
+                            refreshStorageBreakdown()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                if storageBreakdownItems.isEmpty {
+                    Text(isLoadingStorageBreakdown ? "Scanning storage…" : "No storage details found.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(storageBreakdownItems) { item in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, alignment: .center)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.name)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Text(item.detail)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(item.sizeText)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .frame(minWidth: 64, alignment: .trailing)
+
+                            ZStack {
+                                if item.cleanupKind != nil || item.isModelStorage {
+                                    Button(role: .destructive) {
+                                        pendingStorageBreakdownDelete = item
+                                        showStorageBreakdownDeleteConfirm = true
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(isDeletingStorageBreakdown)
+                                }
+                            }
+                            .frame(width: 24, alignment: .center)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+
+                if let storageBreakdownStatus {
+                    Text(storageBreakdownStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+        }
+    }
     
     var body: some View {
         settingsNavigationContainer {
@@ -771,136 +988,9 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                Section("Cloud Sync") {
-                    let persistenceManager = PersistenceManager.shared
+                cloudSyncSection
 
-                    Button {
-                        appState.manualCloudRefresh()
-                    } label: {
-                        if appState.manualCloudSyncState == .syncing {
-                            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
-                        } else if appState.manualCloudSyncState == .completed {
-                            Label("Synced", systemImage: "checkmark.circle.fill")
-                        } else {
-                            Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
-                        }
-                    }
-                    .settingsGlassButtonStyle(prominent: true)
-                    .tint(.blue)
-                    .disabled(appState.manualCloudSyncState == .syncing)
-
-                    Text("Pull the latest read states and subscriptions from iCloud immediately.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if let status = appState.manualCloudSyncStatusMessage {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
-                            .font(.subheadline)
-
-                        Button {
-                            showReadHistoryMigrationConfirm = true
-                        } label: {
-                            if isMigratingReadHistory {
-                                Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            } else {
-                                Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            }
-                        }
-                        .settingsGlassButtonStyle()
-                        .tint(.purple)
-                        .disabled(isMigratingReadHistory)
-
-                        if isMigratingReadHistory {
-                            ProgressView()
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-
-                        Text("One-time: seeds the new sync format so unread badge counts match across devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Section("Primary Device for Subscriptions") {
-                    let persistenceManager = PersistenceManager.shared
-
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        // This device is primary
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            VStack(alignment: .leading) {
-                                Text("This device is primary")
-                                    .font(.headline)
-                                Text(persistenceManager.thisDeviceName)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        Text("Subscription changes made here sync to all your devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else if let primaryName = persistenceManager.primaryDeviceNameForSubscriptions {
-                        // Another device is primary
-                        HStack {
-                            Image(systemName: "icloud.fill")
-                                .foregroundColor(.blue)
-                            VStack(alignment: .leading) {
-                                Text("Syncing from:")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(primaryName)
-                                    .font(.headline)
-                            }
-                        }
-
-                        Text("Subscriptions are managed by the primary device. Changes made here won't sync to other devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button {
-                            persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
-                            // Force UI refresh
-                            appState.objectWillChange.send()
-                        } label: {
-                            Label("Make this device primary", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .settingsGlassButtonStyle()
-                        .tint(.orange)
-                    } else {
-                        // No primary device set
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text("No primary device set")
-                                .font(.headline)
-                        }
-
-                        Text("Set a primary device to prevent subscription duplicates across your devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button {
-                            persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
-                            // Force UI refresh
-                            appState.objectWillChange.send()
-                        } label: {
-                            Label("Make this device primary", systemImage: "checkmark.circle")
-                        }
-                        .settingsGlassButtonStyle(prominent: true)
-                        .tint(.green)
-                    }
-                }
+                primaryDeviceSection
                     
                     Section("API Keys") {
                         SecureField("Gemini API Key", text: $geminiApiKey)
@@ -1031,90 +1121,7 @@ struct SettingsView: View {
 
                     cacheManagementSection
 
-                    Section("Storage Breakdown") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("App Container")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                if isLoadingStorageBreakdown {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Button {
-                                        refreshStorageBreakdown()
-                                    } label: {
-                                        Image(systemName: "arrow.clockwise")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-
-                            if storageBreakdownItems.isEmpty {
-                                Text(isLoadingStorageBreakdown ? "Scanning storage…" : "No storage details found.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                ForEach(storageBreakdownItems) { item in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
-
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.name)
-                                                .font(.subheadline)
-                                                .fontWeight(.semibold)
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                            Text(item.detail)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                                        Text(item.sizeText)
-                                            .font(.caption)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
-
-                                        ZStack {
-                                            if item.cleanupKind != nil || item.isModelStorage {
-                                                Button(role: .destructive) {
-                                                    pendingStorageBreakdownDelete = item
-                                                    showStorageBreakdownDeleteConfirm = true
-                                                } label: {
-                                                    Image(systemName: "trash")
-                                                }
-                                                .buttonStyle(.borderless)
-                                                .disabled(isDeletingStorageBreakdown)
-                                            }
-                                        }
-                                        .frame(width: 24, alignment: .center)
-                                    }
-                                    .padding(.vertical, 3)
-                                }
-                            }
-
-                            if let storageBreakdownStatus {
-                                Text(storageBreakdownStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
-                    }
+                    storageBreakdownSection
 
                     localModelStorageSection
 
