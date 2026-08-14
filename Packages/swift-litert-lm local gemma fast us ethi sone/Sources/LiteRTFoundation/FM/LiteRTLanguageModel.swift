@@ -13,7 +13,7 @@
 // transcript on each turn — correct and simple; an incremental fast-path is a
 // later optimization.
 
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && compiler(>=6.4)
 
 import Foundation
 import FoundationModels

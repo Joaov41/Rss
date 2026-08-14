@@ -12,7 +12,7 @@
 //     "Describe what happens in this video."
 //   }
 
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && compiler(>=6.4)
 
 import Foundation
 import FoundationModels
