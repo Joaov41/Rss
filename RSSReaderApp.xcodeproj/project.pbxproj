@@ -568,7 +568,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-					SDKROOT = macosx;
+				SDKROOT = macosx;
 					SWIFT_EMIT_LOC_STRINGS = YES;
 					SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 					SWIFT_VERSION = 5.0;
@@ -605,6 +605,7 @@
 				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.RSSReaderApp;
 				PRODUCT_NAME = RSSReaderApp;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xfrontend -solver-expression-time-threshold=300000";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 					SDKROOT = macosx;
 					SWIFT_EMIT_LOC_STRINGS = YES;
