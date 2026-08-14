@@ -108,7 +108,7 @@ private extension View {
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.presentationMode) var presentationMode
-    
+
     @State private var showingFileImporter = false
     @State private var showingFileExporter = false
     @State private var exportFileURL: URL?
@@ -840,284 +840,326 @@ struct SettingsView: View {
             .padding(.horizontal, 4)
         }
     }
-    
+
+    private var appearanceSection: some View {
+        Section("Appearance") {
+            #if os(macOS)
+            macAppearanceSelector
+                .padding(.vertical, 4)
+            #else
+            Picker("Theme", selection: $appearanceMode) {
+                Label("System", systemImage: "circle.lefthalf.filled").tag(0)
+                Label("Light", systemImage: "sun.max.fill").tag(1)
+                Label("Dark", systemImage: "moon.fill").tag(2)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .padding(.vertical, 4)
+            #endif
+        }
+    }
+
+    private var summaryProviderSection: some View {
+        Section("Summary Provider") {
+            #if os(macOS)
+            macSummaryProviderSelector
+                .padding(.vertical, 4)
+                .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
+                    summaryProviderDidChange(newValue)
+                }
+            #else
+            Picker("Summary Source", selection: $appState.settings.selectedSummaryProvider) {
+                ForEach(AppSettings.SummaryProvider.allCases, id: \.self) { provider in
+                    Text(provider.displayName)
+                        .tag(provider)
+                }
+            }
+            .pickerStyle(.menu)
+            .padding(.vertical, 4)
+            .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
+                summaryProviderDidChange(newValue)
+            }
+            #endif
+
+            Text(summaryProviderDescription)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 4)
+
+            #if os(macOS)
+            macWebAISelector
+                .padding(.top, 6)
+            #else
+            Picker("Web AI Destination", selection: Binding(
+                get: { appState.settings.selectedWebAIProvider },
+                set: { newValue in
+                    var newSettings = appState.settings
+                    newSettings.selectedWebAIProvider = newValue
+                    appState.updateSettings(newSettings)
+                }
+            )) {
+                ForEach(WebAIProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.top, 6)
+            #endif
+
+            Text(
+                appState.settings.selectedSummaryProvider == .webAI
+                ? "Web AI summaries use \(appState.settings.selectedWebAIProvider.displayName) in the in-app browser, send the prompt automatically when possible, and capture the reply back into the app."
+                : "Web-send buttons open \(appState.settings.selectedWebAIProvider.displayName) in an in-app browser, paste the prompt, and try to send it automatically."
+            )
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Persistent Web AI Sessions")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                Text("Log in inside RSSReaderApp so ChatGPT and Gemini sessions are reused by the in-app WebAI browser.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 10) {
+                    Button("Log In to ChatGPT") {
+                        launchWebAILogin(.chatgpt)
+                    }
+                    .settingsGlassButtonStyle()
+
+                    Button("Reset ChatGPT") {
+                        appState.resetWebAISession(for: .chatgpt)
+                    }
+                    .settingsGlassButtonStyle()
+                }
+
+                HStack(spacing: 10) {
+                    Button("Log In to Gemini") {
+                        launchWebAILogin(.gemini)
+                    }
+                    .settingsGlassButtonStyle()
+
+                    Button("Reset Gemini") {
+                        appState.resetWebAISession(for: .gemini)
+                    }
+                    .settingsGlassButtonStyle()
+                }
+            }
+
+            if appState.settings.selectedSummaryProvider == .mlxLocal {
+                mlxSettingsView
+            }
+
+            if appState.settings.selectedSummaryProvider == .coreAIMLXLocal {
+                coreAIMLXSettingsView
+            }
+
+            #if os(iOS)
+            if appState.settings.selectedSummaryProvider == .summarizeDaemon {
+                summarizeSettingsView
+            }
+            #endif
+
+            if appState.settings.selectedSummaryProvider == .applePCCGateway {
+                pccGatewaySettingsView
+            }
+        }
+    }
+
+    private var youtubeSection: some View {
+        Section("YouTube") {
+            Toggle("YouTube Support", isOn: Binding(
+                get: { appState.settings.youtubeSupportEnabled },
+                set: { enabled in
+                    var newSettings = appState.settings
+                    newSettings.youtubeSupportEnabled = enabled
+                    appState.updateSettings(newSettings)
+                    if enabled {
+                        appState.refreshAllFeeds()
+                    }
+                }
+            ))
+
+            Text("When enabled, search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for transcript-grounded summaries and Q&A. When disabled, the existing RSS and Reddit interface remains unchanged.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var apiKeysSection: some View {
+        Section("API Keys") {
+            SecureField("Gemini API Key", text: $geminiApiKey)
+                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
+                    cornerRadius: 12,
+                    tintColor: .purple.opacity(0.3)
+                ))
+                .onChange(of: geminiApiKey) { newValue in
+                    var newSettings = appState.settings
+                    newSettings.geminiApiKey = newValue
+                    appState.updateSettings(newSettings)
+                }
+
+            SecureField("OpenAI API Key (for TTS)", text: $openaiApiKey)
+                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
+                    cornerRadius: 12,
+                    tintColor: .blue.opacity(0.3)
+                ))
+                .onChange(of: openaiApiKey) { newValue in
+                    var newSettings = appState.settings
+                    newSettings.openaiApiKey = newValue
+                    appState.updateSettings(newSettings)
+                }
+        }
+    }
+
+    private var textToSpeechSection: some View {
+        Section("Text-to-Speech") {
+            Toggle("Enable TTS", isOn: $enableTTS)
+
+            if enableTTS {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Voice: \(ttsVoice)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text("Rate: \(ttsRate, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $ttsRate, in: 0.1...1.0, step: 0.1)
+
+                    Text("Pitch: \(ttsPitch, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $ttsPitch, in: 0.5...2.0, step: 0.1)
+
+                    Text("Volume: \(ttsVolume, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $ttsVolume, in: 0.1...1.0, step: 0.1)
+                }
+            }
+        }
+    }
+
+    private var localTTSEngineSection: some View {
+        Section("Local TTS Engine") {
+            Picker("Engine", selection: $localTTSEngine) {
+                ForEach(LocalTTSEngine.availableEngines) { engine in
+                    Text(engine.displayName).tag(engine)
+                }
+            }
+            .onChange(of: localTTSEngine) { newValue in
+                appState.summaryService.setLocalTTSEngine(newValue)
+                var newSettings = appState.settings
+                newSettings.localTTSEngine = newValue
+                appState.updateSettings(newSettings)
+                if newValue == .kokoro {
+                    kokoroVoice = appState.summaryService.getKokoroVoice()
+                    kokoroSpeed = appState.summaryService.getKokoroSpeed()
+                    kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
+                }
+            }
+
+            if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
+                Text("MLX TTS requires the MLXAudio package and model access.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if localTTSEngine == .kokoro {
+                Text("MLX TTS runs fully on device. First use may download large model assets.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Uses system voices for on-device speech.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var opmlManagementSection: some View {
+        Section("OPML Management") {
+            Button(action: {
+                showingFileImporter = true
+            }) {
+                HStack {
+                    if isImporting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Importing...")
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Import OPML")
+                    }
+                }
+            }
+            .disabled(isImporting || isExporting)
+            .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
+
+            Button(action: {
+                exportOPML()
+            }) {
+                HStack {
+                    if isExporting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Exporting...")
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Export OPML")
+                    }
+                }
+            }
+            .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
+            .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
+        }
+    }
+
+    private var actionsSection: some View {
+        Section("Actions") {
+            Button("Clear All Data") {
+                // Clear data action
+            }
+            .settingsGlassButtonStyle(tintColor: .red.opacity(0.3))
+
+            Button("Reset to Defaults") {
+                // Reset action
+            }
+            .settingsGlassButtonStyle(tintColor: .orange.opacity(0.3))
+        }
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
                 settingsBackground
                     .ignoresSafeArea()
-                
+
                 Form {
-                    Section("Appearance") {
-                        #if os(macOS)
-                        macAppearanceSelector
-                            .padding(.vertical, 4)
-                        #else
-                        Picker("Theme", selection: $appearanceMode) {
-                            Label("System", systemImage: "circle.lefthalf.filled").tag(0)
-                            Label("Light", systemImage: "sun.max.fill").tag(1)
-                            Label("Dark", systemImage: "moon.fill").tag(2)
-                        }
-                        .pickerStyle(SegmentedPickerStyle())
-                        .padding(.vertical, 4)
-                        #endif
-                    }
-                    
-                    Section("Summary Provider") {
-                        #if os(macOS)
-                        macSummaryProviderSelector
-                            .padding(.vertical, 4)
-                            .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
-                                summaryProviderDidChange(newValue)
-                            }
-                        #else
-                        Picker("Summary Source", selection: $appState.settings.selectedSummaryProvider) {
-                            ForEach(AppSettings.SummaryProvider.allCases, id: \.self) { provider in
-                                Text(provider.displayName)
-                                    .tag(provider)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .padding(.vertical, 4)
-                        .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
-                            summaryProviderDidChange(newValue)
-                        }
-                        #endif
-                        
-                    Text(summaryProviderDescription)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
+                    appearanceSection
 
-                        #if os(macOS)
-                        macWebAISelector
-                            .padding(.top, 6)
-                        #else
-                        Picker("Web AI Destination", selection: Binding(
-                            get: { appState.settings.selectedWebAIProvider },
-                            set: { newValue in
-                                var newSettings = appState.settings
-                                newSettings.selectedWebAIProvider = newValue
-                                appState.updateSettings(newSettings)
-                            }
-                        )) {
-                            ForEach(WebAIProvider.allCases) { provider in
-                                Text(provider.displayName).tag(provider)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.top, 6)
-                        #endif
+                    summaryProviderSection
 
-                        Text(
-                            appState.settings.selectedSummaryProvider == .webAI
-                            ? "Web AI summaries use \(appState.settings.selectedWebAIProvider.displayName) in the in-app browser, send the prompt automatically when possible, and capture the reply back into the app."
-                            : "Web-send buttons open \(appState.settings.selectedWebAIProvider.displayName) in an in-app browser, paste the prompt, and try to send it automatically."
-                        )
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    youtubeSection
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Persistent Web AI Sessions")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
+                    cloudSyncSection
 
-                            Text("Log in inside RSSReaderApp so ChatGPT and Gemini sessions are reused by the in-app WebAI browser.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                    primaryDeviceSection
 
-                            HStack(spacing: 10) {
-                                Button("Log In to ChatGPT") {
-                                    launchWebAILogin(.chatgpt)
-                                }
-                                .settingsGlassButtonStyle()
-
-                                Button("Reset ChatGPT") {
-                                    appState.resetWebAISession(for: .chatgpt)
-                                }
-                                .settingsGlassButtonStyle()
-                            }
-
-                            HStack(spacing: 10) {
-                                Button("Log In to Gemini") {
-                                    launchWebAILogin(.gemini)
-                                }
-                                .settingsGlassButtonStyle()
-
-                                Button("Reset Gemini") {
-                                    appState.resetWebAISession(for: .gemini)
-                                }
-                                .settingsGlassButtonStyle()
-                            }
-                        }
-
-                        if appState.settings.selectedSummaryProvider == .mlxLocal {
-                            mlxSettingsView
-                        }
-
-                        if appState.settings.selectedSummaryProvider == .coreAIMLXLocal {
-                            coreAIMLXSettingsView
-                        }
-
-                        #if os(iOS)
-                        if appState.settings.selectedSummaryProvider == .summarizeDaemon {
-                            summarizeSettingsView
-                        }
-                        #endif
-
-                        if appState.settings.selectedSummaryProvider == .applePCCGateway {
-                            pccGatewaySettingsView
-                        }
-                }
-
-                Section("YouTube") {
-                    Toggle("YouTube Support", isOn: Binding(
-                        get: { appState.settings.youtubeSupportEnabled },
-                        set: { enabled in
-                            var newSettings = appState.settings
-                            newSettings.youtubeSupportEnabled = enabled
-                            appState.updateSettings(newSettings)
-                            if enabled {
-                                appState.refreshAllFeeds()
-                            }
-                        }
-                    ))
-
-                    Text("When enabled, search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for transcript-grounded summaries and Q&A. When disabled, the existing RSS and Reddit interface remains unchanged.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                cloudSyncSection
-
-                primaryDeviceSection
-                    
-                    Section("API Keys") {
-                        SecureField("Gemini API Key", text: $geminiApiKey)
-                            .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
-                                cornerRadius: 12,
-                                tintColor: .purple.opacity(0.3)
-                            ))
-                            .onChange(of: geminiApiKey) { newValue in
-                                var newSettings = appState.settings
-                                newSettings.geminiApiKey = newValue
-                                appState.updateSettings(newSettings)
-                            }
-
-                        SecureField("OpenAI API Key (for TTS)", text: $openaiApiKey)
-                            .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
-                                cornerRadius: 12,
-                                tintColor: .blue.opacity(0.3)
-                            ))
-                            .onChange(of: openaiApiKey) { newValue in
-                                var newSettings = appState.settings
-                                newSettings.openaiApiKey = newValue
-                                appState.updateSettings(newSettings)
-                            }
-                    }
+                    apiKeysSection
 
                     redditAuthSection
 
-                    Section("Text-to-Speech") {
-                        Toggle("Enable TTS", isOn: $enableTTS)
-                        
-                        if enableTTS {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Voice: \(ttsVoice)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                
-                                Text("Rate: \(ttsRate, specifier: "%.2f")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Slider(value: $ttsRate, in: 0.1...1.0, step: 0.1)
-                                
-                                Text("Pitch: \(ttsPitch, specifier: "%.2f")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Slider(value: $ttsPitch, in: 0.5...2.0, step: 0.1)
-                                
-                                Text("Volume: \(ttsVolume, specifier: "%.2f")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Slider(value: $ttsVolume, in: 0.1...1.0, step: 0.1)
-                            }
-                        }
-                    }
+                    textToSpeechSection
 
-                    Section("Local TTS Engine") {
-                        Picker("Engine", selection: $localTTSEngine) {
-                            ForEach(LocalTTSEngine.availableEngines) { engine in
-                                Text(engine.displayName).tag(engine)
-                            }
-                        }
-                        .onChange(of: localTTSEngine) { newValue in
-                            appState.summaryService.setLocalTTSEngine(newValue)
-                            var newSettings = appState.settings
-                            newSettings.localTTSEngine = newValue
-                            appState.updateSettings(newSettings)
-                            if newValue == .kokoro {
-                                kokoroVoice = appState.summaryService.getKokoroVoice()
-                                kokoroSpeed = appState.summaryService.getKokoroSpeed()
-                                kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
-                            }
-                        }
-
-                        if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
-                            Text("MLX TTS requires the MLXAudio package and model access.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if localTTSEngine == .kokoro {
-                            Text("MLX TTS runs fully on device. First use may download large model assets.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Uses system voices for on-device speech.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+                    localTTSEngineSection
 
                     mlxTTSSection
                     
                     // Local TTS voice picker (platform-specific, only lists working voices)
                     localTTSVoiceSection
                     
-                    Section("OPML Management") {
-                        Button(action: {
-                            showingFileImporter = true
-                        }) {
-                            HStack {
-                                if isImporting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Importing...")
-                                } else {
-                                    Image(systemName: "square.and.arrow.down")
-                                    Text("Import OPML")
-                                }
-                            }
-                        }
-                        .disabled(isImporting || isExporting)
-                        .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
-                        
-                        Button(action: {
-                            exportOPML()
-                        }) {
-                            HStack {
-                                if isExporting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Exporting...")
-                                } else {
-                                    Image(systemName: "square.and.arrow.up")
-                                    Text("Export OPML")
-                                }
-                            }
-                        }
-                        .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
-                        .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
-                    }
+                    opmlManagementSection
 
                     cacheManagementSection
 
@@ -1125,17 +1167,7 @@ struct SettingsView: View {
 
                     localModelStorageSection
 
-                    Section("Actions") {
-                        Button("Clear All Data") {
-                            // Clear data action
-                        }
-                        .settingsGlassButtonStyle(tintColor: .red.opacity(0.3))
-
-                        Button("Reset to Defaults") {
-                            // Reset action
-                        }
-                        .settingsGlassButtonStyle(tintColor: .orange.opacity(0.3))
-                    }
+                    actionsSection
                 }
                 .scrollContentBackground(.hidden) // Hide default form background
                 #if os(macOS)
