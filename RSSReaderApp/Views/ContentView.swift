@@ -1220,6 +1220,7 @@ private func currentPlatformScreenHeight() -> CGFloat {
 
 #if os(macOS)
 private let macArticleScrollMessageName = "rssArticleScroll"
+private let macArticleContentHeightMessageName = "rssArticleContentHeight"
 
 private let macArticleScrollReporterScript = """
 (function() {
@@ -1250,6 +1251,67 @@ private let macArticleScrollReporterScript = """
   setTimeout(function() { window.__rssArticleReportScroll(true); }, 0);
   setTimeout(function() { window.__rssArticleReportScroll(true); }, 150);
   setTimeout(function() { window.__rssArticleReportScroll(true); }, 500);
+})();
+"""
+
+private let macArticleContentHeightReporterScript = """
+(function() {
+  window.__rssArticleReportContentHeight = function() {
+    var root = document.documentElement;
+    var body = document.body;
+    var height = Math.max(
+      root ? root.scrollHeight : 0,
+      root ? root.offsetHeight : 0,
+      root ? root.clientHeight : 0,
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      body ? body.clientHeight : 0
+    );
+    if (height > 0 && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.rssArticleContentHeight) {
+      window.webkit.messageHandlers.rssArticleContentHeight.postMessage(height);
+    }
+  };
+
+  if (!window.__rssArticleContentHeightReporterInstalled) {
+    window.__rssArticleContentHeightReporterInstalled = true;
+
+    if (window.ResizeObserver) {
+      window.__rssArticleContentResizeObserver = new ResizeObserver(function() {
+        window.__rssArticleReportContentHeight();
+      });
+      if (document.documentElement) {
+        window.__rssArticleContentResizeObserver.observe(document.documentElement);
+      }
+      if (document.body) {
+        window.__rssArticleContentResizeObserver.observe(document.body);
+      }
+    }
+
+    if (window.MutationObserver && document.documentElement) {
+      window.__rssArticleContentMutationObserver = new MutationObserver(function() {
+        window.__rssArticleReportContentHeight();
+      });
+      window.__rssArticleContentMutationObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true
+      });
+    }
+
+    window.addEventListener('load', window.__rssArticleReportContentHeight, { passive: true });
+    window.addEventListener('resize', window.__rssArticleReportContentHeight, { passive: true });
+    document.addEventListener('load', window.__rssArticleReportContentHeight, true);
+
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(window.__rssArticleReportContentHeight);
+    }
+  }
+
+  requestAnimationFrame(function() {
+    window.__rssArticleReportContentHeight();
+    requestAnimationFrame(window.__rssArticleReportContentHeight);
+  });
 })();
 """
 
@@ -5818,6 +5880,14 @@ struct ArticleDetailView: View {
             }
             .padding(.top, readerTopContentInset(for: article) + 12)
         } else {
+            #if os(macOS)
+            let rendererViewportHeight: CGFloat? = articleHasVisibleAIBox(article)
+                ? nil
+                : articleReaderViewportHeight(containerHeight: viewportHeight)
+            #else
+            let rendererViewportHeight = articleReaderViewportHeight(containerHeight: viewportHeight)
+            #endif
+
             ArticleContentRenderer(
                 content: contentToRender,
                 baseURL: article.url,
@@ -5827,7 +5897,7 @@ struct ArticleDetailView: View {
                 viewMode: $articleViewMode,
                 isLoadingReader: $isArticleReaderLoading,
                 isReadingChromeHidden: isReadingChromeHidden,
-                readerViewportHeight: articleReaderViewportHeight(containerHeight: viewportHeight),
+                readerViewportHeight: rendererViewportHeight,
                 scrollToTopTrigger: articleReaderScrollToTopTrigger,
                 readerTopContentInset: readerTopContentInset(for: article),
                 onPhoneScrollActivity: notePhoneActionBarScrollActivity,
@@ -7380,6 +7450,7 @@ struct ArticleContentRenderer: View {
     }
 
     @State private var contentHeight: CGFloat = 100
+    @State private var readerContentHeight: CGFloat = 100
     @State private var readerModeAvailable: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     #if os(iOS)
@@ -7507,6 +7578,13 @@ struct ArticleContentRenderer: View {
     private var articleContentPanel: some View {
         if viewMode == .reader && canShowReaderMode {
             let viewportHeight = readerViewportHeight ?? max(currentPlatformScreenHeight(), 320)
+            #if os(macOS)
+            let effectiveReaderHeight = readerViewportHeight == nil
+                ? max(readerContentHeight, viewportHeight)
+                : viewportHeight
+            #else
+            let effectiveReaderHeight = viewportHeight
+            #endif
 
             ZStack(alignment: .top) {
                 readerLoadingFallback(viewportHeight: viewportHeight)
@@ -7520,14 +7598,16 @@ struct ArticleContentRenderer: View {
                     articleURL: baseURL!,
                     isLoading: $isLoadingReader,
                     readerModeAvailable: $readerModeAvailable,
+                    contentHeight: $readerContentHeight,
                     useCompactTitleSizing: prefersCompactTitleSizing,
                     scrollToTopTrigger: scrollToTopTrigger,
                     topContentInset: readerTopContentInset,
+                    forwardsScrollingToAncestor: readerViewportHeight == nil,
                     onScrollActivity: onArticleTextScroll,
                     onScrollOffsetChange: onMacArticleScrollOffsetChange
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: viewportHeight)
+                .frame(height: effectiveReaderHeight)
                 .opacity(isLoadingReader ? 0 : 1)
                 .allowsHitTesting(!isLoadingReader)
                 .accessibilityHidden(isLoadingReader)
@@ -7551,7 +7631,7 @@ struct ArticleContentRenderer: View {
             #endif
             }
             .frame(maxWidth: .infinity)
-            .frame(height: viewportHeight)
+            .frame(height: effectiveReaderHeight)
             .animation(.easeOut(duration: 0.18), value: isLoadingReader)
         } else {
             #if os(macOS)
@@ -8667,13 +8747,31 @@ struct ArticleContentRenderer: View {
 // WebView that loads the article URL and applies Readability.js for clean content extraction
 
 #if os(macOS)
+private final class MacArticleReaderWKWebView: WKWebView {
+    var forwardsVerticalScrollingToAncestor = false
+
+    override func scrollWheel(with event: NSEvent) {
+        let isVerticalScroll = abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+        guard forwardsVerticalScrollingToAncestor,
+              isVerticalScroll,
+              let outerScrollView = firstAncestorScrollView(from: superview) else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        outerScrollView.scrollWheel(with: event)
+    }
+}
+
 struct ArticleReaderWebView: NSViewRepresentable {
     let articleURL: URL
     @Binding var isLoading: Bool
     @Binding var readerModeAvailable: Bool
+    @Binding var contentHeight: CGFloat
     let useCompactTitleSizing: Bool
     let scrollToTopTrigger: Int
     let topContentInset: CGFloat
+    let forwardsScrollingToAncestor: Bool
     let onScrollActivity: () -> Void
     let onScrollOffsetChange: (CGFloat) -> Void
 
@@ -8768,6 +8866,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.userContentController.add(context.coordinator, name: macArticleScrollMessageName)
+        config.userContentController.add(context.coordinator, name: macArticleContentHeightMessageName)
         config.userContentController.addUserScript(
             WKUserScript(
                 source: macArticleScrollReporterScript,
@@ -8775,8 +8874,16 @@ struct ArticleReaderWebView: NSViewRepresentable {
                 forMainFrameOnly: true
             )
         )
+        config.userContentController.addUserScript(
+            WKUserScript(
+                source: macArticleContentHeightReporterScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = MacArticleReaderWKWebView(frame: .zero, configuration: config)
+        webView.forwardsVerticalScrollingToAncestor = forwardsScrollingToAncestor
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
         Self.conceal(webView)
@@ -8795,8 +8902,10 @@ struct ArticleReaderWebView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.attachScrollObserver(to: nsView)
         context.coordinator.applyTopContentInset(topContentInset, to: nsView)
+        context.coordinator.applyScrollingMode(to: nsView)
         Self.installWebPageChromeSuppression(on: nsView)
         nsView.evaluateJavaScript(macArticleScrollReporterScript, completionHandler: nil)
+        nsView.evaluateJavaScript(macArticleContentHeightReporterScript, completionHandler: nil)
 
         if context.coordinator.currentURL != articleURL || context.coordinator.currentUseCompactTitleSizing != useCompactTitleSizing {
             context.coordinator.currentURL = articleURL
@@ -8805,6 +8914,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
 
             DispatchQueue.main.async {
                 self.isLoading = true
+                self.contentHeight = 100
             }
 
             Self.conceal(nsView)
@@ -8939,6 +9049,58 @@ struct ArticleReaderWebView: NSViewRepresentable {
             scheduleScrollOffsetSettlingReports(for: webView)
         }
 
+        func applyScrollingMode(to webView: WKWebView) {
+            if let readerWebView = webView as? MacArticleReaderWKWebView {
+                readerWebView.forwardsVerticalScrollingToAncestor = parent.forwardsScrollingToAncestor
+            }
+
+            if let scrollView = firstDescendantScrollView(in: webView) {
+                scrollView.hasVerticalScroller = !parent.forwardsScrollingToAncestor
+                scrollView.verticalScrollElasticity = parent.forwardsScrollingToAncestor ? .none : .automatic
+            }
+
+            let overflow = parent.forwardsScrollingToAncestor ? "hidden" : "auto"
+            webView.evaluateJavaScript(
+                "document.documentElement.style.overflowY='\(overflow)'; if(document.body){document.body.style.overflowY='\(overflow)';}",
+                completionHandler: nil
+            )
+
+            if parent.forwardsScrollingToAncestor {
+                webView.evaluateJavaScript(macArticleContentHeightReporterScript, completionHandler: nil)
+                scheduleContentHeightMeasurements(for: webView)
+            }
+        }
+
+        private func scheduleContentHeightMeasurements(for webView: WKWebView) {
+            let delays: [TimeInterval] = [0, 0.08, 0.2, 0.5, 1.0, 2.0, 4.0]
+            for delay in delays {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+                    guard let self, let webView, self.parent.forwardsScrollingToAncestor else { return }
+                    self.measureContentHeight(in: webView)
+                }
+            }
+        }
+
+        private func measureContentHeight(in webView: WKWebView) {
+            let script = "Math.max(document.documentElement ? document.documentElement.scrollHeight : 0, document.body ? document.body.scrollHeight : 0);"
+            webView.evaluateJavaScript(script) { [weak self] result, _ in
+                guard let self else { return }
+                let measuredHeight: CGFloat?
+                if let number = result as? NSNumber {
+                    measuredHeight = CGFloat(truncating: number)
+                } else if let value = result as? Double {
+                    measuredHeight = CGFloat(value)
+                } else if let value = result as? Int {
+                    measuredHeight = CGFloat(value)
+                } else {
+                    measuredHeight = nil
+                }
+
+                guard let measuredHeight else { return }
+                publishContentHeight(measuredHeight)
+            }
+        }
+
         private func scheduleTopContentInsetRetry(_ inset: CGFloat, to webView: WKWebView) {
             guard topContentInsetAttachAttempts < 40, !isTopContentInsetRetryScheduled else { return }
 
@@ -9053,6 +9215,18 @@ struct ArticleReaderWebView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == macArticleContentHeightMessageName {
+                guard parent.forwardsScrollingToAncestor else { return }
+                if let number = message.body as? NSNumber {
+                    publishContentHeight(CGFloat(truncating: number))
+                } else if let value = message.body as? Double {
+                    publishContentHeight(CGFloat(value))
+                } else if let value = message.body as? Int {
+                    publishContentHeight(CGFloat(value))
+                }
+                return
+            }
+
             guard message.name == macArticleScrollMessageName else { return }
 
             if let offset = message.body as? CGFloat {
@@ -9061,6 +9235,15 @@ struct ArticleReaderWebView: NSViewRepresentable {
                 reportScriptScrollOffset(CGFloat(offset))
             } else if let offset = message.body as? Int {
                 reportScriptScrollOffset(CGFloat(offset))
+            }
+        }
+
+        private func publishContentHeight(_ measuredHeight: CGFloat) {
+            guard measuredHeight > 0 else { return }
+            DispatchQueue.main.async {
+                if abs(self.parent.contentHeight - measuredHeight) > 1 {
+                    self.parent.contentHeight = measuredHeight
+                }
             }
         }
 
@@ -9093,6 +9276,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
             webView.evaluateJavaScript(macArticleScrollReporterScript, completionHandler: nil)
             attachScrollObserver(to: webView)
             scheduleScrollOffsetSettlingReports(for: webView)
+            applyScrollingMode(to: webView)
 
             guard !hasAppliedReaderMode else {
                 print("📖 ArticleReaderWebView: Reader mode already applied, skipping")
@@ -9204,6 +9388,7 @@ struct ArticleReaderWebView: NSViewRepresentable {
                             webView.evaluateJavaScript(macArticleScrollReporterScript, completionHandler: nil)
                             self.attachScrollObserver(to: webView)
                             self.scheduleScrollOffsetSettlingReports(for: webView)
+                            self.applyScrollingMode(to: webView)
                             ArticleReaderWebView.reveal(webView)
                         }
                     }
