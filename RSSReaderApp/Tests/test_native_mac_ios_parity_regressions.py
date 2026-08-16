@@ -66,6 +66,19 @@ class NativeMacIOSParityRegressionTests(unittest.TestCase):
         )
         self.assertIn('accessibilityLabel("Open article \\(index + 1)")', content)
 
+    def test_open_overall_summary_is_a_stable_refresh_snapshot(self):
+        content = read("RSSReaderApp/Views/ContentView.swift")
+        draggable = content.split("struct DraggableGlobalSummaryView: View", 1)[1].split(
+            "struct GlobalSummaryResultView: View", 1
+        )[0]
+
+        self.assertIn("snapshotAggregateSummaryText", draggable)
+        self.assertIn("hasCapturedSummarySnapshot", draggable)
+        self.assertIn("captureSummarySnapshotIfAvailable(from: newValue)", draggable)
+        self.assertIn("guard !hasCapturedSummarySnapshot else { return }", draggable)
+        self.assertIn("acceptRequestedAggregateSummaryIfAvailable(newValue)", draggable)
+        self.assertNotIn("rebuildParsedSummaryCache(from: newValue)", draggable)
+
     def test_reference_parser_accepts_bracketed_citations(self):
         components = read("RSSReaderApp/Views/AskAIComponents.swift")
         self.assertIn("let referenceToken", components)

@@ -25,15 +25,10 @@ final class WebAISessionManager {
         coordinator: WKNavigationDelegate & WKScriptMessageHandler & WKUIDelegate,
         handlerName: String,
         bootstrapScript: String,
-        forceReload: Bool = true
+        forceReload: Bool = true,
+        forceFresh: Bool = false
     ) -> WKWebView {
-        #if os(macOS)
-        let usesPrivateStore = provider == .chatgpt
-        let requiresFreshWebView = usesPrivateStore
-        #else
-        let usesPrivateStore = false
-        let requiresFreshWebView = false
-        #endif
+        let requiresFreshWebView = forceFresh
 
         if requiresFreshWebView, let existing = webViews.removeValue(forKey: provider) {
             existing.stopLoading()
@@ -55,7 +50,7 @@ final class WebAISessionManager {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        configuration.websiteDataStore = usesPrivateStore ? .nonPersistent() : websiteDataStore
+        configuration.websiteDataStore = websiteDataStore
         configuration.processPool = processPool
         #if os(iOS)
         configuration.allowsInlineMediaPlayback = true
@@ -93,19 +88,6 @@ final class WebAISessionManager {
 
     func reloadProviderHomeIgnoringCache(_ provider: WebAIProvider, in webView: WKWebView) {
         loadProviderHome(provider, in: webView, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
-    }
-
-    func removeCachedWebsiteData(
-        for provider: WebAIProvider,
-        from dataStore: WKWebsiteDataStore,
-        completion: @escaping () -> Void
-    ) {
-        removeWebsiteData(
-            for: provider,
-            from: dataStore,
-            dataTypes: cacheWebsiteDataTypes(),
-            completion: completion
-        )
     }
 
     func removeAllWebsiteData(
@@ -180,21 +162,6 @@ final class WebAISessionManager {
     private func applyProviderSettings(to webView: WKWebView, provider: WebAIProvider) {
         webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         webView.customUserAgent = nil
-    }
-
-    private func cacheWebsiteDataTypes() -> Set<String> {
-        var dataTypes: Set<String> = [
-            WKWebsiteDataTypeDiskCache,
-            WKWebsiteDataTypeMemoryCache,
-            WKWebsiteDataTypeOfflineWebApplicationCache
-        ]
-
-        if #available(iOS 11.3, macOS 10.13.4, *) {
-            dataTypes.insert(WKWebsiteDataTypeFetchCache)
-            dataTypes.insert(WKWebsiteDataTypeServiceWorkerRegistrations)
-        }
-
-        return dataTypes
     }
 
     private func sessionDomainFragments(for provider: WebAIProvider) -> [String] {
@@ -330,6 +297,7 @@ struct WebAIHandoffView: View {
                 appState.handleWebAIRequestFailure(requestID: request.id, message: message)
             }
         )
+        .id(request.id)
     }
 }
 
@@ -717,7 +685,11 @@ struct WebAIHandoffFloatingPanelModifier: ViewModifier {
                                     height: min(panelSize.height, max(0, proxy.size.height - 32))
                                 )
                                 .offset(clampedOffset(panelOffset, containerSize: proxy.size))
-                                .opacity(appState.isWebAIHandoffMinimized ? 0 : 1)
+                                .opacity(
+                                    appState.isWebAIHandoffMinimized
+                                        ? (request.provider == .gemini && request.shouldAutoCapture ? 0.001 : 0)
+                                        : 1
+                                )
                                 .allowsHitTesting(!appState.isWebAIHandoffMinimized)
                                 .accessibilityHidden(appState.isWebAIHandoffMinimized)
 
@@ -990,15 +962,17 @@ private extension WebAIHandoffRepresentable {
             coordinator: coordinator,
             handlerName: Self.scriptMessageHandlerName,
             bootstrapScript: Coordinator.buildCaptureBootstrapScript(handlerName: Self.scriptMessageHandlerName),
-            forceReload: true
+            forceReload: true,
+            forceFresh: request.shouldAutoCapture
         )
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate {
         private var parent: WebAIHandoffRepresentable
         private var currentRequestID: UUID
-        private var injectionAttempts = 0
-        private let maxAttempts = 10
+        private var injectionDeadline: Date = .distantPast
+        private let composerWaitTimeout: TimeInterval = 30
+        private var pendingInjectionWorkItem: DispatchWorkItem?
         private var captureFinished = false
         private var didScheduleReadyWork = false
         private var expectedChunks: [String: Int] = [:]
@@ -1012,15 +986,17 @@ private extension WebAIHandoffRepresentable {
         private let fallbackExtractionPollInterval: TimeInterval = 1.0
         private let fallbackExtractionSettleInterval: TimeInterval = 2.2
         private let fallbackExtractionMaxWait: TimeInterval = 190
-        private var providerContentFailureMonitorToken = UUID()
-        private var providerContentFailureMonitorStartedAt: Date = .distantPast
-        private let providerContentFailureMonitorInterval: TimeInterval = 1.0
-        private let providerContentFailureMonitorMaxWait: TimeInterval = 45
         private var didStagePromptForCurrentRequest = false
         private let promptStagingThreshold = 1800
         private let promptStagingChunkSize = 1200
         private var providerContentFailureRecoveryAttempts = 0
-        private let maxProviderContentFailureRecoveryAttempts = 4
+        private let maxProviderContentFailureRecoveryAttempts = 2
+
+        private enum ProviderRecoveryOutcome {
+            case notNeeded
+            case retryClicked
+            case navigationStarted
+        }
 
         private struct ExtractionSnapshot {
             let status: String
@@ -1039,13 +1015,13 @@ private extension WebAIHandoffRepresentable {
             guard requestChanged else { return }
 
             currentRequestID = parent.request.id
-            injectionAttempts = 0
+            cancelPendingInjection()
+            injectionDeadline = .distantPast
             captureFinished = false
             didScheduleReadyWork = false
             expectedChunks.removeAll()
             chunkBuffers.removeAll()
             resetFallbackExtractionState()
-            resetProviderContentFailureMonitorState()
             didStagePromptForCurrentRequest = false
             providerContentFailureRecoveryAttempts = 0
 
@@ -1065,13 +1041,13 @@ private extension WebAIHandoffRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            injectionAttempts = 0
+            cancelPendingInjection()
+            injectionDeadline = .distantPast
             captureFinished = false
             didScheduleReadyWork = false
             expectedChunks.removeAll()
             chunkBuffers.removeAll()
             resetFallbackExtractionState()
-            resetProviderContentFailureMonitorState()
             didStagePromptForCurrentRequest = false
             DispatchQueue.main.async {
                 self.parent.isLoading = true
@@ -1096,30 +1072,47 @@ private extension WebAIHandoffRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-            print("[WebAI navigation] web content process terminated for \(parent.request.provider.displayName); reloading")
-            webView.reload()
+            let message = "\(parent.request.provider.displayName) web process terminated."
+            print("[WebAI navigation] \(message)")
+            deliverCaptureFailure(message)
         }
 
         private func scheduleReadyWork(in webView: WKWebView) {
             guard !didScheduleReadyWork else { return }
             didScheduleReadyWork = true
+            injectionDeadline = Date().addingTimeInterval(composerWaitTimeout)
             armCaptureSession(in: webView)
             if parent.request.provider == .chatgpt || parent.request.provider == .gemini {
                 captureFallbackExtractionBaseline(in: webView)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            scheduleInjection(in: webView, after: 1.5)
+        }
+
+        private func cancelPendingInjection() {
+            pendingInjectionWorkItem?.cancel()
+            pendingInjectionWorkItem = nil
+        }
+
+        private func scheduleInjection(in webView: WKWebView, after delay: TimeInterval) {
+            cancelPendingInjection()
+
+            let requestID = currentRequestID
+            let item = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView,
+                      self.currentRequestID == requestID,
+                      !self.captureFinished else { return }
+                self.pendingInjectionWorkItem = nil
                 self.injectPrompt(into: webView)
             }
+            pendingInjectionWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         }
 
         private func handleNavigationFailure(_ error: Error) {
             let nsError = error as NSError
             guard nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled else { return }
             print("[WebAI navigation] failed provider=\(parent.request.provider.displayName) code=\(nsError.code) error=\(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.parent.isLoading = false
-                self.parent.fallbackMessage = "Could not load \(self.parent.request.provider.displayName): \(error.localizedDescription)"
-            }
+            deliverCaptureFailure("Could not load \(parent.request.provider.displayName): \(error.localizedDescription)")
         }
 
         private var shouldStagePromptForInjection: Bool {
@@ -1264,16 +1257,17 @@ private extension WebAIHandoffRepresentable {
         }
 
         private func injectPrompt(into webView: WKWebView) {
-            recoverProviderContentFailureIfNeeded(in: webView) { [weak self, weak webView] recovered in
+            recoverProviderContentFailureIfNeeded(in: webView) { [weak self, weak webView] outcome in
                 guard let self, let webView else { return }
-                if recovered {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                        self.injectPrompt(into: webView)
-                    }
-                    return
-                }
 
-                self.injectPromptAfterContentFailureCheck(into: webView)
+                switch outcome {
+                case .notNeeded:
+                    self.injectPromptAfterContentFailureCheck(into: webView)
+                case .retryClicked:
+                    self.scheduleInjection(in: webView, after: 2.0)
+                case .navigationStarted:
+                    break
+                }
             }
         }
 
@@ -1287,18 +1281,15 @@ private extension WebAIHandoffRepresentable {
             }
 
             guard !parent.didInject else { return }
-            guard injectionAttempts < maxAttempts else {
+            guard Date() < injectionDeadline else {
                 triggerManualFallback()
                 return
             }
 
-            injectionAttempts += 1
             stagePromptIfNeeded(in: webView) { [weak self] staged in
                 guard let self else { return }
                 guard staged else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        self.injectPrompt(into: webView)
-                    }
+                    self.scheduleInjection(in: webView, after: 0.6)
                     return
                 }
 
@@ -1310,27 +1301,24 @@ private extension WebAIHandoffRepresentable {
                         return
                     }
 
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        self.injectPrompt(into: webView)
-                    }
+                    self.scheduleInjection(in: webView, after: 0.6)
                 }
             }
         }
 
         private func recoverProviderContentFailureIfNeeded(
             in webView: WKWebView,
-            completion: @escaping (Bool) -> Void
+            completion: @escaping (ProviderRecoveryOutcome) -> Void
         ) {
             guard (parent.request.provider == .chatgpt || parent.request.provider == .gemini),
                   providerContentFailureRecoveryAttempts < maxProviderContentFailureRecoveryAttempts else {
-                completion(false)
+                completion(.notNeeded)
                 return
             }
-
             webView.evaluateJavaScript(Self.providerContentFailureDetectionScript()) { [weak self, weak webView] result, _ in
                 guard let self, let webView else { return }
                 guard (result as? Bool) == true else {
-                    completion(false)
+                    completion(.notNeeded)
                     return
                 }
 
@@ -1347,45 +1335,25 @@ private extension WebAIHandoffRepresentable {
                 self.didStagePromptForCurrentRequest = false
 
                 if attempt == 1 {
-                    webView.evaluateJavaScript(Self.providerRetryButtonClickScript()) { _, _ in
-                        completion(true)
+                    webView.evaluateJavaScript(Self.providerRetryButtonClickScript()) { result, _ in
+                        if (result as? Bool) == true {
+                            completion(.retryClicked)
+                        } else {
+                            WebAISessionManager.shared.reloadProviderHomeIgnoringCache(
+                                self.parent.request.provider,
+                                in: webView
+                            )
+                            completion(.navigationStarted)
+                        }
                     }
                     return
                 }
 
-                if attempt == 2 {
-                    webView.reloadFromOrigin()
-                    completion(true)
-                    return
-                }
-
-                webView.stopLoading()
-                let clearCompletion = {
-                    DispatchQueue.main.async {
-                        WebAISessionManager.shared.reloadProviderHomeIgnoringCache(
-                            self.parent.request.provider,
-                            in: webView
-                        )
-                        completion(true)
-                    }
-                }
-
-                if attempt >= 4 {
-                    DispatchQueue.main.async {
-                        self.parent.fallbackMessage = "\(self.parent.request.provider.displayName) session data looked corrupt, so RSSReaderApp reset that web session. Sign in again if prompted."
-                    }
-                    WebAISessionManager.shared.removeAllWebsiteData(
-                        for: self.parent.request.provider,
-                        from: webView.configuration.websiteDataStore,
-                        completion: clearCompletion
-                    )
-                } else {
-                    WebAISessionManager.shared.removeCachedWebsiteData(
-                        for: self.parent.request.provider,
-                        from: webView.configuration.websiteDataStore,
-                        completion: clearCompletion
-                    )
-                }
+                WebAISessionManager.shared.reloadProviderHomeIgnoringCache(
+                    self.parent.request.provider,
+                    in: webView
+                )
+                completion(.navigationStarted)
             }
         }
 
@@ -1451,10 +1419,9 @@ private extension WebAIHandoffRepresentable {
         }
 
         private func triggerManualFallback() {
-            copyToPasteboard(parent.request.prompt)
-            DispatchQueue.main.async {
-                self.parent.fallbackMessage = "Auto-send could not find the message box. The prompt was copied to the clipboard so you can paste it manually."
-            }
+            deliverCaptureFailure(
+                "Auto-send could not find a usable message box after waiting for \(Int(composerWaitTimeout)) seconds."
+            )
         }
 
         private func handlePromptInjectionSucceeded(in webView: WKWebView) {
@@ -1551,6 +1518,7 @@ private extension WebAIHandoffRepresentable {
         private func deliverCapturedResponse(_ response: String) {
             guard !captureFinished else { return }
             captureFinished = true
+            cancelPendingInjection()
             resetFallbackExtractionState()
             DispatchQueue.main.async {
                 self.parent.fallbackMessage = nil
@@ -1561,6 +1529,7 @@ private extension WebAIHandoffRepresentable {
         private func deliverCaptureFailure(_ message: String) {
             guard !captureFinished else { return }
             captureFinished = true
+            cancelPendingInjection()
             resetFallbackExtractionState()
             DispatchQueue.main.async {
                 self.parent.fallbackMessage = message
@@ -1575,61 +1544,6 @@ private extension WebAIHandoffRepresentable {
             fallbackExtractionLastText = ""
             fallbackExtractionLastChangeAt = .distantPast
             fallbackExtractionStartedAt = .distantPast
-        }
-
-        private func resetProviderContentFailureMonitorState() {
-            providerContentFailureMonitorToken = UUID()
-            providerContentFailureMonitorStartedAt = .distantPast
-        }
-
-        private func startProviderContentFailureMonitorIfNeeded(in webView: WKWebView) {
-            guard parent.request.provider == .chatgpt || parent.request.provider == .gemini else { return }
-            guard !parent.request.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            guard providerContentFailureMonitorStartedAt == .distantPast else { return }
-
-            providerContentFailureMonitorStartedAt = Date()
-            let token = providerContentFailureMonitorToken
-            scheduleProviderContentFailureMonitorPoll(in: webView, token: token, delay: 0.5)
-        }
-
-        private func scheduleProviderContentFailureMonitorPoll(in webView: WKWebView, token: UUID, delay: TimeInterval) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
-                guard let self, let webView else { return }
-                guard self.providerContentFailureMonitorToken == token,
-                      self.currentRequestID == self.parent.request.id,
-                      !self.parent.didInject else { return }
-
-                let elapsed = Date().timeIntervalSince(self.providerContentFailureMonitorStartedAt)
-                guard elapsed <= self.providerContentFailureMonitorMaxWait else { return }
-                self.pollProviderContentFailureMonitor(in: webView, token: token)
-            }
-        }
-
-        private func pollProviderContentFailureMonitor(in webView: WKWebView, token: UUID) {
-            webView.evaluateJavaScript(Self.providerContentFailureDetectionScript()) { [weak self, weak webView] result, _ in
-                guard let self, let webView else { return }
-                guard self.providerContentFailureMonitorToken == token,
-                      self.currentRequestID == self.parent.request.id,
-                      !self.parent.didInject else { return }
-
-                if (result as? Bool) == true {
-                    self.recoverProviderContentFailureIfNeeded(in: webView) { [weak self, weak webView] _ in
-                        guard let self, let webView else { return }
-                        self.scheduleProviderContentFailureMonitorPoll(
-                            in: webView,
-                            token: token,
-                            delay: max(self.providerContentFailureMonitorInterval, 2.0)
-                        )
-                    }
-                    return
-                }
-
-                self.scheduleProviderContentFailureMonitorPoll(
-                    in: webView,
-                    token: token,
-                    delay: self.providerContentFailureMonitorInterval
-                )
-            }
         }
 
         private func captureFallbackExtractionBaseline(in webView: WKWebView) {
@@ -1959,34 +1873,6 @@ private extension WebAIHandoffRepresentable {
                   ((text.includes("something went wrong") || text.includes("failed to load")) && text.length < 260);
               }
 
-              function clickProviderRetryButton() {
-                const candidates = Array.from(document.querySelectorAll("button, [role='button'], a"));
-                const retryButton = candidates.find(node => {
-                  const rect = node.getBoundingClientRect();
-                  const style = window.getComputedStyle(node);
-                  const label = [
-                    node.textContent,
-                    node.getAttribute("aria-label"),
-                    node.getAttribute("title")
-                  ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim().toLowerCase();
-                  return rect.width > 0 &&
-                    rect.height > 0 &&
-                    style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    style.pointerEvents !== "none" &&
-                    !node.disabled &&
-                    node.getAttribute("aria-disabled") !== "true" &&
-                    (label.includes("try again") || label.includes("retry") || label.includes("reload"));
-                });
-
-                if (!retryButton) return false;
-                try {
-                  retryButton.scrollIntoView({ block: "center", inline: "center" });
-                } catch (_) {}
-                retryButton.click();
-                return true;
-              }
-
               function assistantContainers(provider, promptText) {
                 if (provider === "chatgpt") {
                   const assistantNodes = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
@@ -2084,8 +1970,6 @@ private extension WebAIHandoffRepresentable {
                     settleMs: opts.settleMs || 1800,
                     minLength: opts.minLength || 120,
                     maxWaitMs: opts.maxWaitMs || 180000,
-                    contentFailureRetries: 0,
-                    lastContentFailureAt: 0,
                     delivered: false
                   };
 
@@ -2150,15 +2034,8 @@ private extension WebAIHandoffRepresentable {
                   if (isPromptEcho(text, promptText)) return;
 
                   if (isProviderContentLoadFailure(text)) {
-                    if (s.contentFailureRetries < 3 && (now - s.lastContentFailureAt) > 2200 && clickProviderRetryButton()) {
-                      s.contentFailureRetries += 1;
-                      s.lastContentFailureAt = now;
-                      s.lastText = "";
-                      s.lastChangeAt = now;
-                    } else if (s.contentFailureRetries >= 3 || (now - s.startedAt) > 12000) {
-                      const providerName = s.provider === "chatgpt" ? "ChatGPT" : "Web AI";
-                      this.fail(providerName + " could not load the response. Try again.");
-                    }
+                    const providerName = s.provider === "chatgpt" ? "ChatGPT" : "Web AI";
+                    this.fail(providerName + " content failed to load.");
                     return;
                   }
 
@@ -2292,30 +2169,62 @@ private extension WebAIHandoffRepresentable {
                         .trim();
                 }
 
+                function isUsableComposer(node) {
+                    if (!node || !node.isConnected) return false;
+
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    const editable = node.matches("textarea, input") ||
+                        node.getAttribute("contenteditable") === "true" ||
+                        node.getAttribute("role") === "textbox";
+
+                    return editable &&
+                        !node.disabled &&
+                        !node.readOnly &&
+                        node.getAttribute("aria-disabled") !== "true" &&
+                        rect.width >= 120 &&
+                        rect.height >= 24 &&
+                        rect.right > 0 &&
+                        rect.bottom > 0 &&
+                        rect.left < window.innerWidth &&
+                        rect.top < window.innerHeight &&
+                        style.display !== "none" &&
+                        style.visibility !== "hidden" &&
+                        style.opacity !== "0" &&
+                        style.pointerEvents !== "none";
+                }
+
+                function firstUsableComposer(selectors) {
+                    const candidates = selectors.flatMap(selector =>
+                        Array.from(document.querySelectorAll(selector))
+                    );
+
+                    return uniqueElements(candidates)
+                        .filter(isUsableComposer)
+                        .sort((a, b) =>
+                            b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom
+                        )[0] || null;
+                }
+
                 function findInput() {
                     if (provider === "chatgpt") {
-                        return pickFirst([
-                            document.getElementById("prompt-textarea"),
-                            document.querySelector(".ProseMirror[contenteditable='true']"),
-                            document.querySelector("[data-testid='composer-input'] [contenteditable='true']"),
-                            document.querySelector("div[contenteditable='true'][data-placeholder]"),
-                            document.querySelector("textarea"),
-                            document.querySelector("[contenteditable='true']")
+                        return firstUsableComposer([
+                            "#prompt-textarea",
+                            "main [data-testid='composer-input'] [contenteditable='true']",
+                            "main .ProseMirror[contenteditable='true']",
+                            "main div[contenteditable='true'][data-placeholder]",
+                            "main textarea"
                         ]);
                     }
 
-                    return pickFirst([
-                        document.querySelector("rich-textarea [contenteditable='true']"),
-                        document.querySelector("rich-textarea textarea"),
-                        document.querySelector("rich-textarea .ql-editor"),
-                        document.querySelector("[aria-label*='Enter a prompt'][contenteditable='true']"),
-                        document.querySelector("[aria-label*='Enter a prompt'][role='textbox']"),
-                        document.querySelector("[aria-label*='Ask Gemini'][contenteditable='true']"),
-                        document.querySelector("[data-placeholder*='Enter a prompt'][contenteditable='true']"),
-                        document.querySelector("[role='textbox'][contenteditable='true']"),
-                        document.querySelector("[role='textbox']"),
-                        document.querySelector("textarea"),
-                        document.querySelector("[contenteditable='true']")
+                    return firstUsableComposer([
+                        "main rich-textarea [contenteditable='true']",
+                        "main rich-textarea textarea",
+                        "main rich-textarea .ql-editor[contenteditable='true']",
+                        "main [aria-label*='Enter a prompt'][role='textbox']",
+                        "main [aria-label*='Ask Gemini'][contenteditable='true']",
+                        "main [data-placeholder*='Enter a prompt'][contenteditable='true']",
+                        "main [role='textbox'][contenteditable='true']"
                     ]);
                 }
 
@@ -2396,22 +2305,10 @@ private extension WebAIHandoffRepresentable {
                         return setContentEditableValue(el, value);
                     }
 
-                    const isProseMirror = el.classList.contains("ProseMirror") || el.querySelector("p") !== null;
+                    const isProseMirror = el.classList.contains("ProseMirror") ||
+                        (el.getAttribute("contenteditable") === "true" && el.closest("[data-testid*='composer']"));
                     if (isProseMirror) {
-                        let p = el.querySelector("p");
-                        if (!p) {
-                            p = document.createElement("p");
-                            el.innerHTML = "";
-                            el.appendChild(p);
-                        }
-                        p.textContent = value;
-                        el.dispatchEvent(new InputEvent("input", {
-                            bubbles: true,
-                            cancelable: true,
-                            inputType: "insertText",
-                            data: value
-                        }));
-                        return true;
+                        return setContentEditableValue(el, value);
                     }
 
                     if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
@@ -2510,7 +2407,10 @@ private extension WebAIHandoffRepresentable {
                         node.scrollIntoView({ block: "nearest", inline: "nearest" });
                     } catch (error) {
                     }
-                    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(type => {
+                    const eventTypes = callNativeClick
+                        ? ["pointerdown", "mousedown", "pointerup", "mouseup"]
+                        : ["pointerdown", "mousedown", "pointerup", "mouseup", "click"];
+                    eventTypes.forEach(type => {
                         const EventClass = type.startsWith("pointer") && typeof PointerEvent !== "undefined" ? PointerEvent : MouseEvent;
                         node.dispatchEvent(new EventClass(type, {
                             bubbles: true,
@@ -2527,31 +2427,6 @@ private extension WebAIHandoffRepresentable {
                     });
                     if (callNativeClick && typeof node.click === "function") {
                         node.click();
-                    }
-                    return true;
-                }
-
-                function recoverProviderLoadFailure() {
-                    if (provider !== "chatgpt" && provider !== "gemini") return false;
-                    const bodyText = ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").trim().toLowerCase();
-                    const hasLoadFailure = bodyText.includes("content failed to load") ||
-                        bodyText.includes("could not load content") ||
-                        bodyText.includes("couldn't load content") ||
-                        bodyText.includes("unable to load content") ||
-                        (bodyText.includes("something went wrong") && bodyText.includes("1096"));
-                    if (!hasLoadFailure) return false;
-
-                    const retryButton = Array.from(document.querySelectorAll("button, [role='button'], a")).find(node => {
-                        const label = [
-                            node.textContent,
-                            node.getAttribute("aria-label"),
-                            node.getAttribute("title")
-                        ].filter(Boolean).join(" ").replace(/\\s+/g, " ").trim().toLowerCase();
-                        return label.includes("try again") || label.includes("retry");
-                    });
-
-                    if (retryButton) {
-                        activateAction(retryButton);
                     }
                     return true;
                 }
@@ -2741,30 +2616,6 @@ private extension WebAIHandoffRepresentable {
                     ]);
                 }
 
-                function findNewChatButton() {
-                    if (provider === "chatgpt") {
-                        return pickFirst([
-                            document.querySelector("a[href='/']"),
-                            document.querySelector("button[aria-label='New chat']"),
-                            document.querySelector("a[aria-label='New chat']"),
-                            Array.from(document.querySelectorAll("button, a, [role='button']")).find(node => {
-                                const text = (node.textContent || "").trim();
-                                return text === "New chat" || text === "Temporary chat";
-                            })
-                        ]);
-                    }
-                    if (provider !== "gemini") return null;
-                    return pickFirst([
-                        document.querySelector("a[href='/app']"),
-                        document.querySelector("button[aria-label='New chat']"),
-                        document.querySelector("a[aria-label='New chat']"),
-                        Array.from(document.querySelectorAll("button, a, [role='button']")).find(node => {
-                            const text = (node.textContent || "").trim();
-                            return text === "New chat" || text === "Start new chat";
-                        })
-                    ]);
-                }
-
                 function assistantTurnCount() {
                     if (provider === "chatgpt") {
                         return document.querySelectorAll("[data-message-author-role='assistant']").length;
@@ -2788,49 +2639,19 @@ private extension WebAIHandoffRepresentable {
                     return "ready";
                 }
 
-                if (recoverProviderLoadFailure()) return "waiting";
-
-                if ((provider === "chatgpt" || provider === "gemini") && shouldAutoCapture) {
-                    if (!window.__codexWebAINewChatState) {
-                        window.__codexWebAINewChatState = "initial";
-                    }
-
-                    const state = window.__codexWebAINewChatState;
-                    const hasAssistantTurns = assistantTurnCount() > 0;
-
-                    if (state !== "ready") {
-                        if (hasAssistantTurns) {
-                            const newChatButton = findNewChatButton();
-                            if (newChatButton) {
-                                if (state === "initial") {
-                                    window.__codexWebAINewChatState = "requested";
-                                    newChatButton.click();
-                                }
-                                return "waiting";
-                            }
-                            if (provider === "gemini" && state === "initial") {
-                                window.__codexWebAINewChatState = "requested";
-                                window.location.href = "https://gemini.google.com/app";
-                                return "waiting";
-                            }
-                        }
-
-                        window.__codexWebAINewChatState = "ready";
-                    }
-                }
-
                 const input = findInput();
 
-                if (provider === "gemini" && window.__codexGeminiSubmissionPending === text) {
-                    const pendingAge = Date.now() - (window.__codexGeminiSubmissionPendingAt || 0);
-                    const startingTurns = window.__codexGeminiSubmissionTurnCount || 0;
+                if (window.__codexWebAISubmissionPending === text) {
+                    const pendingAge = Date.now() - (window.__codexWebAISubmissionPendingAt || 0);
+                    const startingTurns = window.__codexWebAISubmissionTurnCount || 0;
                     const inputNow = input ? normalizeText(editableText(input)) : "";
                     if (assistantTurnCount() > startingTurns || (pendingAge > 350 && (!input || inputNow.length === 0))) {
-                        window.__codexGeminiSubmissionPending = "";
+                        window.__codexWebAISubmissionPending = "";
+                        window.__codexWebAIPreparedPrompt = "";
                         return "success";
                     }
-                    if (pendingAge < 2600) return "waiting";
-                    window.__codexGeminiSubmissionPending = "";
+                    if (pendingAge < 4000) return "waiting";
+                    window.__codexWebAISubmissionPending = "";
                 }
 
                 if (!input) return "waiting";
@@ -2838,45 +2659,39 @@ private extension WebAIHandoffRepresentable {
                 const geminiModelStatus = selectGeminiModelIfNeeded();
                 if (geminiModelStatus === "waiting") return "waiting";
 
-                if (!setValue(input, text)) return "waiting";
+                const currentInputText = normalizeText(editableText(input));
+                if (currentInputText !== normalizeText(text)) {
+                    if (!setValue(input, text)) return "waiting";
+                    window.__codexWebAIPreparedPrompt = text;
+                    window.__codexWebAIPreparedAt = Date.now();
+                    return "waiting";
+                }
+
+                if (window.__codexWebAIPreparedPrompt !== text) {
+                    window.__codexWebAIPreparedPrompt = text;
+                    window.__codexWebAIPreparedAt = Date.now();
+                    return "waiting";
+                }
+
+                if ((Date.now() - (window.__codexWebAIPreparedAt || 0)) < 150) {
+                    return "waiting";
+                }
 
                 const startingAssistantTurns = assistantTurnCount();
                 const sendButton = findSendButton(input);
-                if (sendButton && !sendButton.disabled) {
-                    if (provider === "chatgpt" || activateAction(sendButton, false)) {
-                        if (provider === "chatgpt") {
-                            sendButton.click();
-                            blurComposer(input);
-                            return "success";
-                        }
-                        window.__codexGeminiSubmissionPending = text;
-                        window.__codexGeminiSubmissionPendingAt = Date.now();
-                        window.__codexGeminiSubmissionTurnCount = startingAssistantTurns;
+                if (sendButton && isUsableAction(sendButton) && activateAction(sendButton, true)) {
+                        window.__codexWebAISubmissionPending = text;
+                        window.__codexWebAISubmissionPendingAt = Date.now();
+                        window.__codexWebAISubmissionTurnCount = startingAssistantTurns;
                         blurComposer(input);
                         return "waiting";
-                    }
                 }
 
                 dispatchEnter(input);
                 blurComposer(input);
-
-                if (provider === "gemini") {
-                    window.__codexGeminiSubmissionPending = text;
-                    window.__codexGeminiSubmissionPendingAt = Date.now();
-                    window.__codexGeminiSubmissionTurnCount = startingAssistantTurns;
-                    return "waiting";
-                }
-
-                const retryButton = findSendButton(input);
-                if (retryButton && !retryButton.disabled) {
-                    if (provider === "chatgpt") {
-                        retryButton.click();
-                        blurComposer(input);
-                        return "success";
-                    }
-                }
-
-                blurComposer(input);
+                window.__codexWebAISubmissionPending = text;
+                window.__codexWebAISubmissionPendingAt = Date.now();
+                window.__codexWebAISubmissionTurnCount = startingAssistantTurns;
                 return "waiting";
             })();
             """
@@ -3176,14 +2991,5 @@ private extension WebAIHandoffRepresentable {
             """
         }
 
-        private func copyToPasteboard(_ text: String) {
-            #if os(iOS)
-            UIPasteboard.general.string = text
-            #elseif os(macOS)
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
-            #endif
-        }
     }
 }

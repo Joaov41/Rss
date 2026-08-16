@@ -12,14 +12,14 @@
 //     "Describe what happens in this video."
 //   }
 
-#if canImport(FoundationModels) && compiler(>=6.4)
+#if canImport(FoundationModels)
 
 import Foundation
 import FoundationModels
 
 /// A Foundation Models prompt segment carrying sampled video frames.
 @available(iOS 27.0, macOS 27.0, *)
-public struct LiteRTVideoSegment: Sendable {
+public struct LiteRTVideoSegment: Transcript.CustomSegment {
   /// Sampled frames as image bytes (e.g. PNG), in temporal order.
   public struct Content: Codable, Equatable, Sendable {
     public var frames: [Data]
@@ -34,9 +34,5 @@ public struct LiteRTVideoSegment: Sendable {
     self.content = Content(frames: frames)
   }
 }
-
-#if LITERT_FOUNDATION_MODELS_CUSTOM_SEGMENTS
-extension LiteRTVideoSegment: Transcript.CustomSegment {}
-#endif
 
 #endif

@@ -13,7 +13,7 @@
 // transcript on each turn — correct and simple; an incremental fast-path is a
 // later optimization.
 
-#if canImport(FoundationModels) && compiler(>=6.4)
+#if canImport(FoundationModels)
 
 import Foundation
 import FoundationModels
@@ -48,7 +48,7 @@ public struct LiteRTLanguageModel: LanguageModel {
     // custom-segment hook and are not capability-gated.
     var capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration, .toolCalling]
     if model.supportedModalities.contains(.vision) { capabilities.append(.vision) }
-    self.capabilities = LanguageModelCapabilities(capabilities)
+    self.capabilities = LanguageModelCapabilities(capabilities: capabilities)
   }
 
   /// Create the backend from a **local `.litertlm` file** — no catalog, no
@@ -83,7 +83,7 @@ public struct LiteRTLanguageModel: LanguageModel {
       maxTokens: maxTokens)
     var capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration, .toolCalling]
     if modalities.contains(.vision) { capabilities.append(.vision) }
-    self.capabilities = LanguageModelCapabilities(capabilities)
+    self.capabilities = LanguageModelCapabilities(capabilities: capabilities)
   }
 
   /// Release every cached LiteRT engine built for FM sessions, freeing their
@@ -354,28 +354,24 @@ public final class LiteRTExecutor: LanguageModelExecutor {
   private static func contents(of segments: [Transcript.Segment]) -> [Content] {
     var out: [Content] = []
     for segment in segments {
-      if case .text(let t) = segment {
+      switch segment {
+      case .text(let t):
         if !t.content.isEmpty { out.append(.text(t.content)) }
-        continue
-      }
-      if case .attachment(let attachment) = segment {
+      case .attachment(let attachment):
         if case .image(let image) = attachment.content, let png = pngData(from: image.cgImage) {
           out.append(.imageData(png))
         }
-        continue
-      }
-      #if LITERT_FOUNDATION_MODELS_CUSTOM_SEGMENTS
-      if case .custom(let custom) = segment {
+      case .custom(let custom):
         if let audio = custom as? LiteRTAudioSegment {
           out.append(.audioData(audio.content.data))
         } else if let video = custom as? LiteRTVideoSegment {
           out.append(contentsOf: video.content.frames.map { Content.imageData($0) })
         }
-        continue
+      case .structure:
+        break  // structured (guided-generation) content — a later phase
+      @unknown default:
+        break
       }
-      #endif
-      // Structured (guided-generation) content and future segment kinds are
-      // intentionally ignored by this input bridge.
     }
     return out.isEmpty ? [.text("")] : out
   }
