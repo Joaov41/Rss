@@ -1,4 +1,3 @@
-import Accelerate
 @preconcurrency import CoreML
 import Foundation
 import OSLog
@@ -251,17 +250,11 @@ extension SortformerModels {
             .scalars
         {
             chunkEmbeddings = fp32
-        } else if let multiArray = output.featureValue(for: "chunk_pre_encoder_embs_out")?.multiArrayValue,
-            multiArray.dataType == .float16
+        } else if #available(macOS 15.0, iOS 18.0, *),
+            let fp16 = output.featureValue(for: "chunk_pre_encoder_embs_out")?.shapedArrayValue(of: Float16.self)?
+                .scalars
         {
-            // Convert float16 MLMultiArray to [Float] via raw pointer (avoids Float16 type reference)
-            let count = multiArray.count
-            let srcPtr = multiArray.dataPointer.bindMemory(to: UInt16.self, capacity: count)
-            var floats = [Float](repeating: 0, count: count)
-            var srcBuffer = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: srcPtr), height: 1, width: vImagePixelCount(count), rowBytes: count * MemoryLayout<UInt16>.stride)
-            var dstBuffer = vImage_Buffer(data: &floats, height: 1, width: vImagePixelCount(count), rowBytes: count * MemoryLayout<Float>.stride)
-            vImageConvert_Planar16FtoPlanarF(&srcBuffer, &dstBuffer, 0)
-            chunkEmbeddings = floats
+            chunkEmbeddings = fp16.map { Float($0) }
         } else {
             throw SortformerError.inferenceFailed("Missing chunk_pre_encoder_embs_out")
         }
