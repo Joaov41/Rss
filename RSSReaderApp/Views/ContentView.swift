@@ -3215,114 +3215,104 @@ struct ContentView: View {
     }
     
     var favoritesView: some View {
-        favoritesList
-            .feedListColumnStyle(
-                colorScheme: colorScheme,
-                scrollOffset: feedListScrollOffset,
-                restorationKey: "favorites_category",
-                trackedItemIDs: favoriteTrackedItemIDs
-            ) { offset in
-                feedListScrollOffset = offset
-            }
-            .onAppear {
-                #if os(iOS)
-                // Update navigation state for iPhone
-                if UIDevice.current.userInterfaceIdiom == .phone {
-                    selectedCategory = .favorites
-                    appState.lastSelectedCategory = .favorites
-                    appState.activeSubscriptionURL = nil
-                }
-                #endif
-            }
-            .navigationTitle("Favorites")
-    }
-
-    private var favoritesList: some View {
         List {
-            favoriteArticlesSection
-            favoriteRedditPostsSection
+                Section(header: Text("RSS Articles")) {
+                    let favoriteArticles = appState.feeds.flatMap { $0.articles }
+                        .filter { $0.isFavorite }
+                        .sorted(by: { $0.publishDate > $1.publishDate })
+
+                    if favoriteArticles.isEmpty {
+                        Text("No favorite articles")
+                            .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(favoriteArticles) { article in
+                            Button(action: {
+                                // Set article and navigate
+                                appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
+                                appState.setSelectedArticle(article)
+                                if !article.isRead {
+                                    appState.markArticleAsRead(article)
+                                }
+                            }) {
+                                ArticleRow(article: article)
+                                    .contentShape(Rectangle())
+                            }
+                        .buttonStyle(PlainButtonStyle())
+                        .id(articleListID(for: article))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleArticleFavorite(article)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
+            
+                Section(header: Text("Reddit Posts")) {
+                    let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
+                        .filter { $0.isFavorite }
+                        .sorted(by: { $0.publishDate > $1.publishDate })
+                    
+                    if favoritePosts.isEmpty {
+                        Text("No favorite posts")
+                            .foregroundColor(.secondary)
+                            .padding()
+                    } else {
+                        ForEach(favoritePosts) { post in
+                            Button(action: {
+                                // Set post and navigate
+                                appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
+                                appState.setSelectedRedditPost(post)
+                                if !post.isRead {
+                                    appState.markRedditPostAsRead(post)
+                                }
+                            }) {
+                                RedditPostRow(post: post)
+                                    .contentShape(Rectangle())
+                            }
+                        .buttonStyle(PlainButtonStyle())
+                        .id(redditPostListID(for: post))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleRedditPostFavorite(post)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.plain)
-    }
-
-    private var favoriteArticles: [Article] {
-        appState.feeds.flatMap { $0.articles }
-            .filter(\.isFavorite)
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoriteRedditPosts: [RedditPost] {
-        appState.redditFeeds.flatMap { $0.posts }
-            .filter(\.isFavorite)
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoriteTrackedItemIDs: [String] {
-        favoriteArticles.map(\.id) + favoriteRedditPosts.map(\.id)
-    }
-
-    private var favoriteArticlesSection: some View {
-        Section(header: Text("RSS Articles")) {
-            if favoriteArticles.isEmpty {
-                Text("No favorite articles")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoriteArticles) { article in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
-                        appState.setSelectedArticle(article)
-                        if !article.isRead {
-                            appState.markArticleAsRead(article)
-                        }
-                    }) {
-                        ArticleRow(article: article)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .id(articleListID(for: article))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleArticleFavorite(article)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
+	            .feedListColumnStyle(
+	                colorScheme: colorScheme,
+	                scrollOffset: feedListScrollOffset,
+                    restorationKey: "favorites_category",
+                    trackedItemIDs: appState.feeds.flatMap { $0.articles }
+                        .filter(\.isFavorite)
+                        .sorted(by: { $0.publishDate > $1.publishDate })
+                        .map(\.id)
+                        + appState.redditFeeds.flatMap { $0.posts }
+                        .filter(\.isFavorite)
+                        .sorted(by: { $0.publishDate > $1.publishDate })
+                        .map(\.id)
+	            ) { offset in
+	                feedListScrollOffset = offset
+	            }
+	            .onAppear {
+            #if os(iOS)
+            // Update navigation state for iPhone
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                selectedCategory = .favorites
+                appState.lastSelectedCategory = .favorites
+                appState.activeSubscriptionURL = nil
             }
+            #endif
         }
-    }
-
-    private var favoriteRedditPostsSection: some View {
-        Section(header: Text("Reddit Posts")) {
-            if favoriteRedditPosts.isEmpty {
-                Text("No favorite posts")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoriteRedditPosts) { post in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
-                        appState.setSelectedRedditPost(post)
-                        if !post.isRead {
-                            appState.markRedditPostAsRead(post)
-                        }
-                    }) {
-                        RedditPostRow(post: post)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .id(redditPostListID(for: post))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleRedditPostFavorite(post)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
+        .navigationTitle("Favorites")
     }
     
     // PRE-FILTER data to prevent expensive computations during view updates
@@ -11947,6 +11937,9 @@ struct DraggableGlobalSummaryView: View {
     @State private var parsedSummaries: [GlobalSummaryItem] = []
     @State private var isRedditContent = false
     @State private var isOverallSummaryVisible = false
+    @State private var snapshotAggregateSummaryText: String?
+    @State private var hasCapturedSummarySnapshot = false
+    @State private var isAwaitingRequestedAggregateSummary = false
 
     private static let panelWidth: CGFloat = 400
     private static let summaryHorizontalInset: CGFloat = 16
@@ -11985,7 +11978,7 @@ struct DraggableGlobalSummaryView: View {
     }
     
     private var hasSummaryContent: Bool {
-        !parsedSummaries.isEmpty || !(appState.aggregateSummaryText?.isEmpty ?? true)
+        !parsedSummaries.isEmpty || !(snapshotAggregateSummaryText?.isEmpty ?? true)
     }
 
     private func summaryStableID(for item: GlobalSummaryItem) -> String {
@@ -12072,6 +12065,42 @@ struct DraggableGlobalSummaryView: View {
         isRedditContent = result.source == "reddit"
     }
 
+    private func captureSummarySnapshotIfAvailable(from json: String) {
+        guard !hasCapturedSummarySnapshot else { return }
+
+        rebuildParsedSummaryCache(from: json)
+        snapshotAggregateSummaryText = appState.aggregateSummaryText
+
+        let hasAggregateSummary = !(snapshotAggregateSummaryText?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+        let hasSummaryError = !(error?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+
+        // The model publishes an empty placeholder while generation starts.
+        // Keep listening until real content (or a terminal error) arrives,
+        // then freeze this reading snapshot until the panel is reopened.
+        if !parsedSummaries.isEmpty || hasAggregateSummary || hasSummaryError {
+            hasCapturedSummarySnapshot = true
+        }
+    }
+
+    private func requestAggregateSummary(_ action: () -> Void) {
+        isAwaitingRequestedAggregateSummary = true
+        action()
+    }
+
+    private func acceptRequestedAggregateSummaryIfAvailable(_ summaryText: String?) {
+        guard isAwaitingRequestedAggregateSummary,
+              let summaryText,
+              !summaryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+        snapshotAggregateSummaryText = summaryText
+        isAwaitingRequestedAggregateSummary = false
+    }
+
     private func restoreSummaryScrollPositionAfterRefresh(
         from offset: CGPoint,
         keepingOverallSummaryVisible: Bool
@@ -12117,7 +12146,7 @@ struct DraggableGlobalSummaryView: View {
                     .font(.headline)
                 Spacer()
 
-                if appState.aggregateSummaryText != nil {
+                if snapshotAggregateSummaryText != nil {
                     Button {
                         returnToSummaryOrigin()
                     } label: {
@@ -12189,7 +12218,7 @@ struct DraggableGlobalSummaryView: View {
                         (appState.isLoading || appState.isWebAIBatchHandoffInProgress) &&
                         appState.isWebAIHandoffMinimized
 
-                    if appState.isLoading && appState.aggregateSummaryText == nil && !hidesBatchSummaryProgressWhileWebAIIsMinimized {
+                    if appState.isLoading && snapshotAggregateSummaryText == nil && !hidesBatchSummaryProgressWhileWebAIIsMinimized {
                         VStack(spacing: 20) {
                             ProgressView()
                                 .scaleEffect(1.5)
@@ -12201,7 +12230,7 @@ struct DraggableGlobalSummaryView: View {
                         .frame(maxWidth: .infinity)
                         .padding()
                     } else {
-                        if appState.isLoading && appState.aggregateSummaryText != nil && !hidesBatchSummaryProgressWhileWebAIIsMinimized {
+                        if appState.isLoading && snapshotAggregateSummaryText != nil && !hidesBatchSummaryProgressWhileWebAIIsMinimized {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .scaleEffect(0.8)
@@ -12213,7 +12242,7 @@ struct DraggableGlobalSummaryView: View {
                         }
 
                         // Overall Summary at the top (before individual summaries)
-                        if let aggregateText = appState.aggregateSummaryText {
+                        if let aggregateText = snapshotAggregateSummaryText {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack(spacing: 8) {
                                     Image(systemName: "sparkles")
@@ -12612,10 +12641,12 @@ struct DraggableGlobalSummaryView: View {
                 .buttonStyle(MacSummaryActionIconButtonStyle())
                 .help("Copy summaries")
 
-                if appState.aggregateSummaryText == nil {
+                if snapshotAggregateSummaryText == nil {
                     Button {
                         print("🎇 SPARKLES BUTTON PRESSED")
-                        appState.generateCombinedGlobalSummary(force: false)
+                        requestAggregateSummary {
+                            appState.generateCombinedGlobalSummary(force: false)
+                        }
                     } label: {
                         Image(systemName: "sparkles")
                     }
@@ -12724,7 +12755,9 @@ struct DraggableGlobalSummaryView: View {
                 if shouldShowExplicitWebAIControls {
                     Menu {
                         Button("Generate Overall Summary with \(appState.settings.selectedWebAIProvider.displayName)") {
-                            appState.requestWebCombinedGlobalSummary(force: true)
+                            requestAggregateSummary {
+                                appState.requestWebCombinedGlobalSummary(force: true)
+                            }
                         }
                         .disabled(!hasSummaryContent)
 
@@ -12796,17 +12829,25 @@ struct DraggableGlobalSummaryView: View {
         .scaleEffect(isDragging ? 1.05 : 1.0)
         .animation(.spring(response: 0.3), value: isDragging)
         .onAppear {
-            rebuildParsedSummaryCache(from: json)
+            captureSummarySnapshotIfAvailable(from: json)
         }
         .onChange(of: json) { newValue in
-            let preservedOffset = currentSummaryContentOffset
-            let keepOverallSummaryVisible = isOverallSummaryVisible
-                && !(appState.aggregateSummaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            rebuildParsedSummaryCache(from: newValue)
-            restoreSummaryScrollPositionAfterRefresh(
-                from: preservedOffset,
-                keepingOverallSummaryVisible: keepOverallSummaryVisible
-            )
+            // Accept the first completed result if the panel opened while the
+            // empty generation placeholder was active. Ignore later refreshes.
+            captureSummarySnapshotIfAvailable(from: newValue)
+        }
+        .onChange(of: appState.aggregateSummaryText) { newValue in
+            if !hasCapturedSummarySnapshot {
+                captureSummarySnapshotIfAvailable(from: json)
+            } else {
+                acceptRequestedAggregateSummaryIfAvailable(newValue)
+            }
+        }
+        .onChange(of: appState.aggregateSummaryError) { newValue in
+            if isAwaitingRequestedAggregateSummary,
+               !(newValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                isAwaitingRequestedAggregateSummary = false
+            }
         }
         .sheet(isPresented: $showAnswerSheet) {
             #if os(macOS)
@@ -12970,7 +13011,7 @@ struct DraggableGlobalSummaryView: View {
     // MARK: - Clipboard Methods
 
     private var canCopySummary: Bool {
-        !parsedSummaries.isEmpty || appState.aggregateSummaryText != nil
+        !parsedSummaries.isEmpty || snapshotAggregateSummaryText != nil
     }
 
     private var summaryClipboardText: String? {
@@ -12979,7 +13020,7 @@ struct DraggableGlobalSummaryView: View {
         sections.append(header)
         sections.append(String(repeating: "=", count: header.count))
 
-        if let aggregate = appState.aggregateSummaryText, !aggregate.isEmpty {
+        if let aggregate = snapshotAggregateSummaryText, !aggregate.isEmpty {
             sections.append("\n## Overall Summary\n\(aggregate)")
         }
 
@@ -13101,7 +13142,7 @@ struct DraggableGlobalSummaryView: View {
             return
         }
         if isRedditContent,
-           appState.aggregateSummaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+           snapshotAggregateSummaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             pendingQuestionUsesWebAI = false
             showQuestionReliabilityWarning = true
             return
@@ -13128,7 +13169,7 @@ struct DraggableGlobalSummaryView: View {
             return
         }
         if isRedditContent,
-           appState.aggregateSummaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+           snapshotAggregateSummaryText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             pendingQuestionUsesWebAI = true
             showQuestionReliabilityWarning = true
             return
@@ -13180,7 +13221,7 @@ struct DraggableGlobalSummaryView: View {
     private func buildAskAIContext() -> String {
         var sections: [String] = []
 
-        if let aggregate = appState.aggregateSummaryText, !aggregate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let aggregate = snapshotAggregateSummaryText, !aggregate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sections.append("Overall Summary:\n\(aggregate)")
         }
 
@@ -15180,7 +15221,7 @@ struct DraggableGlobalSummaryView: View {
     // MARK: - TTS Methods
 
     private func buildDragSpeechText() -> String? {
-        if let aggregate = appState.aggregateSummaryText, !aggregate.isEmpty {
+        if let aggregate = snapshotAggregateSummaryText, !aggregate.isEmpty {
             return aggregate
         }
         let items = parsedSummaries
