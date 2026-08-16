@@ -2456,6 +2456,7 @@ class AppState: ObservableObject {
         let responseFormat: WebAIResponseFormat
         let onSuccess: (String) -> Void
         let onFailure: (String) -> Void
+        var automaticRetryCount: Int
         var timeoutWorkItem: DispatchWorkItem?
     }
     private var pendingWebAIRequests: [UUID: PendingWebAIRequest] = [:]
@@ -2952,15 +2953,6 @@ class AppState: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in
                 self?.refreshAllFeeds()
-            }
-            .store(in: &cancellables)
-
-        // Clear all caches every 10 minutes to prevent stale cache issues
-        Timer.publish(every: 600, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                print("🔄 Auto-clearing caches (10-minute interval)")
-                self?.clearAllCaches()
             }
             .store(in: &cancellables)
     }
@@ -3790,18 +3782,11 @@ class AppState: ObservableObject {
             responseFormat: responseFormat,
             onSuccess: onSuccess,
             onFailure: onFailure,
+            automaticRetryCount: 0,
             timeoutWorkItem: nil
         )
         let requestID = request.id
-        let providerName = request.provider.displayName
-        let timeoutSeconds = webAIRequestTimeoutSeconds
-        let timeoutWorkItem = DispatchWorkItem { [weak self] in
-            self?.handleWebAIRequestFailure(
-                requestID: requestID,
-                message: "\(providerName) did not return a response within \(Int(timeoutSeconds)) seconds. Please try again.",
-                dismissPanel: true
-            )
-        }
+        let timeoutWorkItem = makeWebAIRequestTimeoutWorkItem(for: request)
         pending.timeoutWorkItem = timeoutWorkItem
         pendingWebAIRequests[request.id] = pending
         DispatchQueue.main.asyncAfter(
@@ -3815,6 +3800,67 @@ class AppState: ObservableObject {
         activeWebAIHandoffRequest = request
         displacedCompletion?()
         return request.id
+    }
+
+    private func makeWebAIRequestTimeoutWorkItem(for request: WebAIHandoffRequest) -> DispatchWorkItem {
+        let timeoutSeconds = webAIRequestTimeoutSeconds
+        return DispatchWorkItem { [weak self] in
+            self?.handleWebAIRequestFailure(
+                requestID: request.id,
+                message: "\(request.provider.displayName) did not return a response within \(Int(timeoutSeconds)) seconds. Please try again.",
+                dismissPanel: true
+            )
+        }
+    }
+
+    private func isRecoverableWebAIRequestFailure(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("content failed to load") ||
+            normalized.contains("could not load") ||
+            normalized.contains("couldn't load") ||
+            normalized.contains("unable to load") ||
+            normalized.contains("message box") ||
+            normalized.contains("composer") ||
+            normalized.contains("automatic response capture") ||
+            normalized.contains("did not return a response") ||
+            normalized.contains("web process terminated") ||
+            normalized.contains("something went wrong")
+    }
+
+    private func retryWebAIRequestIfPossible(
+        failedRequest: WebAIHandoffRequest,
+        pending: inout PendingWebAIRequest,
+        message: String
+    ) -> Bool {
+        guard failedRequest.shouldAutoCapture,
+              pending.automaticRetryCount == 0,
+              isRecoverableWebAIRequestFailure(message) else {
+            return false
+        }
+
+        WebAISessionManager.shared.cancelActiveRequest(for: failedRequest.provider)
+
+        let retryRequest = WebAIHandoffRequest(
+            provider: failedRequest.provider,
+            title: failedRequest.title,
+            prompt: failedRequest.prompt,
+            responseFormat: failedRequest.responseFormat,
+            shouldAutoCapture: true,
+            shouldStartMinimized: failedRequest.shouldStartMinimized
+        )
+
+        pending.automaticRetryCount += 1
+        let timeoutWorkItem = makeWebAIRequestTimeoutWorkItem(for: retryRequest)
+        pending.timeoutWorkItem = timeoutWorkItem
+        pendingWebAIRequests[retryRequest.id] = pending
+        isWebAIHandoffMinimized = retryRequest.shouldStartMinimized
+        activeWebAIHandoffRequest = retryRequest
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + webAIRequestTimeoutSeconds,
+            execute: timeoutWorkItem
+        )
+        showWebAIStatus("\(failedRequest.provider.displayName) is retrying with a fresh page.")
+        return true
     }
 
     private func isWebAIContentLoadFailureResponse(_ response: String) -> Bool {
@@ -3854,8 +3900,18 @@ class AppState: ObservableObject {
     }
 
     func handleWebAIRequestFailure(requestID: UUID, message: String, dismissPanel: Bool = false) {
-        guard let pending = pendingWebAIRequests.removeValue(forKey: requestID) else { return }
+        guard var pending = pendingWebAIRequests.removeValue(forKey: requestID) else { return }
         pending.timeoutWorkItem?.cancel()
+
+        if let failedRequest = activeWebAIHandoffRequest,
+           failedRequest.id == requestID,
+           retryWebAIRequestIfPossible(
+               failedRequest: failedRequest,
+               pending: &pending,
+               message: message
+           ) {
+            return
+        }
 
         if activeWebAIHandoffRequest?.id == requestID {
             isWebAIHandoffMinimized = false
@@ -7548,14 +7604,6 @@ class AppState: ObservableObject {
         group.enter()
         ImageCache.default.clearDiskCache {
             print("🗑️ AppState: Cleared Kingfisher disk cache")
-            group.leave()
-        }
-        #endif
-
-        #if canImport(WebKit)
-        group.enter()
-        WKWebsiteDataStore.default().removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: Date(timeIntervalSince1970: 0)) {
-            print("🗑️ AppState: Cleared WebKit website data")
             group.leave()
         }
         #endif
