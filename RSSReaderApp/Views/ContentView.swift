@@ -4201,95 +4201,103 @@ struct ContentView: View {
         }
     }
     
+    private var favoriteArticlesForList: [Article] {
+        appState.feeds.flatMap { $0.articles }
+            .filter { $0.isFavorite }
+            .sorted(by: { $0.publishDate > $1.publishDate })
+    }
+
+    private var favoritePostsForList: [RedditPost] {
+        appState.redditFeeds.flatMap { $0.posts }
+            .filter { $0.isFavorite }
+            .sorted(by: { $0.publishDate > $1.publishDate })
+    }
+
+    private var favoriteTrackedItemIDs: [String] {
+        favoriteArticlesForList.map(\.id) + favoritePostsForList.map(\.id)
+    }
+
+    @ViewBuilder
+    private var favoritesArticlesSection: some View {
+        Section(header: Text("RSS Articles")) {
+            if favoriteArticlesForList.isEmpty {
+                Text("No favorite articles")
+                    .foregroundColor(.secondary)
+                    .padding()
+            } else {
+                ForEach(favoriteArticlesForList) { article in
+                    Button(action: {
+                        appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
+                        appState.selectedArticle = article
+                        if !article.isRead {
+                            appState.markArticleAsRead(article)
+                        }
+                    }) {
+                        ArticleRow(article: article)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .id(articleListID(for: article))
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            appState.toggleArticleFavorite(article)
+                        } label: {
+                            Label("Remove", systemImage: "star.slash")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var favoritesRedditSection: some View {
+        Section(header: Text("Reddit Posts")) {
+            if favoritePostsForList.isEmpty {
+                Text("No favorite posts")
+                    .foregroundColor(.secondary)
+                    .padding()
+            } else {
+                ForEach(favoritePostsForList) { post in
+                    Button(action: {
+                        appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
+                        appState.selectedRedditPost = post
+                        if !post.isRead {
+                            appState.markRedditPostAsRead(post)
+                        }
+                    }) {
+                        RedditPostRow(post: post)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .id(redditPostListID(for: post))
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            appState.toggleRedditPostFavorite(post)
+                        } label: {
+                            Label("Remove", systemImage: "star.slash")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     var favoritesView: some View {
         List {
-            Section(header: Text("RSS Articles")) {
-                let favoriteArticles = appState.feeds.flatMap { $0.articles }
-                    .filter { $0.isFavorite }
-                    .sorted(by: { $0.publishDate > $1.publishDate })
-                
-                if favoriteArticles.isEmpty {
-                    Text("No favorite articles")
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    ForEach(favoriteArticles) { article in
-                        Button(action: {
-                            // Set article and navigate
-                            appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
-                            appState.selectedArticle = article
-                            if !article.isRead {
-                                appState.markArticleAsRead(article)
-                            }
-                        }) {
-                            ArticleRow(article: article)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .id(articleListID(for: article))
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                appState.toggleArticleFavorite(article)
-                            } label: {
-                                Label("Remove", systemImage: "star.slash")
-                            }
-                        }
-                    }
-                }
-            }
-            
-            Section(header: Text("Reddit Posts")) {
-                let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
-                    .filter { $0.isFavorite }
-                    .sorted(by: { $0.publishDate > $1.publishDate })
-                
-                if favoritePosts.isEmpty {
-                    Text("No favorite posts")
-                        .foregroundColor(.secondary)
-                        .padding()
-                } else {
-                    ForEach(favoritePosts) { post in
-                        Button(action: {
-                            // Set post and navigate
-                            appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
-                            appState.selectedRedditPost = post
-                            if !post.isRead {
-                                appState.markRedditPostAsRead(post)
-                            }
-                        }) {
-                            RedditPostRow(post: post)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .id(redditPostListID(for: post))
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                appState.toggleRedditPostFavorite(post)
-                            } label: {
-                                Label("Remove", systemImage: "star.slash")
-                            }
-                        }
-                    }
-                }
-            }
+            favoritesArticlesSection
+            favoritesRedditSection
         }
         .listStyle(.plain)
         .feedListColumnStyle(
             colorScheme: colorScheme,
             scrollOffset: feedListScrollOffset,
             restorationKey: "favorites_category",
-            trackedItemIDs: appState.feeds.flatMap { $0.articles }
-                .filter(\.isFavorite)
-                .sorted(by: { $0.publishDate > $1.publishDate })
-                .map(\.id)
-                + appState.redditFeeds.flatMap { $0.posts }
-                .filter(\.isFavorite)
-                .sorted(by: { $0.publishDate > $1.publishDate })
-                .map(\.id)
+            trackedItemIDs: favoriteTrackedItemIDs
         ) { offset in
             feedListScrollOffset = offset
         }
