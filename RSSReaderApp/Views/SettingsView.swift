@@ -108,7 +108,7 @@ private extension View {
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.presentationMode) var presentationMode
-    
+
     @State private var showingFileImporter = false
     @State private var showingFileExporter = false
     @State private var exportFileURL: URL?
@@ -286,829 +286,888 @@ struct SettingsView: View {
         }
     }
     #endif
-    
+
+    private var cacheManagementSection: some View {
+        Section("Cache Management") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Removable Cache Size:")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(cacheSizeDisplay)
+                        .fontWeight(.semibold)
+                }
+
+                Button(action: {
+                    isClearingCaches = true
+                    appState.clearAllCaches {
+                        updateCacheSize()
+                        refreshStorageBreakdown()
+                        isClearingCaches = false
+                    }
+                }) {
+                    HStack {
+                        if isClearingCaches {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Clearing…")
+                        } else {
+                            Image(systemName: "trash.fill")
+                            Text("Clear All Caches")
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .disabled(isClearingCaches)
+                .settingsGlassButtonStyle(prominent: true)
+                .tint(.red)
+
+                Text("Clears removable caches and preserves downloaded LiteRT and MLX models.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Divider()
+
+                Button(action: {
+                    isCleaningFailedModelDownloads = true
+                    failedModelDownloadCleanupStatus = nil
+                    appState.clearFailedModelDownloads { message in
+                        failedModelDownloadCleanupStatus = message
+                        updateCacheSize()
+                        refreshStorageBreakdown()
+                        isCleaningFailedModelDownloads = false
+                    }
+                }) {
+                    HStack {
+                        if isCleaningFailedModelDownloads {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Cleaning…")
+                        } else {
+                            Image(systemName: "arrow.down.doc.fill")
+                            Text("Clean Failed Model Downloads")
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .disabled(isCleaningFailedModelDownloads)
+                .settingsGlassButtonStyle()
+
+                Text("Removes only incomplete .download files. Completed LiteRT and MLX models are kept.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if let failedModelDownloadCleanupStatus {
+                    Text(failedModelDownloadCleanupStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var mlxTTSSection: some View {
+        if localTTSEngine == .kokoro {
+            Section("MLX TTS") {
+                Picker("MLX Voice", selection: $kokoroVoice) {
+                    ForEach(KokoroVoice.allCases) { voice in
+                        Text(voice.displayName).tag(voice.rawValue)
+                    }
+                }
+                .onChange(of: kokoroVoice) { newValue in
+                    appState.summaryService.setKokoroVoice(newValue)
+                    kokoroVoice = appState.summaryService.getKokoroVoice()
+                    var newSettings = appState.settings
+                    newSettings.kokoroVoice = kokoroVoice
+                    appState.updateSettings(newSettings)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Speed")
+                        Spacer()
+                        Text(String(format: "%.1fx", kokoroSpeed))
+                            .foregroundColor(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { kokoroSpeed },
+                            set: { newValue in
+                                kokoroSpeed = newValue
+                                appState.summaryService.setKokoroSpeed(newValue)
+                                var newSettings = appState.settings
+                                newSettings.kokoroSpeed = kokoroSpeed
+                                appState.updateSettings(newSettings)
+                            }
+                        ),
+                        in: 0.5...2.0,
+                        step: 0.1
+                    )
+                }
+
+                Button(action: {
+                    isKokoroPrewarming = true
+                    kokoroPrewarmError = nil
+                    kokoroPrewarmStatus = nil
+                    Task {
+                        do {
+                            try await appState.summaryService.precacheKokoroNow()
+                            await MainActor.run {
+                                isKokoroPrewarming = false
+                                kokoroPrewarmStatus = "MLX pre-cache complete"
+                                kokoroPrecacheEnabled = true
+                                var newSettings = appState.settings
+                                newSettings.kokoroPrecacheEnabled = true
+                                appState.updateSettings(newSettings)
+                            }
+                        } catch {
+                            await MainActor.run {
+                                isKokoroPrewarming = false
+                                kokoroPrewarmError = error.localizedDescription
+                            }
+                        }
+                    }
+                }) {
+                    HStack {
+                        if isKokoroPrewarming { ProgressView().scaleEffect(0.8) }
+                        else { Image(systemName: "bolt.circle") }
+                        Text("Pre-cache MLX TTS")
+                    }
+                }
+                .settingsGlassButtonStyle(prominent: true)
+                .disabled(isKokoroPrewarming || !KokoroTTSService.shared.isAvailable)
+
+                if kokoroPrecacheEnabled {
+                    Text("Pre-cache enabled (loads models at launch).")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Button("Disable Pre-cache") {
+                        appState.summaryService.setKokoroPrecacheEnabled(false)
+                        kokoroPrecacheEnabled = false
+                        kokoroPrewarmStatus = "Pre-cache disabled (takes effect after relaunch)"
+                        var newSettings = appState.settings
+                        newSettings.kokoroPrecacheEnabled = false
+                        appState.updateSettings(newSettings)
+                    }
+                    .settingsGlassButtonStyle()
+                }
+
+                if let status = kokoroPrewarmStatus {
+                    Text(status).font(.caption).foregroundColor(.green)
+                }
+                if let error = kokoroPrewarmError {
+                    Text(error).font(.caption).foregroundColor(.red)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var localTTSVoiceSection: some View {
+        if localTTSEngine == .system {
+            Section("Local TTS Voice") {
+                #if os(iOS)
+                // iOS-on-Mac: show only ttsbundle English voices that AVSpeech can use
+                if iosVoices.isEmpty {
+                    Text("No iOS voices available. Install voices in System Settings → Accessibility → Spoken Content → System Voice, then relaunch the app.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("Voice", selection: $localVoiceID) {
+                        ForEach(iosVoices, id: \.id) { voice in
+                            Text(voice.title).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: localVoiceID) { newID in
+                        UserDefaults.standard.set(newID, forKey: iosVoiceKey)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Test") {
+                            let utterance = AVSpeechUtterance(string: "This is a test of the selected voice.")
+                            if let voice = AVSpeechSynthesisVoice(identifier: localVoiceID) {
+                                utterance.voice = voice
+                            }
+                            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+                            if testSynthIOS == nil { testSynthIOS = AVSpeechSynthesizer() }
+                            testSynthIOS?.speak(utterance)
+                        }
+                        Button("Set as Default") {
+                            UserDefaults.standard.set(localVoiceID, forKey: iosVoiceKey)
+                        }
+                    }
+                }
+                #elseif os(macOS)
+                // macOS: list NSSpeechSynthesizer voices (includes Ava Enhanced)
+                if macVoices.isEmpty {
+                    Text("No macOS voices found.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("Voice", selection: $localVoiceID) {
+                        ForEach(macVoices, id: \.id) { voice in
+                            Text(voice.name).tag(voice.id)
+                        }
+                    }
+                    .onChange(of: localVoiceID) { newID in
+                        UserDefaults.standard.set(newID, forKey: macVoiceKey)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Test") {
+                            let synth = NSSpeechSynthesizer()
+                            _ = setMacSpeechVoice(synth, identifier: localVoiceID)
+                            synth.startSpeaking("This is a test of the selected voice.")
+                            testSynthMac = synth
+                        }
+                        Button("Set as Default") {
+                            UserDefaults.standard.set(localVoiceID, forKey: macVoiceKey)
+                        }
+                    }
+                }
+                #endif
+            }
+        }
+    }
+
+    private var localModelStorageSection: some View {
+        Section("Local Model Storage") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Downloaded Models")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if isLoadingModelStorage {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Button {
+                            refreshModelStorage()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                if modelStorageItems.isEmpty {
+                    Text(isLoadingModelStorage ? "Scanning model storage…" : "No local models found.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(modelStorageItems) { item in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: item.kind == .liteRT ? "cube.box.fill" : "cpu.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, alignment: .center)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(item.name)
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    if item.isCurrentSelection {
+                                        Text("Current")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.blue.opacity(0.18))
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                                Text("\(item.kind.rawValue) • \(item.detail)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(item.sizeText)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .frame(minWidth: 64, alignment: .trailing)
+
+                            Button(role: .destructive) {
+                                pendingModelStorageDelete = item
+                                showModelStorageDeleteConfirm = true
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(isDeletingModelStorage)
+                            .frame(width: 24, alignment: .center)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                if let modelStorageStatus {
+                    Text(modelStorageStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Text("Deleting a model removes only that selected model. Other app caches and other models are left alone.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private var cloudSyncSection: some View {
+        Section("Cloud Sync") {
+            let persistenceManager = PersistenceManager.shared
+
+            Button {
+                appState.manualCloudRefresh()
+            } label: {
+                if appState.manualCloudSyncState == .syncing {
+                    Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                } else if appState.manualCloudSyncState == .completed {
+                    Label("Synced", systemImage: "checkmark.circle.fill")
+                } else {
+                    Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
+                }
+            }
+            .settingsGlassButtonStyle(prominent: true)
+            .tint(.blue)
+            .disabled(appState.manualCloudSyncState == .syncing)
+
+            Text("Pull the latest read states and subscriptions from iCloud immediately.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let status = appState.manualCloudSyncStatusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            if persistenceManager.isThisDevicePrimaryForSubscriptions {
+                Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
+                    .font(.subheadline)
+
+                Button {
+                    showReadHistoryMigrationConfirm = true
+                } label: {
+                    if isMigratingReadHistory {
+                        Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
+                    } else {
+                        Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
+                    }
+                }
+                .settingsGlassButtonStyle()
+                .tint(.purple)
+                .disabled(isMigratingReadHistory)
+
+                if isMigratingReadHistory {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                Text("One-time: seeds the new sync format so unread badge counts match across devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var primaryDeviceSection: some View {
+        Section("Primary Device for Subscriptions") {
+            let persistenceManager = PersistenceManager.shared
+
+            if persistenceManager.isThisDevicePrimaryForSubscriptions {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    VStack(alignment: .leading) {
+                        Text("This device is primary")
+                            .font(.headline)
+                        Text(persistenceManager.thisDeviceName)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Text("Subscription changes made here sync to all your devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if let primaryName = persistenceManager.primaryDeviceNameForSubscriptions {
+                HStack {
+                    Image(systemName: "icloud.fill")
+                        .foregroundColor(.blue)
+                    VStack(alignment: .leading) {
+                        Text("Syncing from:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(primaryName)
+                            .font(.headline)
+                    }
+                }
+
+                Text("Subscriptions are managed by the primary device. Changes made here won't sync to other devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button {
+                    persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
+                    appState.objectWillChange.send()
+                } label: {
+                    Label("Make this device primary", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .settingsGlassButtonStyle()
+                .tint(.orange)
+            } else {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("No primary device set")
+                        .font(.headline)
+                }
+
+                Text("Set a primary device to prevent subscription duplicates across your devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button {
+                    persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
+                    appState.objectWillChange.send()
+                } label: {
+                    Label("Make this device primary", systemImage: "checkmark.circle")
+                }
+                .settingsGlassButtonStyle(prominent: true)
+                .tint(.green)
+            }
+        }
+    }
+
+    private var storageBreakdownSection: some View {
+        Section("Storage Breakdown") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("App Container")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if isLoadingStorageBreakdown {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Button {
+                            refreshStorageBreakdown()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                if storageBreakdownItems.isEmpty {
+                    Text(isLoadingStorageBreakdown ? "Scanning storage…" : "No storage details found.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(storageBreakdownItems) { item in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, alignment: .center)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.name)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Text(item.detail)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(item.sizeText)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .frame(minWidth: 64, alignment: .trailing)
+
+                            ZStack {
+                                if item.cleanupKind != nil || item.isModelStorage {
+                                    Button(role: .destructive) {
+                                        pendingStorageBreakdownDelete = item
+                                        showStorageBreakdownDeleteConfirm = true
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(isDeletingStorageBreakdown)
+                                }
+                            }
+                            .frame(width: 24, alignment: .center)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+
+                if let storageBreakdownStatus {
+                    Text(storageBreakdownStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private var appearanceSection: some View {
+        Section("Appearance") {
+            #if os(macOS)
+            macAppearanceSelector
+                .padding(.vertical, 4)
+            #else
+            Picker("Theme", selection: $appearanceMode) {
+                Label("System", systemImage: "circle.lefthalf.filled").tag(0)
+                Label("Light", systemImage: "sun.max.fill").tag(1)
+                Label("Dark", systemImage: "moon.fill").tag(2)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .padding(.vertical, 4)
+            #endif
+        }
+    }
+
+    private var summaryProviderSection: some View {
+        Section("Summary Provider") {
+            #if os(macOS)
+            macSummaryProviderSelector
+                .padding(.vertical, 4)
+                .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
+                    summaryProviderDidChange(newValue)
+                }
+            #else
+            Picker("Summary Source", selection: $appState.settings.selectedSummaryProvider) {
+                ForEach(AppSettings.SummaryProvider.allCases, id: \.self) { provider in
+                    Text(provider.displayName)
+                        .tag(provider)
+                }
+            }
+            .pickerStyle(.menu)
+            .padding(.vertical, 4)
+            .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
+                summaryProviderDidChange(newValue)
+            }
+            #endif
+
+            Text(summaryProviderDescription)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 4)
+
+            #if os(macOS)
+            macWebAISelector
+                .padding(.top, 6)
+            #else
+            Picker("Web AI Destination", selection: Binding(
+                get: { appState.settings.selectedWebAIProvider },
+                set: { newValue in
+                    var newSettings = appState.settings
+                    newSettings.selectedWebAIProvider = newValue
+                    appState.updateSettings(newSettings)
+                }
+            )) {
+                ForEach(WebAIProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.top, 6)
+            #endif
+
+            Text(
+                appState.settings.selectedSummaryProvider == .webAI
+                ? "Web AI summaries use \(appState.settings.selectedWebAIProvider.displayName) in the in-app browser, send the prompt automatically when possible, and capture the reply back into the app."
+                : "Web-send buttons open \(appState.settings.selectedWebAIProvider.displayName) in an in-app browser, paste the prompt, and try to send it automatically."
+            )
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Persistent Web AI Sessions")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                Text("Log in inside RSSReaderApp so ChatGPT and Gemini sessions are reused by the in-app WebAI browser.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 10) {
+                    Button("Log In to ChatGPT") {
+                        launchWebAILogin(.chatgpt)
+                    }
+                    .settingsGlassButtonStyle()
+
+                    Button("Reset ChatGPT") {
+                        appState.resetWebAISession(for: .chatgpt)
+                    }
+                    .settingsGlassButtonStyle()
+                }
+
+                HStack(spacing: 10) {
+                    Button("Log In to Gemini") {
+                        launchWebAILogin(.gemini)
+                    }
+                    .settingsGlassButtonStyle()
+
+                    Button("Reset Gemini") {
+                        appState.resetWebAISession(for: .gemini)
+                    }
+                    .settingsGlassButtonStyle()
+                }
+            }
+
+            if appState.settings.selectedSummaryProvider == .mlxLocal {
+                mlxSettingsView
+            }
+
+            if appState.settings.selectedSummaryProvider == .coreAIMLXLocal {
+                coreAIMLXSettingsView
+            }
+
+            #if os(iOS)
+            if appState.settings.selectedSummaryProvider == .summarizeDaemon {
+                summarizeSettingsView
+            }
+            #endif
+
+            if appState.settings.selectedSummaryProvider == .applePCCGateway {
+                pccGatewaySettingsView
+            }
+        }
+    }
+
+    private var youtubeSection: some View {
+        Section("YouTube") {
+            Toggle("YouTube Support", isOn: Binding(
+                get: { appState.settings.youtubeSupportEnabled },
+                set: { enabled in
+                    var newSettings = appState.settings
+                    newSettings.youtubeSupportEnabled = enabled
+                    appState.updateSettings(newSettings)
+                    if enabled {
+                        appState.refreshAllFeeds()
+                    }
+                }
+            ))
+
+            Text("When enabled, search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for transcript-grounded summaries and Q&A. When disabled, the existing RSS and Reddit interface remains unchanged.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var apiKeysSection: some View {
+        Section("API Keys") {
+            SecureField("Gemini API Key", text: $geminiApiKey)
+                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
+                    cornerRadius: 12,
+                    tintColor: .purple.opacity(0.3)
+                ))
+                .onChange(of: geminiApiKey) { newValue in
+                    var newSettings = appState.settings
+                    newSettings.geminiApiKey = newValue
+                    appState.updateSettings(newSettings)
+                }
+
+            SecureField("OpenAI API Key (for TTS)", text: $openaiApiKey)
+                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
+                    cornerRadius: 12,
+                    tintColor: .blue.opacity(0.3)
+                ))
+                .onChange(of: openaiApiKey) { newValue in
+                    var newSettings = appState.settings
+                    newSettings.openaiApiKey = newValue
+                    appState.updateSettings(newSettings)
+                }
+        }
+    }
+
+    private var textToSpeechSection: some View {
+        Section("Text-to-Speech") {
+            Toggle("Enable TTS", isOn: $enableTTS)
+
+            if enableTTS {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Voice: \(ttsVoice)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text("Rate: \(ttsRate, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $ttsRate, in: 0.1...1.0, step: 0.1)
+
+                    Text("Pitch: \(ttsPitch, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $ttsPitch, in: 0.5...2.0, step: 0.1)
+
+                    Text("Volume: \(ttsVolume, specifier: "%.2f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Slider(value: $ttsVolume, in: 0.1...1.0, step: 0.1)
+                }
+            }
+        }
+    }
+
+    private var localTTSEngineSection: some View {
+        Section("Local TTS Engine") {
+            Picker("Engine", selection: $localTTSEngine) {
+                ForEach(LocalTTSEngine.availableEngines) { engine in
+                    Text(engine.displayName).tag(engine)
+                }
+            }
+            .onChange(of: localTTSEngine) { newValue in
+                appState.summaryService.setLocalTTSEngine(newValue)
+                var newSettings = appState.settings
+                newSettings.localTTSEngine = newValue
+                appState.updateSettings(newSettings)
+                if newValue == .kokoro {
+                    kokoroVoice = appState.summaryService.getKokoroVoice()
+                    kokoroSpeed = appState.summaryService.getKokoroSpeed()
+                    kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
+                }
+            }
+
+            if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
+                Text("MLX TTS requires the MLXAudio package and model access.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if localTTSEngine == .kokoro {
+                Text("MLX TTS runs fully on device. First use may download large model assets.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Uses system voices for on-device speech.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var opmlManagementSection: some View {
+        Section("OPML Management") {
+            Button(action: {
+                showingFileImporter = true
+            }) {
+                HStack {
+                    if isImporting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Importing...")
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Import OPML")
+                    }
+                }
+            }
+            .disabled(isImporting || isExporting)
+            .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
+
+            Button(action: {
+                exportOPML()
+            }) {
+                HStack {
+                    if isExporting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Exporting...")
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Export OPML")
+                    }
+                }
+            }
+            .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
+            .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
+        }
+    }
+
+    private var actionsSection: some View {
+        Section("Actions") {
+            Button("Clear All Data") {
+                // Clear data action
+            }
+            .settingsGlassButtonStyle(tintColor: .red.opacity(0.3))
+
+            Button("Reset to Defaults") {
+                // Reset action
+            }
+            .settingsGlassButtonStyle(tintColor: .orange.opacity(0.3))
+        }
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
                 settingsBackground
                     .ignoresSafeArea()
-                
+
                 Form {
-                    Section("Appearance") {
-                        #if os(macOS)
-                        macAppearanceSelector
-                            .padding(.vertical, 4)
-                        #else
-                        Picker("Theme", selection: $appearanceMode) {
-                            Label("System", systemImage: "circle.lefthalf.filled").tag(0)
-                            Label("Light", systemImage: "sun.max.fill").tag(1)
-                            Label("Dark", systemImage: "moon.fill").tag(2)
-                        }
-                        .pickerStyle(SegmentedPickerStyle())
-                        .padding(.vertical, 4)
-                        #endif
-                    }
-                    
-                    Section("Summary Provider") {
-                        #if os(macOS)
-                        macSummaryProviderSelector
-                            .padding(.vertical, 4)
-                            .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
-                                summaryProviderDidChange(newValue)
-                            }
-                        #else
-                        Picker("Summary Source", selection: $appState.settings.selectedSummaryProvider) {
-                            ForEach(AppSettings.SummaryProvider.allCases, id: \.self) { provider in
-                                Text(provider.displayName)
-                                    .tag(provider)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .padding(.vertical, 4)
-                        .onChange(of: appState.settings.selectedSummaryProvider) { newValue in
-                            summaryProviderDidChange(newValue)
-                        }
-                        #endif
-                        
-                    Text(summaryProviderDescription)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
+                    appearanceSection
 
-                        #if os(macOS)
-                        macWebAISelector
-                            .padding(.top, 6)
-                        #else
-                        Picker("Web AI Destination", selection: Binding(
-                            get: { appState.settings.selectedWebAIProvider },
-                            set: { newValue in
-                                var newSettings = appState.settings
-                                newSettings.selectedWebAIProvider = newValue
-                                appState.updateSettings(newSettings)
-                            }
-                        )) {
-                            ForEach(WebAIProvider.allCases) { provider in
-                                Text(provider.displayName).tag(provider)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.top, 6)
-                        #endif
+                    summaryProviderSection
 
-                        Text(
-                            appState.settings.selectedSummaryProvider == .webAI
-                            ? "Web AI summaries use \(appState.settings.selectedWebAIProvider.displayName) in the in-app browser, send the prompt automatically when possible, and capture the reply back into the app."
-                            : "Web-send buttons open \(appState.settings.selectedWebAIProvider.displayName) in an in-app browser, paste the prompt, and try to send it automatically."
-                        )
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    youtubeSection
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Persistent Web AI Sessions")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
+                    cloudSyncSection
 
-                            Text("Log in inside RSSReaderApp so ChatGPT and Gemini sessions are reused by the in-app WebAI browser.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                    primaryDeviceSection
 
-                            HStack(spacing: 10) {
-                                Button("Log In to ChatGPT") {
-                                    launchWebAILogin(.chatgpt)
-                                }
-                                .settingsGlassButtonStyle()
-
-                                Button("Reset ChatGPT") {
-                                    appState.resetWebAISession(for: .chatgpt)
-                                }
-                                .settingsGlassButtonStyle()
-                            }
-
-                            HStack(spacing: 10) {
-                                Button("Log In to Gemini") {
-                                    launchWebAILogin(.gemini)
-                                }
-                                .settingsGlassButtonStyle()
-
-                                Button("Reset Gemini") {
-                                    appState.resetWebAISession(for: .gemini)
-                                }
-                                .settingsGlassButtonStyle()
-                            }
-                        }
-
-                        if appState.settings.selectedSummaryProvider == .mlxLocal {
-                            mlxSettingsView
-                        }
-
-                        if appState.settings.selectedSummaryProvider == .coreAIMLXLocal {
-                            coreAIMLXSettingsView
-                        }
-
-                        #if os(iOS)
-                        if appState.settings.selectedSummaryProvider == .summarizeDaemon {
-                            summarizeSettingsView
-                        }
-                        #endif
-
-                        if appState.settings.selectedSummaryProvider == .applePCCGateway {
-                            pccGatewaySettingsView
-                        }
-                }
-
-                Section("YouTube") {
-                    Toggle("YouTube Support", isOn: Binding(
-                        get: { appState.settings.youtubeSupportEnabled },
-                        set: { enabled in
-                            var newSettings = appState.settings
-                            newSettings.youtubeSupportEnabled = enabled
-                            appState.updateSettings(newSettings)
-                            if enabled {
-                                appState.refreshAllFeeds()
-                            }
-                        }
-                    ))
-
-                    Text("When enabled, search for public YouTube channels by name, subscribe through their public video feeds, play videos in the app, and use available captions for transcript-grounded summaries and Q&A. When disabled, the existing RSS and Reddit interface remains unchanged.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Section("Cloud Sync") {
-                    let persistenceManager = PersistenceManager.shared
-
-                    Button {
-                        appState.manualCloudRefresh()
-                    } label: {
-                        if appState.manualCloudSyncState == .syncing {
-                            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
-                        } else if appState.manualCloudSyncState == .completed {
-                            Label("Synced", systemImage: "checkmark.circle.fill")
-                        } else {
-                            Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
-                        }
-                    }
-                    .settingsGlassButtonStyle(prominent: true)
-                    .tint(.blue)
-                    .disabled(appState.manualCloudSyncState == .syncing)
-
-                    Text("Pull the latest read states and subscriptions from iCloud immediately.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if let status = appState.manualCloudSyncStatusMessage {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
-                            .font(.subheadline)
-
-                        Button {
-                            showReadHistoryMigrationConfirm = true
-                        } label: {
-                            if isMigratingReadHistory {
-                                Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            } else {
-                                Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            }
-                        }
-                        .settingsGlassButtonStyle()
-                        .tint(.purple)
-                        .disabled(isMigratingReadHistory)
-
-                        if isMigratingReadHistory {
-                            ProgressView()
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-
-                        Text("One-time: seeds the new sync format so unread badge counts match across devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Section("Primary Device for Subscriptions") {
-                    let persistenceManager = PersistenceManager.shared
-
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        // This device is primary
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            VStack(alignment: .leading) {
-                                Text("This device is primary")
-                                    .font(.headline)
-                                Text(persistenceManager.thisDeviceName)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        Text("Subscription changes made here sync to all your devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else if let primaryName = persistenceManager.primaryDeviceNameForSubscriptions {
-                        // Another device is primary
-                        HStack {
-                            Image(systemName: "icloud.fill")
-                                .foregroundColor(.blue)
-                            VStack(alignment: .leading) {
-                                Text("Syncing from:")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(primaryName)
-                                    .font(.headline)
-                            }
-                        }
-
-                        Text("Subscriptions are managed by the primary device. Changes made here won't sync to other devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button {
-                            persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
-                            // Force UI refresh
-                            appState.objectWillChange.send()
-                        } label: {
-                            Label("Make this device primary", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .settingsGlassButtonStyle()
-                        .tint(.orange)
-                    } else {
-                        // No primary device set
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text("No primary device set")
-                                .font(.headline)
-                        }
-
-                        Text("Set a primary device to prevent subscription duplicates across your devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button {
-                            persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
-                            // Force UI refresh
-                            appState.objectWillChange.send()
-                        } label: {
-                            Label("Make this device primary", systemImage: "checkmark.circle")
-                        }
-                        .settingsGlassButtonStyle(prominent: true)
-                        .tint(.green)
-                    }
-                }
-                    
-                    Section("API Keys") {
-                        SecureField("Gemini API Key", text: $geminiApiKey)
-                            .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
-                                cornerRadius: 12,
-                                tintColor: .purple.opacity(0.3)
-                            ))
-                            .onChange(of: geminiApiKey) { newValue in
-                                var newSettings = appState.settings
-                                newSettings.geminiApiKey = newValue
-                                appState.updateSettings(newSettings)
-                            }
-
-                        SecureField("OpenAI API Key (for TTS)", text: $openaiApiKey)
-                            .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
-                                cornerRadius: 12,
-                                tintColor: .blue.opacity(0.3)
-                            ))
-                            .onChange(of: openaiApiKey) { newValue in
-                                var newSettings = appState.settings
-                                newSettings.openaiApiKey = newValue
-                                appState.updateSettings(newSettings)
-                            }
-                    }
+                    apiKeysSection
 
                     redditAuthSection
 
-                    Section("Text-to-Speech") {
-                        Toggle("Enable TTS", isOn: $enableTTS)
-                        
-                        if enableTTS {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Voice: \(ttsVoice)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                
-                                Text("Rate: \(ttsRate, specifier: "%.2f")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Slider(value: $ttsRate, in: 0.1...1.0, step: 0.1)
-                                
-                                Text("Pitch: \(ttsPitch, specifier: "%.2f")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Slider(value: $ttsPitch, in: 0.5...2.0, step: 0.1)
-                                
-                                Text("Volume: \(ttsVolume, specifier: "%.2f")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Slider(value: $ttsVolume, in: 0.1...1.0, step: 0.1)
-                            }
-                        }
-                    }
+                    textToSpeechSection
 
-                    Section("Local TTS Engine") {
-                        Picker("Engine", selection: $localTTSEngine) {
-                            ForEach(LocalTTSEngine.availableEngines) { engine in
-                                Text(engine.displayName).tag(engine)
-                            }
-                        }
-                        .onChange(of: localTTSEngine) { newValue in
-                            appState.summaryService.setLocalTTSEngine(newValue)
-                            var newSettings = appState.settings
-                            newSettings.localTTSEngine = newValue
-                            appState.updateSettings(newSettings)
-                            if newValue == .kokoro {
-                                kokoroVoice = appState.summaryService.getKokoroVoice()
-                                kokoroSpeed = appState.summaryService.getKokoroSpeed()
-                                kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
-                            }
-                        }
+                    localTTSEngineSection
 
-                        if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
-                            Text("MLX TTS requires the MLXAudio package and model access.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if localTTSEngine == .kokoro {
-                            Text("MLX TTS runs fully on device. First use may download large model assets.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Uses system voices for on-device speech.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+                    mlxTTSSection
 
-                    if localTTSEngine == .kokoro {
-                        Section("MLX TTS") {
-                            Picker("MLX Voice", selection: $kokoroVoice) {
-                                ForEach(KokoroVoice.allCases) { voice in
-                                    Text(voice.displayName).tag(voice.rawValue)
-                                }
-                            }
-                            .onChange(of: kokoroVoice) { newValue in
-                                appState.summaryService.setKokoroVoice(newValue)
-                                kokoroVoice = appState.summaryService.getKokoroVoice()
-                                var newSettings = appState.settings
-                                newSettings.kokoroVoice = kokoroVoice
-                                appState.updateSettings(newSettings)
-                            }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Speed")
-                                    Spacer()
-                                    Text(String(format: "%.1fx", kokoroSpeed))
-                                        .foregroundColor(.secondary)
-                                }
-                                Slider(
-                                    value: Binding(
-                                        get: { kokoroSpeed },
-                                        set: { newValue in
-                                            kokoroSpeed = newValue
-                                            appState.summaryService.setKokoroSpeed(newValue)
-                                            var newSettings = appState.settings
-                                            newSettings.kokoroSpeed = kokoroSpeed
-                                            appState.updateSettings(newSettings)
-                                        }
-                                    ),
-                                    in: 0.5...2.0,
-                                    step: 0.1
-                                )
-                            }
-
-                            Button(action: {
-                                isKokoroPrewarming = true
-                                kokoroPrewarmError = nil
-                                kokoroPrewarmStatus = nil
-                                Task {
-                                    do {
-                                        try await appState.summaryService.precacheKokoroNow()
-                                        await MainActor.run {
-                                            isKokoroPrewarming = false
-                                            kokoroPrewarmStatus = "MLX pre-cache complete"
-                                            kokoroPrecacheEnabled = true
-                                            var newSettings = appState.settings
-                                            newSettings.kokoroPrecacheEnabled = true
-                                            appState.updateSettings(newSettings)
-                                        }
-                                    } catch {
-                                        await MainActor.run {
-                                            isKokoroPrewarming = false
-                                            kokoroPrewarmError = error.localizedDescription
-                                        }
-                                    }
-                                }
-                            }) {
-                                HStack {
-                                    if isKokoroPrewarming { ProgressView().scaleEffect(0.8) }
-                                    else { Image(systemName: "bolt.circle") }
-                                    Text("Pre-cache MLX TTS")
-                                }
-                            }
-                            .settingsGlassButtonStyle(prominent: true)
-                            .disabled(isKokoroPrewarming || !KokoroTTSService.shared.isAvailable)
-
-                            if kokoroPrecacheEnabled {
-                                Text("Pre-cache enabled (loads models at launch).")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-
-                                Button("Disable Pre-cache") {
-                                    appState.summaryService.setKokoroPrecacheEnabled(false)
-                                    kokoroPrecacheEnabled = false
-                                    kokoroPrewarmStatus = "Pre-cache disabled (takes effect after relaunch)"
-                                    var newSettings = appState.settings
-                                    newSettings.kokoroPrecacheEnabled = false
-                                    appState.updateSettings(newSettings)
-                                }
-                                .settingsGlassButtonStyle()
-                            }
-
-                            if let status = kokoroPrewarmStatus {
-                                Text(status).font(.caption).foregroundColor(.green)
-                            }
-                            if let error = kokoroPrewarmError {
-                                Text(error).font(.caption).foregroundColor(.red)
-                            }
-                        }
-                    }
-                    
                     // Local TTS voice picker (platform-specific, only lists working voices)
-                    if localTTSEngine == .system {
-                        Section("Local TTS Voice") {
-                        #if os(iOS)
-                        // iOS-on-Mac: show only ttsbundle English voices that AVSpeech can use
-                        if iosVoices.isEmpty {
-                            Text("No iOS voices available. Install voices in System Settings → Accessibility → Spoken Content → System Voice, then relaunch the app.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Picker("Voice", selection: $localVoiceID) {
-                                ForEach(iosVoices, id: \.id) { v in
-                                    Text(v.title).tag(v.id)
-                                }
-                            }
-                            .onChange(of: localVoiceID) { newID in
-                                UserDefaults.standard.set(newID, forKey: iosVoiceKey)
-                            }
-                            HStack(spacing: 12) {
-                                Button("Test") {
-                                    let utterance = AVSpeechUtterance(string: "This is a test of the selected voice.")
-                                    if let v = AVSpeechSynthesisVoice(identifier: localVoiceID) { utterance.voice = v }
-                                    utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-                                    if testSynthIOS == nil { testSynthIOS = AVSpeechSynthesizer() }
-                                    testSynthIOS?.speak(utterance)
-                                }
-                                Button("Set as Default") {
-                                    UserDefaults.standard.set(localVoiceID, forKey: iosVoiceKey)
-                                }
-                            }
-                        }
-                        #elseif os(macOS)
-                        // macOS: list NSSpeechSynthesizer voices (includes Ava Enhanced)
-                        if macVoices.isEmpty {
-                            Text("No macOS voices found.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Picker("Voice", selection: $localVoiceID) {
-                                ForEach(macVoices, id: \.id) { v in
-                                    Text(v.name).tag(v.id)
-                                }
-                            }
-                            .onChange(of: localVoiceID) { newID in
-                                UserDefaults.standard.set(newID, forKey: macVoiceKey)
-                            }
-                            HStack(spacing: 12) {
-                                Button("Test") {
-                                    let synth = NSSpeechSynthesizer()
-                                    _ = setMacSpeechVoice(synth, identifier: localVoiceID)
-                                    synth.startSpeaking("This is a test of the selected voice.")
-                                    testSynthMac = synth
-                                }
-                                Button("Set as Default") {
-                                    UserDefaults.standard.set(localVoiceID, forKey: macVoiceKey)
-                                }
-                            }
-                        }
-                        #endif
-                    }
-                    }
-                    
-                    Section("OPML Management") {
-                        Button(action: {
-                            showingFileImporter = true
-                        }) {
-                            HStack {
-                                if isImporting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Importing...")
-                                } else {
-                                    Image(systemName: "square.and.arrow.down")
-                                    Text("Import OPML")
-                                }
-                            }
-                        }
-                        .disabled(isImporting || isExporting)
-                        .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
-                        
-                        Button(action: {
-                            exportOPML()
-                        }) {
-                            HStack {
-                                if isExporting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Exporting...")
-                                } else {
-                                    Image(systemName: "square.and.arrow.up")
-                                    Text("Export OPML")
-                                }
-                            }
-                        }
-                        .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
-                        .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
-                    }
+                    localTTSVoiceSection
 
-                    Section("Cache Management") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Removable Cache Size:")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text(cacheSizeDisplay)
-                                    .fontWeight(.semibold)
-                            }
+                    opmlManagementSection
 
-                            Button(action: {
-                                isClearingCaches = true
-                                appState.clearAllCaches {
-                                    updateCacheSize()
-                                    refreshStorageBreakdown()
-                                    isClearingCaches = false
-                                }
-                            }) {
-                                HStack {
-                                    if isClearingCaches {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Clearing…")
-                                    } else {
-                                        Image(systemName: "trash.fill")
-                                        Text("Clear All Caches")
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                            .disabled(isClearingCaches)
-                            .settingsGlassButtonStyle(prominent: true)
-                            .tint(.red)
+                    cacheManagementSection
 
-                            Text("Clears removable caches and preserves downloaded LiteRT and MLX models.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                    storageBreakdownSection
 
-                            Divider()
+                    localModelStorageSection
 
-                            Button(action: {
-                                isCleaningFailedModelDownloads = true
-                                failedModelDownloadCleanupStatus = nil
-                                appState.clearFailedModelDownloads { message in
-                                    failedModelDownloadCleanupStatus = message
-                                    updateCacheSize()
-                                    refreshStorageBreakdown()
-                                    isCleaningFailedModelDownloads = false
-                                }
-                            }) {
-                                HStack {
-                                    if isCleaningFailedModelDownloads {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Cleaning…")
-                                    } else {
-                                        Image(systemName: "arrow.down.doc.fill")
-                                        Text("Clean Failed Model Downloads")
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                            .disabled(isCleaningFailedModelDownloads)
-                            .settingsGlassButtonStyle()
-
-                            Text("Removes only incomplete .download files. Completed LiteRT and MLX models are kept.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            if let failedModelDownloadCleanupStatus {
-                                Text(failedModelDownloadCleanupStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
-
-                    Section("Storage Breakdown") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("App Container")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                if isLoadingStorageBreakdown {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Button {
-                                        refreshStorageBreakdown()
-                                    } label: {
-                                        Image(systemName: "arrow.clockwise")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-
-                            if storageBreakdownItems.isEmpty {
-                                Text(isLoadingStorageBreakdown ? "Scanning storage…" : "No storage details found.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                ForEach(storageBreakdownItems) { item in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
-
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.name)
-                                                .font(.subheadline)
-                                                .fontWeight(.semibold)
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                            Text(item.detail)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                                        Text(item.sizeText)
-                                            .font(.caption)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
-
-                                        ZStack {
-                                            if item.cleanupKind != nil || item.isModelStorage {
-                                                Button(role: .destructive) {
-                                                    pendingStorageBreakdownDelete = item
-                                                    showStorageBreakdownDeleteConfirm = true
-                                                } label: {
-                                                    Image(systemName: "trash")
-                                                }
-                                                .buttonStyle(.borderless)
-                                                .disabled(isDeletingStorageBreakdown)
-                                            }
-                                        }
-                                        .frame(width: 24, alignment: .center)
-                                    }
-                                    .padding(.vertical, 3)
-                                }
-                            }
-
-                            if let storageBreakdownStatus {
-                                Text(storageBreakdownStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
-                    }
-
-                    Section("Local Model Storage") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Downloaded Models")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                if isLoadingModelStorage {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Button {
-                                        refreshModelStorage()
-                                    } label: {
-                                        Image(systemName: "arrow.clockwise")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-
-                            if modelStorageItems.isEmpty {
-                                Text(isLoadingModelStorage ? "Scanning model storage…" : "No local models found.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                ForEach(modelStorageItems) { item in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: item.kind == .liteRT ? "cube.box.fill" : "cpu.fill")
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
-
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            HStack(spacing: 6) {
-                                                Text(item.name)
-                                                    .font(.subheadline)
-                                                    .fontWeight(.semibold)
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
-                                                if item.isCurrentSelection {
-                                                    Text("Current")
-                                                        .font(.caption2)
-                                                        .padding(.horizontal, 6)
-                                                        .padding(.vertical, 2)
-                                                        .background(.blue.opacity(0.18))
-                                                        .clipShape(Capsule())
-                                                }
-                                            }
-                                            Text("\(item.kind.rawValue) • \(item.detail)")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                                        Text(item.sizeText)
-                                            .font(.caption)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
-
-                                        Button(role: .destructive) {
-                                            pendingModelStorageDelete = item
-                                            showModelStorageDeleteConfirm = true
-                                        } label: {
-                                            Image(systemName: "trash")
-                                        }
-                                        .buttonStyle(.borderless)
-                                        .disabled(isDeletingModelStorage)
-                                        .frame(width: 24, alignment: .center)
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                            }
-
-                            if let modelStorageStatus {
-                                Text(modelStorageStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Text("Deleting a model removes only that selected model. Other app caches and other models are left alone.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
-                    }
-
-                    Section("Actions") {
-                        Button("Clear All Data") {
-                            // Clear data action
-                        }
-                        .settingsGlassButtonStyle(tintColor: .red.opacity(0.3))
-
-                        Button("Reset to Defaults") {
-                            // Reset action
-                        }
-                        .settingsGlassButtonStyle(tintColor: .orange.opacity(0.3))
-                    }
+                    actionsSection
                 }
                 .scrollContentBackground(.hidden) // Hide default form background
                 #if os(macOS)
@@ -2117,7 +2176,6 @@ struct SettingsView: View {
         }
     }
 }
-
 // MARK: - Local Voices Loader
 extension SettingsView {
     private func loadLocalVoices() {
