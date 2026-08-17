@@ -4476,10 +4476,7 @@ class AppState: ObservableObject {
         }
 
         let session = LanguageModelSession(model: model)
-        let response = try await session.respond(
-            to: prompt,
-            contextOptions: ContextOptions(reasoningLevel: .moderate)
-        )
+        let response = try await session.respond(to: prompt)
 
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
