@@ -1168,11 +1168,11 @@
 		};
 		D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "rss mac/Packages/mlx-audio-swift";
+				relativePath = "Packages/mlx-audio-swift";
 		};
 		D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "rss mac/Packages/EventSource";
+				relativePath = "Packages/EventSource";
 		};
 		LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */ = {
 			isa = XCLocalSwiftPackageReference;
