@@ -856,37 +856,53 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         applyDetectedURLLinks()
         guard maximumReference > 0, !currentRenderedText.isEmpty else { return }
 
-        let phrasePattern = #"\b(?:post|posts|article|articles|item|items)\s+\d+(?:\s*(?:,|\band\b|&)\s*(?:(?:post|posts|article|articles|item|items)\s+)?\d+)*"#
+        // Providers do not always use the exact same citation spelling. Accept
+        // "Article 2", "Article #2", "Article [2]", and compact bracketed
+        // citations such as "[2]" without turning ordinary prose numbers into
+        // links.
+        let referenceToken = #"(?:#\s*)?(?:\[\s*)?\d+(?:\s*\])?"#
+        let phrasePattern = #"\b(?:post|posts|article|articles|item|items)\s+\#(referenceToken)(?:\s*(?:,|\band\b|&)\s*(?:(?:post|posts|article|articles|item|items)\s+)?\#(referenceToken))*"#
         guard let phraseRegex = try? NSRegularExpression(pattern: phrasePattern, options: [.caseInsensitive]),
-              let numberRegex = try? NSRegularExpression(pattern: #"\d+"#) else {
+              let numberRegex = try? NSRegularExpression(pattern: #"\d+"#),
+              let bracketRegex = try? NSRegularExpression(pattern: #"[\[\(]\s*#?(\d+)\s*[\]\)]"#) else {
             return
         }
 
         let source = currentRenderedText as NSString
         let sourceRange = NSRange(location: 0, length: source.length)
+        func applyReferenceLink(numberRange: NSRange) {
+            let number = Int(source.substring(with: numberRange)) ?? 0
+            guard (1...maximumReference).contains(number),
+                  let destination = URL(string: "rssreader-summary://item/\(number)") else {
+                return
+            }
+            let referenceFont = UIFont.systemFont(
+                ofSize: (font ?? UIFont.preferredFont(forTextStyle: .body)).pointSize,
+                weight: .bold
+            )
+            textStorage.addAttributes(
+                [
+                    .link: destination,
+                    .foregroundColor: UIColor.systemBlue,
+                    .backgroundColor: UIColor.systemBlue.withAlphaComponent(0.16),
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .font: referenceFont
+                ],
+                range: numberRange
+            )
+        }
+
         for phraseMatch in phraseRegex.matches(in: currentRenderedText, range: sourceRange) {
             let phraseRange = phraseMatch.range
             for numberMatch in numberRegex.matches(in: currentRenderedText, range: phraseRange) {
-                let number = Int(source.substring(with: numberMatch.range)) ?? 0
-                guard (1...maximumReference).contains(number),
-                      let destination = URL(string: "rssreader-summary://item/\(number)") else {
-                    continue
-                }
-                let referenceFont = UIFont.systemFont(
-                    ofSize: (font ?? UIFont.preferredFont(forTextStyle: .body)).pointSize,
-                    weight: .bold
-                )
-                textStorage.addAttributes(
-                    [
-                        .link: destination,
-                        .foregroundColor: UIColor.systemBlue,
-                        .backgroundColor: UIColor.systemBlue.withAlphaComponent(0.16),
-                        .underlineStyle: NSUnderlineStyle.single.rawValue,
-                        .font: referenceFont
-                    ],
-                    range: numberMatch.range
-                )
+                applyReferenceLink(numberRange: numberMatch.range)
             }
+        }
+
+        for bracketMatch in bracketRegex.matches(in: currentRenderedText, range: sourceRange) {
+            let numberRange = bracketMatch.range(at: 1)
+            guard numberRange.location != NSNotFound else { continue }
+            applyReferenceLink(numberRange: numberRange)
         }
 
         linkTextAttributes = [

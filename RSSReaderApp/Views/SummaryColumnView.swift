@@ -32,6 +32,7 @@ struct SummaryColumnView: View {
     
     // TTS state variables for summary
     @State private var isSynthesizingSpeech: Bool = false
+    @State private var isPreparingLocalTTS: Bool = false
     @State private var isSpeakingLocally: Bool = false
     @State private var speechSynthesisError: String? = nil
     @State private var isAskingSelectionAI = false
@@ -134,12 +135,21 @@ struct SummaryColumnView: View {
                             Button {
                                 speakSummary()
                             } label: {
-                                Label("Cloud TTS", systemImage: "speaker.wave.2")
+                                let hasCloudTTSKey = !appState.summaryService.getOpenAIApiKey()
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty
+                                Label(hasCloudTTSKey ? "Cloud TTS" : "Read Aloud", systemImage: "speaker.wave.2")
                             }
                             .buttonStyle(LiquidGlassButtonStyle())
                             .ttsActiveGlow(isSynthesizingSpeech, color: .blue)
-                            .help("Read aloud (Cloud)")
-                            .disabled(isSynthesizingSpeech || isSpeakingLocally)
+                            .help(
+                                appState.summaryService.getOpenAIApiKey()
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty
+                                    ? "Read aloud with on-device speech"
+                                    : "Read aloud (Cloud)"
+                            )
+                            .disabled(isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally)
                             
                             // Stop button
                             Button {
@@ -157,7 +167,7 @@ struct SummaryColumnView: View {
                                 Label("Local TTS", systemImage: "speaker.wave.2.circle")
                             }
                             .buttonStyle(LiquidGlassButtonStyle())
-                            .ttsActiveGlow(isSpeakingLocally, color: .green)
+                            .ttsActiveGlow(isPreparingLocalTTS || isSpeakingLocally, color: .green)
                             .help("Read aloud (Local)")
                             .disabled(isSynthesizingSpeech)
 
@@ -214,6 +224,17 @@ struct SummaryColumnView: View {
                                     .scaleEffect(0.7)
                                     .padding(.trailing, 5)
                                 Text("Reading summary...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.horizontal)
+                            .padding(.bottom, 4)
+                        } else if isPreparingLocalTTS {
+                            HStack {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .padding(.trailing, 5)
+                                Text("Preparing local TTS...")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -365,6 +386,18 @@ struct SummaryColumnView: View {
             speechSynthesisError = "No summary available to read."
             return
         }
+
+        // A clean installation has no OpenAI key. Keep the primary audio
+        // action useful by falling back to the on-device voice instead of
+        // surfacing a cloud-credentials error to the user.
+        #if os(iOS)
+        if appState.summaryService.getOpenAIApiKey()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty {
+            speakSummaryLocally(summary)
+            return
+        }
+        #endif
         
         // Stop any currently playing sounds before starting a new one
         #if os(iOS)
@@ -429,6 +462,7 @@ struct SummaryColumnView: View {
         #endif
         nextAudioChunk = nil
         isSynthesizingSpeech = false
+        isPreparingLocalTTS = false
         isSpeakingLocally = false
     }
     
@@ -497,11 +531,12 @@ struct SummaryColumnView: View {
     private func speakSummaryLocally(_ text: String) {
         #if os(iOS)
         // Toggle off if already speaking
-        if isSpeakingLocally {
+        if isPreparingLocalTTS || isSpeakingLocally {
             localTTSTask?.cancel()
             localTTSTask = nil
             KokoroTTSService.shared.cancelPlayback()
             localSpeechSynth?.stopSpeaking(at: .immediate)
+            isPreparingLocalTTS = false
             isSpeakingLocally = false
             return
         }
@@ -522,7 +557,8 @@ struct SummaryColumnView: View {
                 speechSynthesisError = "MLX TTS is not available. Add the MLXAudio package and model access."
                 return
             }
-            isSpeakingLocally = true
+            isPreparingLocalTTS = true
+            isSpeakingLocally = false
             isSynthesizingSpeech = false
             speechSynthesisError = nil
             let allowCaching = appState.summaryService.isKokoroPrecacheEnabled()
@@ -536,12 +572,18 @@ struct SummaryColumnView: View {
                 soundDelegate: soundDelegate,
                 taskStore: &localTTSTask,
                 onCompleted: {
+                    self.isPreparingLocalTTS = false
                     self.isSpeakingLocally = false
                     self.localTTSTask = nil
                 },
                 onError: { message in
                     self.speechSynthesisError = message
+                    self.isPreparingLocalTTS = false
                     self.isSpeakingLocally = false
+                },
+                onPlaybackStarted: {
+                    self.isPreparingLocalTTS = false
+                    self.isSpeakingLocally = true
                 }
             )
             return

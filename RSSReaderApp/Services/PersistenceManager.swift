@@ -474,6 +474,18 @@ final class PersistenceManager {
 	        markArticleAsRead(tokens: articleReadTokens(for: article), diagnosticID: article.id)
 	    }
 
+    /// Persists a bulk read operation with one local write and one cloud-sync pass.
+    /// Single-item callers continue to use `markArticleAsRead(_:)` unchanged.
+    func markArticlesAsRead(_ articles: [Article]) {
+        guard !articles.isEmpty else { return }
+
+        var tokens: Set<String> = []
+        for article in articles {
+            tokens.formUnion(articleReadTokens(for: article))
+        }
+        markArticleAsRead(tokens: tokens, diagnosticID: "batch:\(articles.count)")
+    }
+
 	    func markArticleAsRead(_ articleId: String) {
 	        markArticleAsRead(tokens: articleReadTokens(articleId: articleId, articleURL: nil), diagnosticID: articleId)
 	    }
@@ -531,6 +543,18 @@ final class PersistenceManager {
 	    func markRedditPostAsRead(_ post: RedditPost) {
 	        markRedditPostAsRead(tokens: redditReadTokens(for: post), diagnosticID: post.id)
 	    }
+
+    /// Persists a bulk read operation with one local write and one cloud-sync pass.
+    /// Single-item callers continue to use `markRedditPostAsRead(_:)` unchanged.
+    func markRedditPostsAsRead(_ posts: [RedditPost]) {
+        guard !posts.isEmpty else { return }
+
+        var tokens: Set<String> = []
+        for post in posts {
+            tokens.formUnion(redditReadTokens(for: post))
+        }
+        markRedditPostAsRead(tokens: tokens, diagnosticID: "batch:\(posts.count)")
+    }
 
 	    func markRedditPostAsRead(_ postId: String) {
 	        markRedditPostAsRead(tokens: redditReadTokens(postId: postId, subreddit: nil), diagnosticID: postId)

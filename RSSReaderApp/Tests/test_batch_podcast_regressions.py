@@ -96,6 +96,34 @@ class BatchPodcastRegressionTests(unittest.TestCase):
         self.assertIn("pauseForInterruption", playback)
         self.assertIn("isPlaybackTokenCurrent", playback)
 
+    def test_playback_prepares_all_audio_before_background_playback(self):
+        playback = (PODCAST / "MLXPodcastPlaybackController.swift").read_text()
+        self.assertIn("preparePlaybackAudio", playback)
+        self.assertIn("Prepared podcast audio is missing", playback)
+        self.assertIn("prepareCompleteEpisode(from: plan)", playback)
+        self.assertIn("copyPreparedEpisode(to: url)", playback)
+        self.assertIn("await activityGate.waitUntilActive()", playback)
+        self.assertNotIn("allowBackgroundPlayback", playback)
+        self.assertLess(
+            playback.index("try await self.preparePlaybackAudio("),
+            playback.index("try await self.runPlayback("),
+        )
+        run_playback = playback.split("private func runPlayback(", 1)[1].split(
+            "private func preparedData", 1
+        )[0]
+        self.assertNotIn("synthesize(", run_playback)
+
+        export_method = playback.split("func renderEpisodeForExport(", 1)[1].split(
+            "private func preparePlaybackAudio", 1
+        )[0]
+        self.assertLess(
+            export_method.index("copyPreparedEpisode(to: url)"),
+            export_method.index("newPlaybackToken()"),
+        )
+
+        view = (PODCAST / "BatchPodcastView.swift").read_text()
+        self.assertIn('Label("Preparing Audio"', view)
+
     def test_no_mac_checkout_was_added_to_project_sources(self):
         self.assertNotIn("rss mac/Podcast", PROJECT)
         self.assertNotIn("mac/Podcast", PROJECT)
