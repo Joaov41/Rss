@@ -1,0 +1,153 @@
+- generic [ref=e1]:
+  - link "Skip to the guide" [ref=e2] [cursor=pointer]:
+    - /url: "#guide"
+  - banner [ref=e3]:
+    - link "RSSReaderApp Field Guide home" [ref=e4] [cursor=pointer]:
+      - /url: "#top"
+      - generic [ref=e9]: RSSReaderApp
+      - generic [ref=e10]: Field Guide
+    - generic [ref=e11]:
+      - generic [ref=e12]: iOS · iPadOS
+      - button "Start tour" [active] [ref=e13] [cursor=pointer]: Start tour →
+  - main [ref=e14]:
+    - region [ref=e15]:
+      - generic [ref=e16]:
+        - paragraph [ref=e17]: 14 screens · 57 controls
+        - heading [level=1] [ref=e18]:
+          - text: Know every control.
+          - emphasis [ref=e19]: Own your reading flow.
+        - paragraph [ref=e20]: A visual walkthrough of feeds, Reader, Reddit, AI summaries, podcasts, and settings. Select any numbered target to see exactly what it does.
+        - generic [ref=e21]:
+          - button "Begin the walkthrough" [ref=e22] [cursor=pointer]
+          - link "Browse all 14 screens" [ref=e23] [cursor=pointer]:
+            - /url: "#guide"
+            - text: Browse all 14 screens ↓
+      - generic "Guide sections" [ref=e24]:
+        - text: Inside the guide
+        - list [ref=e25]:
+          - listitem [ref=e26]:
+            - generic [ref=e27]: "01"
+            - generic [ref=e28]: Read
+          - listitem [ref=e29]:
+            - generic [ref=e30]: "04"
+            - generic [ref=e31]: Reddit
+          - listitem [ref=e32]:
+            - generic [ref=e33]: "08"
+            - generic [ref=e34]: Understand
+          - listitem [ref=e35]:
+            - generic [ref=e36]: "11"
+            - generic [ref=e37]: Listen
+          - listitem [ref=e38]:
+            - generic [ref=e39]: "12"
+            - generic [ref=e40]: Configure
+    - region [ref=e41]:
+      - generic [ref=e42]:
+        - generic [ref=e43]:
+          - paragraph [ref=e44]: Interactive walkthrough
+          - heading "The app, annotated" [level=2] [ref=e45]
+        - paragraph [ref=e46]: Tap a marker on the screenshot or choose a control from the list. Use the arrow keys to move through the guide.
+      - generic [ref=e47]:
+        - complementary "Tutorial screens" [ref=e48]:
+          - generic [ref=e51]:
+            - 'button "Screen 1: Your reading desk" [ref=e52] [cursor=pointer]':
+              - generic [ref=e53]: "01"
+              - generic [ref=e54]: Feeds
+            - 'button "Screen 2: Read without the clutter" [ref=e55] [cursor=pointer]':
+              - generic [ref=e56]: "02"
+              - generic [ref=e57]: Reader
+            - 'button "Screen 3: Ask the article" [ref=e58] [cursor=pointer]':
+              - generic [ref=e59]: "03"
+              - generic [ref=e60]: Article Q&A
+            - 'button "Screen 4: Follow a subreddit" [ref=e61] [cursor=pointer]':
+              - generic [ref=e62]: "04"
+              - generic [ref=e63]: Reddit feed
+            - 'button "Screen 5: Read the whole discussion" [ref=e64] [cursor=pointer]':
+              - generic [ref=e65]: "05"
+              - generic [ref=e66]: Reddit post
+            - 'button "Screen 6: Ask the discussion" [ref=e67] [cursor=pointer]':
+              - generic [ref=e68]: "06"
+              - generic [ref=e69]: Reddit Q&A
+            - 'button "Screen 7: Choose what to summarize" [ref=e70] [cursor=pointer]':
+              - generic [ref=e71]: "07"
+              - generic [ref=e72]: Batch scope
+            - 'button "Screen 8: See the whole picture" [ref=e73] [cursor=pointer]':
+              - generic [ref=e74]: "08"
+              - generic [ref=e75]: Overall summary
+            - 'button "Screen 9: Ask about any passage" [ref=e76] [cursor=pointer]':
+              - generic [ref=e77]: "09"
+              - generic [ref=e78]: Text actions
+            - 'button "Screen 10: Ask across every source" [ref=e79] [cursor=pointer]':
+              - generic [ref=e80]: "10"
+              - generic [ref=e81]: Batch Q&A
+            - 'button "Screen 11: Turn a batch into a podcast" [ref=e82] [cursor=pointer]':
+              - generic [ref=e83]: "11"
+              - generic [ref=e84]: Podcast
+            - 'button "Screen 12: Shape the experience" [ref=e85] [cursor=pointer]':
+              - generic [ref=e86]: "12"
+              - generic [ref=e87]: Settings
+            - 'button "Screen 13: Connect your AI tools" [ref=e88] [cursor=pointer]':
+              - generic [ref=e89]: "13"
+              - generic [ref=e90]: AI setup
+            - 'button "Screen 14: Keep storage under control" [ref=e91] [cursor=pointer]':
+              - generic [ref=e92]: "14"
+              - generic [ref=e93]: Storage
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - generic [ref=e96]:
+              - text: Screen 01 of 14
+              - heading "Your reading desk" [level=3] [ref=e97]
+            - paragraph [ref=e98]: Choose a source, scan its stories, and run feed-wide actions from one place.
+          - generic [ref=e99]:
+            - figure "RSS feed and subscription navigation" [ref=e100]:
+              - img "RSSReaderApp showing the Library sidebar and a 9to5Mac article feed" [ref=e101]
+              - generic [ref=e102]:
+                - button "1. Show or hide the sidebar" [pressed] [ref=e154] [cursor=pointer]: "1"
+                - button "2. Move around your library" [ref=e155] [cursor=pointer]: "2"
+                - button "3. Filter subscriptions" [ref=e156] [cursor=pointer]: "3"
+                - button "4. Open a subscription" [ref=e157] [cursor=pointer]: "4"
+                - button "5. Summarize the feed" [ref=e158] [cursor=pointer]: "5"
+                - button "6. Refresh this source" [ref=e159] [cursor=pointer]: "6"
+                - button "7. Mark the source as read" [ref=e160] [cursor=pointer]: "7"
+            - complementary [ref=e111]:
+              - generic [ref=e112]:
+                - generic [ref=e113]: Control 1 of 7
+                - generic [ref=e114]: ▣
+              - heading "Show or hide the sidebar" [level=4] [ref=e115]
+              - paragraph [ref=e116]: Collapse the Library and Subscriptions column when you want more room for the feed.
+              - paragraph [ref=e117]:
+                - strong [ref=e118]: Good to know
+                - generic [ref=e119]: Your selected source and reading position stay in place.
+              - generic "Controls on this screen" [ref=e120]:
+                - button "1. Show or hide the sidebar" [pressed] [ref=e161] [cursor=pointer]: "1"
+                - button "2. Move around your library" [ref=e162] [cursor=pointer]: "2"
+                - button "3. Filter subscriptions" [ref=e163] [cursor=pointer]: "3"
+                - button "4. Open a subscription" [ref=e164] [cursor=pointer]: "4"
+                - button "5. Summarize the feed" [ref=e165] [cursor=pointer]: "5"
+                - button "6. Refresh this source" [ref=e166] [cursor=pointer]: "6"
+                - button "7. Mark the source as read" [ref=e167] [cursor=pointer]: "7"
+          - generic [ref=e128]:
+            - button "Previous" [disabled] [ref=e129]: ← Previous
+            - generic "Tour progress" [ref=e130]:
+              - 'button "Go to screen 1: Your reading desk" [ref=e131] [cursor=pointer]'
+              - 'button "Go to screen 2: Read without the clutter" [ref=e132] [cursor=pointer]'
+              - 'button "Go to screen 3: Ask the article" [ref=e133] [cursor=pointer]'
+              - 'button "Go to screen 4: Follow a subreddit" [ref=e134] [cursor=pointer]'
+              - 'button "Go to screen 5: Read the whole discussion" [ref=e135] [cursor=pointer]'
+              - 'button "Go to screen 6: Ask the discussion" [ref=e136] [cursor=pointer]'
+              - 'button "Go to screen 7: Choose what to summarize" [ref=e137] [cursor=pointer]'
+              - 'button "Go to screen 8: See the whole picture" [ref=e138] [cursor=pointer]'
+              - 'button "Go to screen 9: Ask about any passage" [ref=e139] [cursor=pointer]'
+              - 'button "Go to screen 10: Ask across every source" [ref=e140] [cursor=pointer]'
+              - 'button "Go to screen 11: Turn a batch into a podcast" [ref=e141] [cursor=pointer]'
+              - 'button "Go to screen 12: Shape the experience" [ref=e142] [cursor=pointer]'
+              - 'button "Go to screen 13: Connect your AI tools" [ref=e143] [cursor=pointer]'
+              - 'button "Go to screen 14: Keep storage under control" [ref=e144] [cursor=pointer]'
+            - button "Next →" [ref=e145] [cursor=pointer]
+    - generic [ref=e146]:
+      - paragraph [ref=e147]: Built for reuse
+      - heading "Ready for the web today. Ready for onboarding tomorrow." [level=2] [ref=e148]: Ready for the web today.Ready for onboarding tomorrow.
+      - paragraph [ref=e149]: The guide is responsive and self-contained. Its screenshots, copy, and target coordinates can later power an in-app WebView or be translated into a native SwiftUI onboarding flow.
+      - button "Restart the guide" [ref=e150] [cursor=pointer]
+  - contentinfo [ref=e151]:
+    - generic [ref=e152]: RSSReaderApp Field Guide
+    - generic [ref=e153]: Designed from the iOS interface
