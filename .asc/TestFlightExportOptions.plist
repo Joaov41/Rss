@@ -9,7 +9,7 @@
 	<key>teamID</key>
 	<string>HNG8WV554B</string>
 	<key>uploadSymbols</key>
-	<true/>
+	<false/>
 	<key>manageAppVersionAndBuildNumber</key>
 	<false/>
 </dict>
