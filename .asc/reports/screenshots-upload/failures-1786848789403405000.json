@@ -1,0 +1,48 @@
+{
+  "versionLocalizationId": "954b5661-6dc0-4f11-875c-4eea74e0e317",
+  "path": ".asc/reports/screenshots-upload/failures-1786848789403405000.json",
+  "rootPath": "/tmp/rss-iphone-shots.GNAmCy",
+  "deviceType": "IPHONE_61",
+  "displayType": "APP_IPHONE_61",
+  "setId": "23a31799-e9a1-43f5-b8a6-4af327e547af",
+  "files": [
+    "/tmp/rss-iphone-shots.GNAmCy/01.png",
+    "/tmp/rss-iphone-shots.GNAmCy/02.png",
+    "/tmp/rss-iphone-shots.GNAmCy/03.png",
+    "/tmp/rss-iphone-shots.GNAmCy/04.png",
+    "/tmp/rss-iphone-shots.GNAmCy/05.png",
+    "/tmp/rss-iphone-shots.GNAmCy/06.png",
+    "/tmp/rss-iphone-shots.GNAmCy/07.png",
+    "/tmp/rss-iphone-shots.GNAmCy/08.png"
+  ],
+  "orderedIds": [
+    "5a8800d4-c0fd-4318-aa05-45dcf4c1d102",
+    "f22c04b0-0468-4fbe-bc2f-fe4a043b2f0f",
+    "655f8156-c1f1-4eb8-960f-1287240b8d42",
+    "e2adb2fa-f79b-49b9-8c4a-97a40a83f245"
+  ],
+  "pendingFiles": [
+    "/tmp/rss-iphone-shots.GNAmCy/01.png",
+    "/tmp/rss-iphone-shots.GNAmCy/02.png",
+    "/tmp/rss-iphone-shots.GNAmCy/03.png",
+    "/tmp/rss-iphone-shots.GNAmCy/04.png"
+  ],
+  "pendingAssets": [
+    {
+      "fileName": "01.png",
+      "filePath": "/tmp/rss-iphone-shots.GNAmCy/01.png",
+      "assetId": "b3a07eff-6244-4c6a-b4db-f3fba196affd",
+      "checksum": "e991cb78829296dffbc471e7d1763fe3",
+      "state": "FAILED"
+    }
+  ],
+  "failures": [
+    {
+      "fileName": "01.png",
+      "filePath": "/tmp/rss-iphone-shots.GNAmCy/01.png",
+      "error": "asset b3a07eff-6244-4c6a-b4db-f3fba196affd delivery failed: IMAGE_ALPHA_NOT_ALLOWED"
+    }
+  ],
+  "error": "asset b3a07eff-6244-4c6a-b4db-f3fba196affd delivery failed: IMAGE_ALPHA_NOT_ALLOWED",
+  "generatedAt": "2026-08-16T02:53:09Z"
+}

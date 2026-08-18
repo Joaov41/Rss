@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.joaovalente.rssreader.geminiTask</string>
+		<string>com.joaovalente.rssreader.geminiProcessing</string>
+		<string>com.joaovalente.rssreader.summarization</string>
+		<string>com.joaovalente.rssreader.geminiRefresh</string>
+		<string>com.joaovalente.RSSReaderApp.geminiTask</string>
+		<string>com.joaovalente.RSSReaderApp.geminiProcessing</string>
+		<string>com.joaovalente.RSSReaderApp.summarization</string>
+		<string>com.joaovalente.RSSReaderApp.geminiRefresh</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.joaovalente.rssreader</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rssreader</string>
+				<string>redapp</string>
+			</array>
+		</dict>
+	</array>
+	<key>INIntentsSupported</key>
+	<array>
+		<string>Intent</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_rss-sum._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>RSSReaderApp connects to the Summarize bridge or Apple PCC Gateway running on your Mac for local AI summaries.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>processing</string>
+		<string>fetch</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+</dict>
+</plist>
