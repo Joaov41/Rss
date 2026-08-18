@@ -38,6 +38,7 @@ struct SummaryColumnView: View {
     @State private var isAskingSelectionAI = false
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
+    @State private var selectionAskAIMarkdownResponse: String?
     @State private var showSelectionAskAISheet = false
 #if os(iOS)
     @State private var audioPlayer: AVAudioPlayer?
@@ -300,6 +301,7 @@ struct SummaryColumnView: View {
             AskAIResponseSheet(
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
+                markdownAnswer: selectionAskAIMarkdownResponse,
                 onCopy: { copyToClipboard(selectionAskAIResponse) }
             )
             #if os(iOS)
@@ -771,10 +773,12 @@ struct SummaryColumnView: View {
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
+        selectionAskAIMarkdownResponse = nil
         isAskingSelectionAI = true
 
         let finish: (String) -> Void = { answer in
             DispatchQueue.main.async {
+                self.selectionAskAIMarkdownResponse = answer
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
