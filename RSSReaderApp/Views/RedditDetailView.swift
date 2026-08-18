@@ -127,6 +127,8 @@ struct RedditDetailView: View {
     @State private var commentSummary: CommentSummary?
     @State private var showCommentSummary = false
     @State private var commentSummaryScrollRequest = 0
+    @State private var postSummaryWebAIProviderOverride: WebAIProvider?
+    @State private var commentSummaryWebAIProviderOverride: WebAIProvider?
     @State private var cancellables = Set<AnyCancellable>()
     @State private var showMoreCommentsButton = false
     @State private var hasMoreCommentsToLoad = false
@@ -189,22 +191,27 @@ struct RedditDetailView: View {
         }
     }
 
-    private var activeSummaryProviderBadge: some View {
-        Label(activeSummaryProviderName, systemImage: activeSummaryProviderIcon)
+    private func summaryProviderBadge(webAIProviderOverride: WebAIProvider? = nil) -> some View {
+        let providerName = webAIProviderOverride?.displayName ?? activeSummaryProviderName
+        let providerIcon = webAIProviderOverride == nil ? activeSummaryProviderIcon : "globe"
+
+        return Label(providerName, systemImage: providerIcon)
             .font(.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .accessibilityLabel("Using \(activeSummaryProviderName)")
+            .accessibilityLabel("Using \(providerName)")
     }
     
     // Q&A states
     @State private var showQAInterface = false
     @State private var questionText = ""
     @State private var answerText = "Ask a question about this post or its comments..."
+    @State private var markdownAnswerText: String?
     @State private var isAskingSelectionAI = false
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
+    @State private var selectionAskAIMarkdownResponse: String?
     @State private var showSelectionAskAISheet = false
 
     private var qaAnswerUnavailable: Bool {
@@ -258,6 +265,8 @@ struct RedditDetailView: View {
                     // Reset summary state to avoid doubles
                     commentSummary = nil
                     showCommentSummary = false
+                    postSummaryWebAIProviderOverride = nil
+                    commentSummaryWebAIProviderOverride = nil
                     commentsSentToLLMCount = nil
                     print("📱 RedditDetailView: View appeared, resetting comment summary and count")
                 }
@@ -280,9 +289,12 @@ struct RedditDetailView: View {
                 self.comments = []
                 self.commentSummary = nil
                 self.showCommentSummary = false
+                self.postSummaryWebAIProviderOverride = nil
+                self.commentSummaryWebAIProviderOverride = nil
                 self.showQAInterface = false
                 self.questionText = ""
                 self.answerText = "Ask a question about this post or its comments..."
+                self.markdownAnswerText = nil
                 self.commentsSentToLLMCount = nil
                 
                 // Cancel previous requests
@@ -297,6 +309,7 @@ struct RedditDetailView: View {
             AskAIResponseSheet(
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
+                markdownAnswer: selectionAskAIMarkdownResponse,
                 onCopy: {
                     #if os(iOS)
                     UIPasteboard.general.string = selectionAskAIResponse
@@ -448,6 +461,37 @@ struct RedditDetailView: View {
                 }
                 .font(.subheadline)
                 .foregroundColor(.secondary)
+
+                #if os(iOS)
+                RedditCommentsActionCapsule {
+                    Button {
+                        postSummaryWebAIProviderOverride = nil
+                        appState.requestSummary(for: nil, redditPost: post)
+                    } label: {
+                        Image(systemName: "text.quote")
+                    }
+                    .accessibilityLabel("Summarize post")
+                    .accessibilityHint("Summarize the Reddit post without comments")
+                    .buttonStyle(RedditCommentsChromeIconButtonStyle())
+
+                    if shouldShowExplicitWebAIControls {
+                        Button {
+                            postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                            appState.requestWebSummary(for: post)
+                        } label: {
+                            Image(systemName: "globe")
+                        }
+                        .accessibilityLabel("Summarize post with \(appState.settings.selectedWebAIProvider.displayName)")
+                        .accessibilityHint("Use \(appState.settings.selectedWebAIProvider.displayName) to summarize the Reddit post without comments")
+                        .help("Summarize post with \(appState.settings.selectedWebAIProvider.displayName)")
+                        .buttonStyle(RedditCommentsChromeIconButtonStyle())
+                    }
+                }
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: usesCompactDetailLayout(availableWidth: geometry.size.width) ? .center : .leading
+                )
+                #endif
                 
                 Divider()
 
@@ -460,10 +504,11 @@ struct RedditDetailView: View {
                         HStack {
                             Text("Summary")
                                 .font(.headline)
-                            activeSummaryProviderBadge
+                            summaryProviderBadge(webAIProviderOverride: postSummaryWebAIProviderOverride)
                             Spacer()
                             if shouldShowExplicitWebAIControls {
                                 Button {
+                                    postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
                                     appState.requestWebSummary(for: post, comments: comments)
                                 } label: {
                                     Image(systemName: "globe")
@@ -505,10 +550,11 @@ struct RedditDetailView: View {
 	                        HStack {
 	                            Text("Summary")
                                 .font(.headline)
-                            activeSummaryProviderBadge
+                            summaryProviderBadge(webAIProviderOverride: postSummaryWebAIProviderOverride)
                             Spacer()
                             if shouldShowExplicitWebAIControls {
                                 Button {
+                                    postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
                                     appState.requestWebSummary(for: post, comments: comments)
                                 } label: {
                                     Image(systemName: "globe")
@@ -673,7 +719,7 @@ struct RedditDetailView: View {
                         HStack {
                             Text("Comment Summary")
                                 .font(.headline)
-                            activeSummaryProviderBadge
+                            summaryProviderBadge(webAIProviderOverride: commentSummaryWebAIProviderOverride)
                             Spacer()
                         }
                         VStack(spacing: 8) {
@@ -693,7 +739,7 @@ struct RedditDetailView: View {
                         HStack {
                             Text("Comment Summary")
                                 .font(.headline)
-                            activeSummaryProviderBadge
+                            summaryProviderBadge(webAIProviderOverride: commentSummaryWebAIProviderOverride)
                             Spacer()
                         }
                         VStack(spacing: 8) {
@@ -713,7 +759,7 @@ struct RedditDetailView: View {
                         HStack {
                             Text("Comment Summary")
                                 .font(.headline)
-                            activeSummaryProviderBadge
+                            summaryProviderBadge(webAIProviderOverride: commentSummaryWebAIProviderOverride)
                             Spacer()
                             Button(action: {
                                 showCommentSummary.toggle()
@@ -1059,6 +1105,7 @@ struct RedditDetailView: View {
                                         commentsSentToLLMCount = nil
                                         questionText = ""
                                         answerText = "Ask a question about this post or its comments..."
+                                        markdownAnswerText = nil
                                         isProcessingQuestion = false // Ensure processing stops
                                     }
                                     print("📱 RedditDetailView: Ask AI button \(showQAInterface ? "enabled" : "disabled")")
@@ -1108,6 +1155,7 @@ struct RedditDetailView: View {
                             commentsSentToLLMCount = nil
                             questionText = ""
                             answerText = "Ask a question about this post or its comments..."
+                            markdownAnswerText = nil
                             isProcessingQuestion = false // Ensure processing stops
                         }
                         print("📱 RedditDetailView: Ask AI button \(showQAInterface ? "enabled" : "disabled")")
@@ -1195,6 +1243,7 @@ struct RedditDetailView: View {
                     showQAInterface = false
                     questionText = ""
                     answerText = "Ask a question about this post or its comments..."
+                    markdownAnswerText = nil
                     commentsSentToLLMCount = nil
                     print("📱 RedditDetailView: Q&A interface canceled by user")
                 }
@@ -1304,6 +1353,7 @@ struct RedditDetailView: View {
         } else if !qaAnswerUnavailable {
             SelectableText(
                 text: answerText,
+                markdownText: markdownAnswerText.map(normalizeConversationalAIReplyMarkdown),
                 onAskAI: handleAskAISelection(selectedText:context:),
                 onAskAIWeb: handleAskAIWebSelection(selectedText:context:),
                 textIsPrecleaned: true
@@ -1980,6 +2030,7 @@ struct RedditDetailView: View {
         showCommentSummary = false
         commentsSentToLLMCount = nil
         answerText = "Ask a question about this post or its comments..."
+        markdownAnswerText = nil
         questionText = ""
 
         loadComments(for: post)
@@ -2032,6 +2083,7 @@ struct RedditDetailView: View {
     }
     
     private func summarizeComments(for post: RedditPost) {
+        commentSummaryWebAIProviderOverride = nil
         guard !comments.isEmpty else { return }
         
         print("⚙️ RedditDetailView: Summarizing \(comments.count) comments for post ID: \(post.id)")
@@ -2251,6 +2303,7 @@ struct RedditDetailView: View {
     }
 
     private func requestWebCommentSummary(for post: RedditPost) {
+        commentSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
         guard !comments.isEmpty else { return }
 
         commentSummaryScrollRequest &+= 1
@@ -2308,6 +2361,7 @@ struct RedditDetailView: View {
         withAnimation {
             isProcessingQuestion = true
             answerText = "" // Clear text so progress indicator shows
+            markdownAnswerText = nil
         }
         let currentComments = self.comments
         self.commentsSentToLLMCount = currentComments.count
@@ -2326,6 +2380,7 @@ struct RedditDetailView: View {
                 processed = processed.replacingOccurrences(
                     of: #"([a-z][.!?])[ \t]*([A-Z])"#, with: "$1\n\n$2", options: .regularExpression)
             }
+            self.markdownAnswerText = processed
             self.answerText = formatAskAIResponseForDisplay(processed)
             self.isProcessingQuestion = false
             // Update previous question for next time
@@ -2342,11 +2397,13 @@ struct RedditDetailView: View {
         withAnimation {
             isProcessingQuestion = true
             answerText = ""
+            markdownAnswerText = nil
         }
         let currentComments = self.comments
         self.commentsSentToLLMCount = currentComments.count
 
         appState.askWebQuestionAboutRedditPost(post: post, comments: currentComments, question: questionText) { answer in
+            self.markdownAnswerText = answer
             self.answerText = formatAskAIResponseForDisplay(answer)
             self.isProcessingQuestion = false
             self.previousQuestionText = self.questionText
@@ -2377,10 +2434,12 @@ struct RedditDetailView: View {
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
+        selectionAskAIMarkdownResponse = nil
         isAskingSelectionAI = true
 
         let finish: (String) -> Void = { answer in
             DispatchQueue.main.async {
+                self.selectionAskAIMarkdownResponse = answer
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
