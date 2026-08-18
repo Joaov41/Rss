@@ -4897,7 +4897,12 @@ class AppState: ObservableObject {
                 completion(answer)
                 return
             }
-            completion(self.cleanAndFormatQATextForDisplay(answer))
+            let repairedAnswer = answer.replacingOccurrences(
+                of: "([a-z0-9][\\.\\!\\?])\\s*(?=[A-Z0-9])",
+                with: "$1\n\n",
+                options: .regularExpression
+            )
+            completion(self.cleanAndFormatQATextForDisplay(repairedAnswer))
         }
 
         performWebAIRequest(
