@@ -1794,6 +1794,7 @@ private extension View {
         scrollOffset: CGFloat,
         restorationKey: String,
         trackedItemIDs: [String],
+        scrollToTopRequest: Int = 0,
         onRawScrollActivity: (() -> Void)? = nil,
         onScrollOffsetChange: @escaping (CGFloat) -> Void
     ) -> some View {
@@ -1808,6 +1809,7 @@ private extension View {
                 NativeScrollRestorationModifier(
                     restorationKey: restorationKey,
                     trackedItemIDs: trackedItemIDs,
+                    scrollToTopRequest: scrollToTopRequest,
                     onRawScrollActivity: onRawScrollActivity,
                     onOffsetChange: onScrollOffsetChange
                 )
@@ -1845,6 +1847,7 @@ private struct NativeScrollRestorationModifier: ViewModifier {
 
     let restorationKey: String
     let trackedItemIDs: [String]
+    let scrollToTopRequest: Int
     let onRawScrollActivity: (() -> Void)?
     let onOffsetChange: (CGFloat) -> Void
 
@@ -1886,11 +1889,51 @@ private struct NativeScrollRestorationModifier: ViewModifier {
             .onAppear {
                 restorePosition()
             }
+            .onChange(of: scrollToTopRequest) { oldValue, newValue in
+                guard oldValue != newValue else { return }
+                scrollToTop()
+            }
             .onDisappear {
                 saveSnapshot()
                 tracker.restoreTask?.cancel()
                 tracker.restoreTask = nil
             }
+    }
+
+    private func scrollToTop() {
+        tracker.restoreTask?.cancel()
+        tracker.isRestoring = true
+        let firstID = trackedItemIDs.first
+
+        tracker.restoreTask = Task { @MainActor in
+            for (index, delay) in [0, 90, 240, 550].enumerated() {
+                guard !Task.isCancelled else { return }
+                if delay > 0 {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                }
+
+                var target = scrollPosition
+                if let firstID {
+                    target.scrollTo(id: firstID, anchor: .top)
+                } else {
+                    target.scrollTo(point: .zero)
+                }
+
+                if index == 0 {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        scrollPosition = target
+                    }
+                } else {
+                    scrollPosition = target
+                }
+            }
+
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+            tracker.isRestoring = false
+            tracker.restoreTask = nil
+            saveSnapshot()
+        }
     }
 
     private func preferredAnchorID() -> String? {
@@ -2107,6 +2150,7 @@ private final class ArticleScrollToTopController {
         }
         return results
     }
+
 }
 
 private struct ArticleOuterScrollViewResolver: UIViewRepresentable {
@@ -2382,6 +2426,7 @@ class ArticleQAState: ObservableObject {
     @Published var showQAInterface = false
     @Published var questionText = ""
     @Published var answerText = "Ask a question about this article..."
+    @Published var markdownAnswerText: String?
     @Published var isProcessingQuestion = false
     @Published var previousQuestionText: String? = nil
 
@@ -2391,6 +2436,7 @@ class ArticleQAState: ObservableObject {
         showQAInterface = false
         questionText = ""
         answerText = "Ask a question about this article..."
+        markdownAnswerText = nil
         isProcessingQuestion = false
         previousQuestionText = nil
     }
@@ -2806,6 +2852,7 @@ struct ContentView: View {
     @State private var redditSummaryScopeSubreddit: String?
     @State private var feedListScrollOffset: CGFloat = 0
     @State private var redditSubscriptionScrollOffset: CGFloat = 0
+    @State private var subscriptionScrollToTopRequests: [String: Int] = [:]
     @State private var isRedditSubscriptionSortBarHidden = false
     @State private var redditSubscriptionScrollIdleTask: Task<Void, Never>? = nil
     #if os(iOS)
@@ -3904,6 +3951,7 @@ struct ContentView: View {
                 NativeScrollRestorationModifier(
                     restorationKey: "sidebar_subscriptions",
                     trackedItemIDs: filteredSidebarSubscriptions.map(\.url),
+                    scrollToTopRequest: 0,
                     onRawScrollActivity: nil,
                     onOffsetChange: { _ in }
                 )
@@ -4201,103 +4249,95 @@ struct ContentView: View {
         }
     }
     
-    private var favoriteArticlesForList: [Article] {
-        appState.feeds.flatMap { $0.articles }
-            .filter { $0.isFavorite }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoritePostsForList: [RedditPost] {
-        appState.redditFeeds.flatMap { $0.posts }
-            .filter { $0.isFavorite }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoriteTrackedItemIDs: [String] {
-        favoriteArticlesForList.map(\.id) + favoritePostsForList.map(\.id)
-    }
-
-    @ViewBuilder
-    private var favoritesArticlesSection: some View {
-        Section(header: Text("RSS Articles")) {
-            if favoriteArticlesForList.isEmpty {
-                Text("No favorite articles")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoriteArticlesForList) { article in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
-                        appState.selectedArticle = article
-                        if !article.isRead {
-                            appState.markArticleAsRead(article)
-                        }
-                    }) {
-                        ArticleRow(article: article)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .id(articleListID(for: article))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleArticleFavorite(article)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var favoritesRedditSection: some View {
-        Section(header: Text("Reddit Posts")) {
-            if favoritePostsForList.isEmpty {
-                Text("No favorite posts")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoritePostsForList) { post in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
-                        appState.selectedRedditPost = post
-                        if !post.isRead {
-                            appState.markRedditPostAsRead(post)
-                        }
-                    }) {
-                        RedditPostRow(post: post)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .id(redditPostListID(for: post))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleRedditPostFavorite(post)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     var favoritesView: some View {
         List {
-            favoritesArticlesSection
-            favoritesRedditSection
+            Section(header: Text("RSS Articles")) {
+                let favoriteArticles = appState.feeds.flatMap { $0.articles }
+                    .filter { $0.isFavorite }
+                    .sorted(by: { $0.publishDate > $1.publishDate })
+                
+                if favoriteArticles.isEmpty {
+                    Text("No favorite articles")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(favoriteArticles) { article in
+                        Button(action: {
+                            // Set article and navigate
+                            appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
+                            appState.selectedArticle = article
+                            if !article.isRead {
+                                appState.markArticleAsRead(article)
+                            }
+                        }) {
+                            ArticleRow(article: article)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(articleListID(for: article))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleArticleFavorite(article)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Section(header: Text("Reddit Posts")) {
+                let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
+                    .filter { $0.isFavorite }
+                    .sorted(by: { $0.publishDate > $1.publishDate })
+                
+                if favoritePosts.isEmpty {
+                    Text("No favorite posts")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(favoritePosts) { post in
+                        Button(action: {
+                            // Set post and navigate
+                            appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
+                            appState.selectedRedditPost = post
+                            if !post.isRead {
+                                appState.markRedditPostAsRead(post)
+                            }
+                        }) {
+                            RedditPostRow(post: post)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(redditPostListID(for: post))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleRedditPostFavorite(post)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.plain)
         .feedListColumnStyle(
             colorScheme: colorScheme,
             scrollOffset: feedListScrollOffset,
             restorationKey: "favorites_category",
-            trackedItemIDs: favoriteTrackedItemIDs
+            trackedItemIDs: appState.feeds.flatMap { $0.articles }
+                .filter(\.isFavorite)
+                .sorted(by: { $0.publishDate > $1.publishDate })
+                .map(\.id)
+                + appState.redditFeeds.flatMap { $0.posts }
+                .filter(\.isFavorite)
+                .sorted(by: { $0.publishDate > $1.publishDate })
+                .map(\.id)
         ) { offset in
             feedListScrollOffset = offset
         }
@@ -4858,7 +4898,8 @@ struct ContentView: View {
             colorScheme: colorScheme,
             scrollOffset: feedListScrollOffset,
             restorationKey: subscription.url,
-            trackedItemIDs: sortedArticles.map(\.id)
+            trackedItemIDs: sortedArticles.map(\.id),
+            scrollToTopRequest: subscriptionScrollToTopRequests[subscription.url, default: 0]
         ) { offset in
             feedListScrollOffset = offset
         }
@@ -4904,11 +4945,15 @@ struct ContentView: View {
 
                 let articleScrollTarget = sortedArticles.first?.id
                 Button(action: {
+                    #if os(iOS)
+                    subscriptionScrollToTopRequests[subscription.url, default: 0] += 1
+                    #else
                     if let target = articleScrollTarget {
                         withAnimation(.easeInOut) {
                             scrollProxy.scrollTo(target, anchor: .top)
                         }
                     }
+                    #endif
                     appState.isLoading = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         appState.refreshSingleRSSFeed(url: subscription.url)
@@ -5004,6 +5049,7 @@ struct ContentView: View {
                     scrollOffset: feedListScrollOffset,
                     restorationKey: subscription.url,
                     trackedItemIDs: feed.posts.map(\.id),
+                    scrollToTopRequest: subscriptionScrollToTopRequests[subscription.url, default: 0],
                     onRawScrollActivity: {
                         #if os(macOS)
                         noteRedditSubscriptionScrollActivity()
@@ -5107,11 +5153,15 @@ struct ContentView: View {
 
                     let redditScrollTarget = feed.posts.first?.id
                     Button(action: {
+                        #if os(iOS)
+                        subscriptionScrollToTopRequests[subscription.url, default: 0] += 1
+                        #else
                         if let target = redditScrollTarget {
                             withAnimation(.easeInOut) {
                                 scrollProxy.scrollTo(target, anchor: .top)
                             }
                         }
+                        #endif
                         appState.isLoading = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                             appState.refreshRedditFeeds(specificSubreddit: subscription.url)
@@ -5231,12 +5281,14 @@ struct DraggableGlobalSummaryView: View {
     @State private var showQAInterface = false
     @State private var qaQuestionText: String = ""
     @State private var qaAnswerText: String = ""
+    @State private var qaAnswerMarkdownText: String?
     @State private var isProcessingQA = false
     @State private var qaInlineError: String?
     @State private var showAnswerSheet = false
     @State private var isAskingSelectionAI = false
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
+    @State private var selectionAskAIMarkdownResponse: String?
     @State private var showSelectionAskAISheet = false
     @State private var baseSummaryClipboardText: String?
     @State private var cachedSummaryClipboardText: String?
@@ -6195,6 +6247,7 @@ struct DraggableGlobalSummaryView: View {
                     } else {
                         ArticleGlassySummary(
                             summary: qaAnswerText,
+                            markdownText: qaAnswerMarkdownText.map(normalizeConversationalAIReplyMarkdown),
                             onAskAISelection: { selectedText, context in
                                 handleSummaryAnswerSelection(
                                     selectedText: selectedText,
@@ -6248,6 +6301,7 @@ struct DraggableGlobalSummaryView: View {
             AskAIResponseSheet(
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
+                markdownAnswer: selectionAskAIMarkdownResponse,
                 onCopy: { copySummaryToClipboard(text: selectionAskAIResponse) }
             )
             #if os(iOS)
@@ -6437,9 +6491,11 @@ struct DraggableGlobalSummaryView: View {
         qaInlineError = nil
         isProcessingQA = true
         qaAnswerText = ""
+        qaAnswerMarkdownText = nil
         
         appState.askQuestionAboutGlobalSummary(question: trimmed) { answer in
             DispatchQueue.main.async {
+                self.qaAnswerMarkdownText = answer
                 self.qaAnswerText = formatAskAIResponseForDisplay(answer)
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
@@ -6463,9 +6519,11 @@ struct DraggableGlobalSummaryView: View {
         qaInlineError = nil
         isProcessingQA = true
         qaAnswerText = ""
+        qaAnswerMarkdownText = nil
 
         appState.askWebQuestionAboutGlobalSummary(question: trimmed) { answer in
             DispatchQueue.main.async {
+                self.qaAnswerMarkdownText = answer
                 self.qaAnswerText = formatAskAIResponseForDisplay(answer)
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
@@ -6479,11 +6537,13 @@ struct DraggableGlobalSummaryView: View {
         qaInlineError = nil
         isProcessingQA = true
         qaAnswerText = ""
+        qaAnswerMarkdownText = nil
         appState.askQuestionAboutSavedGlobalSummaries(
             question: trimmed,
             useWebAI: useWebAI
         ) { answer in
             DispatchQueue.main.async {
+                self.qaAnswerMarkdownText = answer
                 self.qaAnswerText = formatAskAIResponseForDisplay(answer)
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
@@ -6494,6 +6554,7 @@ struct DraggableGlobalSummaryView: View {
     private func resetQAState(keepInterface: Bool = false) {
         qaQuestionText = ""
         qaAnswerText = ""
+        qaAnswerMarkdownText = nil
         qaInlineError = nil
         isProcessingQA = false
         if !keepInterface {
@@ -6522,10 +6583,12 @@ struct DraggableGlobalSummaryView: View {
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
+        selectionAskAIMarkdownResponse = nil
         isAskingSelectionAI = true
 
         let answerHandler: (String) -> Void = { answer in
             DispatchQueue.main.async {
+                self.selectionAskAIMarkdownResponse = answer
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
@@ -6561,10 +6624,12 @@ struct DraggableGlobalSummaryView: View {
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
+        selectionAskAIMarkdownResponse = nil
         isAskingSelectionAI = true
 
         let answerHandler: (String) -> Void = { answer in
             DispatchQueue.main.async {
+                self.selectionAskAIMarkdownResponse = answer
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
@@ -6601,12 +6666,14 @@ struct DraggableGlobalSummaryView: View {
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
+        selectionAskAIMarkdownResponse = nil
         isAskingSelectionAI = true
         showAnswerSheet = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             let completion: (String) -> Void = { answer in
                 DispatchQueue.main.async {
+                    self.selectionAskAIMarkdownResponse = answer
                     self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                     self.isAskingSelectionAI = false
                     self.showSelectionAskAISheet = true
@@ -9687,6 +9754,7 @@ struct WhiteboardView: View {
     @State private var isAskingAI = false
     @State private var askAIPrompt = ""
     @State private var askAIResponse = ""
+    @State private var askAIMarkdownResponse: String?
     @State private var showAskAIResponseSheet = false
 
     var body: some View {
@@ -9762,6 +9830,7 @@ struct WhiteboardView: View {
             AskAIResponseSheet(
                 question: askAIPrompt,
                 answer: askAIResponse,
+                markdownAnswer: askAIMarkdownResponse,
                 onCopy: copyAskAIResponseToClipboard
             )
             #if os(iOS)
@@ -9798,6 +9867,7 @@ struct WhiteboardView: View {
 
         askAIPrompt = prompt
         askAIResponse = ""
+        askAIMarkdownResponse = nil
         isAskingAI = true
 
         appState.askQuestionAboutGlobalSummarySelection(
@@ -9807,6 +9877,7 @@ struct WhiteboardView: View {
         ) { answer in
             DispatchQueue.main.async {
                 self.isAskingAI = false
+                self.askAIMarkdownResponse = answer
                 self.askAIResponse = formatAskAIResponseForDisplay(answer)
                 self.showAskAIResponseSheet = true
             }
@@ -10827,6 +10898,7 @@ struct ArticleDetailView: View {
     @State private var isAskingSelectionAI = false
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
+    @State private var selectionAskAIMarkdownResponse: String?
     @State private var showSelectionAskAISheet = false
     @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
     @State private var isArticleMetadataChromeHidden: Bool = false
@@ -11040,6 +11112,7 @@ struct ArticleDetailView: View {
             AskAIResponseSheet(
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
+                markdownAnswer: selectionAskAIMarkdownResponse,
                 onCopy: { setPlatformClipboardString(selectionAskAIResponse) }
             )
             #if os(iOS)
@@ -11906,6 +11979,7 @@ struct ArticleDetailView: View {
                     qaState.showQAInterface = false
                     qaState.questionText = ""
                     qaState.answerText = "Ask a question about this article..."
+                    qaState.markdownAnswerText = nil
                     print("📱 ArticleDetailView: Q&A interface canceled by user")
                 }
             }
@@ -12029,6 +12103,7 @@ struct ArticleDetailView: View {
                 qaState.showQAInterface = false
                 qaState.questionText = ""
                 qaState.answerText = "Ask a question about this article..."
+                qaState.markdownAnswerText = nil
                 print("📱 ArticleDetailView: Q&A interface canceled by user")
             }) {
                 Image(systemName: "xmark.circle")
@@ -12078,6 +12153,7 @@ struct ArticleDetailView: View {
         } else if !qaAnswerUnavailable {
             SelectableText(
                 text: qaState.answerText,
+                markdownText: qaState.markdownAnswerText.map(normalizeConversationalAIReplyMarkdown),
                 onAskAI: handleAskAISelection(selectedText:context:),
                 onAskAIWeb: handleAskAIWebSelection(selectedText:context:),
                 textIsPrecleaned: true
@@ -12199,10 +12275,12 @@ struct ArticleDetailView: View {
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
+        selectionAskAIMarkdownResponse = nil
         isAskingSelectionAI = true
 
         let finish: (String) -> Void = { answer in
             DispatchQueue.main.async {
+                self.selectionAskAIMarkdownResponse = answer
                 self.selectionAskAIResponse = formatAskAIResponseForDisplay(answer)
                 self.isAskingSelectionAI = false
                 self.showSelectionAskAISheet = true
@@ -12266,6 +12344,17 @@ struct ArticleDetailView: View {
                         Image(systemName: "text.quote")
                     }
                     .buttonStyle(IOSArticleChromeIconButtonStyle())
+
+                    if shouldShowExplicitWebAIControls, let article = appState.selectedArticle {
+                        Button {
+                            appState.requestWebSummary(for: article)
+                        } label: {
+                            Image(systemName: "globe")
+                        }
+                        .buttonStyle(IOSArticleChromeIconButtonStyle())
+                        .accessibilityLabel("Web AI summary")
+                        .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
+                    }
 
                     if let article = appState.selectedArticle {
                         Button(action: {
@@ -12354,9 +12443,11 @@ struct ArticleDetailView: View {
         // Set loading state
         qaState.isProcessingQuestion = true
         qaState.answerText = "Thinking..."
+        qaState.markdownAnswerText = nil
 
         // Use AppState's askQuestionAboutArticle which handles both Gemini and Apple Intelligence
         appState.askQuestionAboutArticle(article: article, question: qaState.questionText) { answer in
+            self.qaState.markdownAnswerText = answer
             self.qaState.answerText = formatAskAIResponseForDisplay(answer)
             self.qaState.isProcessingQuestion = false
             // Update previous question for next time
@@ -12372,8 +12463,10 @@ struct ArticleDetailView: View {
 
         qaState.isProcessingQuestion = true
         qaState.answerText = "Thinking..."
+        qaState.markdownAnswerText = nil
 
         appState.askWebQuestionAboutArticle(article: article, question: qaState.questionText) { answer in
+            self.qaState.markdownAnswerText = answer
             self.qaState.answerText = formatAskAIResponseForDisplay(answer)
             self.qaState.isProcessingQuestion = false
             self.qaState.previousQuestionText = self.qaState.questionText
@@ -15150,6 +15243,7 @@ struct ArticleGlassyBackgroundModifier: ViewModifier {
 // Also update the ArticleGlassySummary with enhanced styling and TTS
 struct ArticleGlassySummary: View {
     let summary: String
+    let markdownText: String?
     private let displaySummary: String
     var onAskAISelection: ((String, String) -> Void)? = nil
     var onAskAIWebSelection: ((String, String) -> Void)? = nil
@@ -15180,6 +15274,7 @@ struct ArticleGlassySummary: View {
 
     init(
         summary: String,
+        markdownText: String? = nil,
         displaySummary: String? = nil,
         onAskAISelection: ((String, String) -> Void)? = nil,
         onAskAIWebSelection: ((String, String) -> Void)? = nil,
@@ -15188,6 +15283,7 @@ struct ArticleGlassySummary: View {
         borderStyle: SummaryCardBorderStyle? = nil
     ) {
         self.summary = summary
+        self.markdownText = markdownText
         self.displaySummary = displaySummary ?? cleanMarkdownArtifactsForDisplay(summary)
         self.onAskAISelection = onAskAISelection
         self.onAskAIWebSelection = onAskAIWebSelection
@@ -15200,6 +15296,7 @@ struct ArticleGlassySummary: View {
         ArticleGlassySummaryContent(
             summary: summary,
             displaySummary: displaySummary,
+            markdownText: markdownText,
             onAskAISelection: onAskAISelection,
             onAskAIWebSelection: onAskAIWebSelection,
             summaryReferenceCount: summaryReferenceCount,
@@ -15657,6 +15754,7 @@ struct ArticleGlassySummary: View {
 private struct ArticleGlassySummaryContent: View {
     let summary: String
     let displaySummary: String
+    let markdownText: String?
     let onAskAISelection: ((String, String) -> Void)?
     let onAskAIWebSelection: ((String, String) -> Void)?
     let summaryReferenceCount: Int
@@ -15695,6 +15793,7 @@ private struct ArticleGlassySummaryContent: View {
                 if onAskAISelection != nil || onAskAIWebSelection != nil || onSummaryReferenceTap != nil {
                     SelectableText(
                         text: displaySummary,
+                        markdownText: markdownText,
                         onAskAI: onAskAISelection,
                         onAskAIWeb: onAskAIWebSelection,
                         summaryReferenceCount: summaryReferenceCount,

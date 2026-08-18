@@ -23,6 +23,7 @@ struct InfographicView: View {
     @State private var isAskingAI = false
     @State private var askAIPrompt = ""
     @State private var askAIResponse = ""
+    @State private var askAIMarkdownResponse: String?
     @State private var showAskAIResponseSheet = false
     
     private var loadingText: String {
@@ -133,6 +134,7 @@ struct InfographicView: View {
                 AskAIResponseSheet(
                     question: askAIPrompt,
                     answer: askAIResponse,
+                    markdownAnswer: askAIMarkdownResponse,
                     onCopy: copyAskAIResponseToClipboard
                 )
                 .presentationDetents([.medium, .large])
@@ -294,6 +296,7 @@ struct InfographicView: View {
 
         askAIPrompt = prompt
         askAIResponse = ""
+        askAIMarkdownResponse = nil
         isAskingAI = true
 
         appState.askQuestionAboutGlobalSummarySelection(
@@ -303,6 +306,7 @@ struct InfographicView: View {
         ) { answer in
             DispatchQueue.main.async {
                 self.isAskingAI = false
+                self.askAIMarkdownResponse = answer
                 self.askAIResponse = formatAskAIResponseForDisplay(answer)
                 self.showAskAIResponseSheet = true
             }
