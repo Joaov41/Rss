@@ -1,0 +1,510 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 63;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2E354DE02016A6607DEBE636 /* LiteRTDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D2B2D5362D83772972B30CE /* LiteRTDemoApp.swift */; };
+		39110355B55EA66B1A19CC5F /* LiteRTDemoMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A491435D475183E9EA696F4 /* LiteRTDemoMacApp.swift */; };
+		3982CC52F53C70DC93DCF3E3 /* .gitkeep in Resources */ = {isa = PBXBuildFile; fileRef = 1990F8190E8E06CF8A614870 /* .gitkeep */; };
+		3BE9107624CF513F2E3FC891 /* G0SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035432685EAFAA748A24AA10 /* G0SelfTest.swift */; };
+		5562F8C3BA2D517883D3DDF4 /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 97949A3433CA460CC38FE9FF /* LiteRTFoundation */; };
+		7858DDAC6E6B91D9F33B11C5 /* FMModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B18C11EE127A06FDA07B8B5D /* FMModeView.swift */; };
+		8824E0A14D3E75557513BAEC /* G1SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB93931DAB12B7F616BA90D /* G1SelfTest.swift */; };
+		95612C854724EA892444B0D4 /* FMMultimodalSelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D371B9D134D053F77286828 /* FMMultimodalSelfTest.swift */; };
+		9CCE59E1DB52CD7EABBF59FB /* BenchSelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B47132B7AC0503FDD89F481 /* BenchSelfTest.swift */; };
+		D1F9035678115CCBBB2FFABA /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = EE15293A02D367993C0F731F /* LiteRTFoundation */; };
+		D24298F64AB76EE7A427CB5D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F0F8B68F6A585601EDBE641 /* ContentView.swift */; };
+		D8DCD69A9094AE555FB014A4 /* MMChatSelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA39745C291E968242A46EA /* MMChatSelfTest.swift */; };
+		DED503B371A280FD05EE34A4 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173D8A856944B56497324A6E /* AudioRecorder.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		035432685EAFAA748A24AA10 /* G0SelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G0SelfTest.swift; sourceTree = "<group>"; };
+		0B47132B7AC0503FDD89F481 /* BenchSelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchSelfTest.swift; sourceTree = "<group>"; };
+		173D8A856944B56497324A6E /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
+		1990F8190E8E06CF8A614870 /* .gitkeep */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitkeep; sourceTree = "<group>"; };
+		2EA39745C291E968242A46EA /* MMChatSelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MMChatSelfTest.swift; sourceTree = "<group>"; };
+		4D371B9D134D053F77286828 /* FMMultimodalSelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FMMultimodalSelfTest.swift; sourceTree = "<group>"; };
+		6F0F8B68F6A585601EDBE641 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		6F45948748095D99DE4038BB /* swift-litert-lm */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-litert-lm"; path = ../..; sourceTree = SOURCE_ROOT; };
+		7A491435D475183E9EA696F4 /* LiteRTDemoMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteRTDemoMacApp.swift; sourceTree = "<group>"; };
+		9D2B2D5362D83772972B30CE /* LiteRTDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteRTDemoApp.swift; sourceTree = "<group>"; };
+		B18C11EE127A06FDA07B8B5D /* FMModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FMModeView.swift; sourceTree = "<group>"; };
+		B81EA594E00E2E3485AA4CD1 /* LiteRTDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LiteRTDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EDB93931DAB12B7F616BA90D /* G1SelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = G1SelfTest.swift; sourceTree = "<group>"; };
+		FBC5E2A0737F3DFE3FDAD4C1 /* LiteRTDemoMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LiteRTDemoMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		18EFD3243FEEEF52F925A564 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5562F8C3BA2D517883D3DDF4 /* LiteRTFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4D75D66C65C2D007745D3423 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1F9035678115CCBBB2FFABA /* LiteRTFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1BB6DCAD58ABC3C901036B89 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				6F45948748095D99DE4038BB /* swift-litert-lm */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		22F496703C86B6CAC558F43F /* MacSources */ = {
+			isa = PBXGroup;
+			children = (
+				7A491435D475183E9EA696F4 /* LiteRTDemoMacApp.swift */,
+			);
+			path = MacSources;
+			sourceTree = "<group>";
+		};
+		25CBA9D76DCE97B6789F7F37 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1990F8190E8E06CF8A614870 /* .gitkeep */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A0B0C7C943EA00FF3D5875AB = {
+			isa = PBXGroup;
+			children = (
+				22F496703C86B6CAC558F43F /* MacSources */,
+				1BB6DCAD58ABC3C901036B89 /* Packages */,
+				25CBA9D76DCE97B6789F7F37 /* Resources */,
+				BA2FC091CECFD31974A8286E /* Sources */,
+				FCF71CF9A4D6F68782B32A03 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		BA2FC091CECFD31974A8286E /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				173D8A856944B56497324A6E /* AudioRecorder.swift */,
+				0B47132B7AC0503FDD89F481 /* BenchSelfTest.swift */,
+				6F0F8B68F6A585601EDBE641 /* ContentView.swift */,
+				B18C11EE127A06FDA07B8B5D /* FMModeView.swift */,
+				4D371B9D134D053F77286828 /* FMMultimodalSelfTest.swift */,
+				035432685EAFAA748A24AA10 /* G0SelfTest.swift */,
+				EDB93931DAB12B7F616BA90D /* G1SelfTest.swift */,
+				9D2B2D5362D83772972B30CE /* LiteRTDemoApp.swift */,
+				2EA39745C291E968242A46EA /* MMChatSelfTest.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		FCF71CF9A4D6F68782B32A03 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B81EA594E00E2E3485AA4CD1 /* LiteRTDemo.app */,
+				FBC5E2A0737F3DFE3FDAD4C1 /* LiteRTDemoMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA3B20DA553EC884CEA353FA /* LiteRTDemoMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6626006745531377BB81D3D4 /* Build configuration list for PBXNativeTarget "LiteRTDemoMac" */;
+			buildPhases = (
+				936EC138A593E755B1737E24 /* Sources */,
+				18EFD3243FEEEF52F925A564 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LiteRTDemoMac;
+			packageProductDependencies = (
+				97949A3433CA460CC38FE9FF /* LiteRTFoundation */,
+			);
+			productName = LiteRTDemoMac;
+			productReference = FBC5E2A0737F3DFE3FDAD4C1 /* LiteRTDemoMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B203C66BFB9C099D5E5EE1BD /* LiteRTDemo */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2CEBED3977DBEC883DBD085C /* Build configuration list for PBXNativeTarget "LiteRTDemo" */;
+			buildPhases = (
+				A5CF9B161E94242B07283906 /* Sources */,
+				E17D3715977F90ED4FB6CD24 /* Resources */,
+				4D75D66C65C2D007745D3423 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LiteRTDemo;
+			packageProductDependencies = (
+				EE15293A02D367993C0F731F /* LiteRTFoundation */,
+			);
+			productName = LiteRTDemo;
+			productReference = B81EA594E00E2E3485AA4CD1 /* LiteRTDemo.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		95A5591CF21ADCF8CA26464F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					AA3B20DA553EC884CEA353FA = {
+						ProvisioningStyle = Automatic;
+					};
+					B203C66BFB9C099D5E5EE1BD = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A760511D9ED1481C6669569C /* Build configuration list for PBXProject "LiteRTDemo" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A0B0C7C943EA00FF3D5875AB;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				708764212773F80D0B11F5B0 /* XCLocalSwiftPackageReference "../.." */,
+			);
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B203C66BFB9C099D5E5EE1BD /* LiteRTDemo */,
+				AA3B20DA553EC884CEA353FA /* LiteRTDemoMac */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E17D3715977F90ED4FB6CD24 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3982CC52F53C70DC93DCF3E3 /* .gitkeep in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		936EC138A593E755B1737E24 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				39110355B55EA66B1A19CC5F /* LiteRTDemoMacApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5CF9B161E94242B07283906 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DED503B371A280FD05EE34A4 /* AudioRecorder.swift in Sources */,
+				9CCE59E1DB52CD7EABBF59FB /* BenchSelfTest.swift in Sources */,
+				D24298F64AB76EE7A427CB5D /* ContentView.swift in Sources */,
+				7858DDAC6E6B91D9F33B11C5 /* FMModeView.swift in Sources */,
+				95612C854724EA892444B0D4 /* FMMultimodalSelfTest.swift in Sources */,
+				3BE9107624CF513F2E3FC891 /* G0SelfTest.swift in Sources */,
+				8824E0A14D3E75557513BAEC /* G1SelfTest.swift in Sources */,
+				2E354DE02016A6607DEBE636 /* LiteRTDemoApp.swift in Sources */,
+				D8DCD69A9094AE555FB014A4 /* MMChatSelfTest.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0E9F853523F7E1290A13D6FD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				COMPRESS_PNG_FILES = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HNG8WV554B;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "LiteRT Demo";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio to ask Gemma about it.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo or video to ask Gemma about it.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				"INFOPLIST_KEY_UISupportedInterfaceOrientations~ipad" = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.litertdemo;
+				SDKROOT = iphoneos;
+				STRIP_PNG_TEXT = NO;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		2EB4EA3A2092644121EE2226 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				COMPRESS_PNG_FILES = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = HNG8WV554B;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "LiteRT Demo";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio to ask Gemma about it.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Attach a photo or video to ask Gemma about it.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				"INFOPLIST_KEY_UISupportedInterfaceOrientations~ipad" = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.litertdemo;
+				SDKROOT = iphoneos;
+				STRIP_PNG_TEXT = NO;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		395B97756BB1CB427E65591A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		3DB6153C9D680F70648D9AC7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "LiteRT Demo";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.litertdemo.mac;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		457A71319903F19A536549FA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5BDC79038E43B0A5B4AE5872 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "LiteRT Demo";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.litertdemo.mac;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2CEBED3977DBEC883DBD085C /* Build configuration list for PBXNativeTarget "LiteRTDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2EB4EA3A2092644121EE2226 /* Debug */,
+				0E9F853523F7E1290A13D6FD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6626006745531377BB81D3D4 /* Build configuration list for PBXNativeTarget "LiteRTDemoMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5BDC79038E43B0A5B4AE5872 /* Debug */,
+				3DB6153C9D680F70648D9AC7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A760511D9ED1481C6669569C /* Build configuration list for PBXProject "LiteRTDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				457A71319903F19A536549FA /* Debug */,
+				395B97756BB1CB427E65591A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		708764212773F80D0B11F5B0 /* XCLocalSwiftPackageReference "../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		97949A3433CA460CC38FE9FF /* LiteRTFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LiteRTFoundation;
+		};
+		EE15293A02D367993C0F731F /* LiteRTFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LiteRTFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 95A5591CF21ADCF8CA26464F /* Project object */;
+}
