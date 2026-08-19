@@ -1,0 +1,1021 @@
+import SwiftUI
+import Kingfisher
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
+// Make URL conform to Identifiable for sheet presentation
+extension URL: @retroactive Identifiable {
+    public var id: String { self.absoluteString }
+}
+
+// Clickable image component with its own sheet state
+struct ClickableCommentImage: View {
+    let url: URL
+    @State private var showFullScreen = false
+    
+    // Check if URL is a GIF
+    private var isGIF: Bool {
+        let urlString = url.absoluteString.lowercased()
+        return urlString.contains(".gif") || 
+               urlString.contains("giphy.com") || 
+               urlString.contains("gfycat.com") || 
+               urlString.contains("imgur.com") ||
+               urlString.contains("v.redd.it") ||
+               urlString.contains("media.giphy.com") ||
+               urlString.contains("giant.gfycat.com") ||
+               urlString.contains("i.imgur.com")
+    }
+    
+    var body: some View {
+        Group {
+            if ProcessInfo.processInfo.isiOSAppOnMac {
+                // Use simple AsyncImage on Mac to avoid Kingfisher Metal crashes
+                AsyncImage(url: url) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.1))
+                        .overlay(ProgressView())
+                }
+                .frame(width: 120, height: 120)
+                .cornerRadius(8)
+                .clipped()
+            } else if isGIF {
+                // Use animated image for GIFs
+                KFAnimatedImage(url)
+                    .placeholder {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.1))
+                            .frame(width: 120, height: 120)
+                            .cornerRadius(8)
+                            .overlay(
+                                VStack {
+                                    ProgressView()
+                                    Text("GIF")
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
+                            )
+                    }
+                    .fade(duration: 0.25)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 120)
+                    .cornerRadius(8)
+                    .clipped()
+            } else {
+                // Use regular image for non-GIFs
+                KFImage(url)
+                    .placeholder {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.1))
+                            .frame(width: 120, height: 120)
+                            .cornerRadius(8)
+                            .overlay(
+                                ProgressView()
+                            )
+                    }
+                    .fade(duration: 0.25)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 120)
+                    .cornerRadius(8)
+                    .clipped()
+            }
+        }
+        .onTapGesture {
+            showFullScreen = true
+        }
+        .sheet(isPresented: $showFullScreen) {
+            ImagePopupView(imageURL: url)
+        }
+    }
+}
+
+struct CommentView: View {
+    let comment: RedditCommentModel
+    let post: RedditPost
+    let redditService: RedditService
+    let onReplyPosted: (String, RedditCommentModel) -> Void
+    @State private var isCollapsed = false
+    @State private var voteDirection: RedditVoteDirection = .none
+    @State private var isSubmittingVote = false
+    @State private var showReplySheet = false
+    @State private var actionErrorMessage: String?
+    @Environment(\.openURL) private var openURL
+    
+    // Limit depth rendering for better performance
+    private var shouldLimitReplies: Bool {
+        return comment.indentationLevel >= 8 || comment.replies.count > 50
+    }
+    
+    private var visibleReplies: [RedditCommentModel] {
+        if shouldLimitReplies && !isCollapsed {
+            // If we're limiting replies, only show the first few
+            return Array(comment.replies.prefix(5))
+        }
+        return comment.replies
+    }
+    
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var depth: Int {
+        min(max(comment.indentationLevel, 0), 6)
+    }
+
+    private var leadingIndent: CGFloat {
+        min(CGFloat(depth) * 26, 84)
+    }
+
+    private var accentColor: Color {
+        Color(red: 0.53, green: 0.25, blue: 1.0)
+    }
+
+    private var commentURL: URL {
+        URL(string: "https://www.reddit.com/r/\(post.subreddit)/comments/\(post.id)/-/\(comment.id)/?context=3")!
+    }
+
+    private var displayedScore: Int {
+        comment.score + voteDirection.rawValue
+    }
+
+    private var cardFill: Color {
+        colorScheme == .dark
+            ? Color(red: 0.055, green: 0.06, blue: 0.085)
+            : Color.white.opacity(0.92)
+    }
+
+    private var cardBorder: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.08)
+    }
+
+    private var metadataColor: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.58)
+            : Color.black.opacity(0.52)
+    }
+
+    private var replyRailColor: Color {
+        accentColor.opacity(colorScheme == .dark ? 0.85 : 0.6)
+    }
+
+    private var avatarGradient: LinearGradient {
+        let palette: [[Color]] = [
+            [Color(red: 0.12, green: 0.72, blue: 0.78), Color(red: 0.08, green: 0.38, blue: 0.58)],
+            [Color(red: 0.47, green: 0.28, blue: 0.92), Color(red: 0.26, green: 0.18, blue: 0.58)],
+            [Color(red: 0.18, green: 0.72, blue: 0.36), Color(red: 0.08, green: 0.38, blue: 0.24)],
+            [Color(red: 0.94, green: 0.38, blue: 0.18), Color(red: 0.55, green: 0.16, blue: 0.1)]
+        ]
+        let checksum = comment.author.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        let colors = palette[checksum % palette.count]
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private var commentHeader: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isCollapsed.toggle()
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("u/\(comment.author)")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+
+                Text("•")
+                    .font(.caption)
+                    .foregroundColor(metadataColor)
+
+                Text("\(comment.score) \(comment.score == 1 ? "point" : "points")")
+                    .font(.system(size: 14))
+                    .foregroundColor(metadataColor)
+                    .lineLimit(1)
+
+                Text("•")
+                    .font(.caption)
+                    .foregroundColor(metadataColor)
+
+                Text(comment.createdDate, style: .relative)
+                    .font(.system(size: 14))
+                    .foregroundColor(metadataColor)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                if !comment.replies.isEmpty {
+                    Text("\(comment.replies.count)")
+                        .font(.caption)
+                        .foregroundColor(metadataColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(metadataColor.opacity(0.12))
+                        )
+                }
+
+                Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(metadataColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isCollapsed ? "Expand comment" : "Collapse comment")
+    }
+
+    private var avatarView: some View {
+        ZStack {
+            fallbackAvatar
+
+            Circle()
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.7), lineWidth: 1)
+        }
+        .frame(width: 44, height: 44)
+        #if os(macOS)
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 6, x: 0, y: 3)
+        #endif
+        .accessibilityHidden(true)
+    }
+
+    private var fallbackAvatar: some View {
+        ZStack {
+            Circle()
+                .fill(avatarGradient)
+
+            Image("RedditLogo")
+                .resizable()
+                .scaledToFit()
+                .foregroundColor(.white)
+                .frame(width: 24, height: 24)
+        }
+        .frame(width: 44, height: 44)
+    }
+
+    @ViewBuilder
+    private var commentBodyContent: some View {
+        let bodyBlocks = comment.bodyBlocks
+        if !bodyBlocks.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(bodyBlocks.enumerated()), id: \.offset) { _, block in
+                    Text(block)
+                        .font(.system(size: 16))
+                        .lineSpacing(3)
+                        .foregroundColor(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private var commentImages: some View {
+        let imageURLs = comment.imageURLs
+        if !imageURLs.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(imageURLs.count) \(imageURLs.count == 1 ? "image" : "images")")
+                    .font(.caption)
+                    .foregroundColor(metadataColor)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(imageURLs.prefix(5), id: \.absoluteString) { url in
+                            ClickableCommentImage(url: url)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(height: 136)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var commentLinks: some View {
+        let nonImageLinks = comment.displayLinks.prefix(3)
+        if !nonImageLinks.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(nonImageLinks), id: \.id) { link in
+                    Link(destination: link.url) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "link")
+                                .font(.caption)
+                            Text(link.text.isEmpty ? link.url.absoluteString : link.text)
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.blue.opacity(colorScheme == .dark ? 0.16 : 0.1))
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var commentActionRow: some View {
+        HStack(spacing: 12) {
+            Button {
+                submitVote(voteDirection == .up ? .none : .up)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                    Text("\(displayedScore)")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+            .foregroundColor(voteDirection == .up ? accentColor : metadataColor)
+            .disabled(isSubmittingVote)
+            .buttonStyle(.plain)
+            .accessibilityLabel(voteDirection == .up ? "Remove upvote" : "Upvote")
+
+            Button {
+                submitVote(voteDirection == .down ? .none : .down)
+            } label: {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 16, weight: .medium))
+            }
+            .foregroundColor(voteDirection == .down ? .orange : metadataColor)
+            .disabled(isSubmittingVote)
+            .buttonStyle(.plain)
+            .accessibilityLabel(voteDirection == .down ? "Remove downvote" : "Downvote")
+
+            Button {
+                showReplySheet = true
+            } label: {
+                Label("Reply", systemImage: "bubble")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(metadataColor)
+            .accessibilityLabel("Reply to comment")
+
+            ShareLink(item: commentURL) {
+                Label("Share", systemImage: "square.and.arrow.up")
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(metadataColor)
+            .accessibilityLabel("Share comment")
+
+            Menu {
+                Button {
+                    openURL(commentURL)
+                } label: {
+                    Label("Open Comment", systemImage: "safari")
+                }
+
+                Button {
+                    copyCommentLink()
+                } label: {
+                    Label("Copy Link", systemImage: "link")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(metadataColor)
+            .accessibilityLabel("More comment actions")
+        }
+        .font(.system(size: 14, weight: .medium))
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+        .padding(.top, 2)
+            .sheet(isPresented: $showReplySheet) {
+            RedditCommentReplySheet(comment: comment) { body in
+                let postedReply = try await redditService.replyToComment(commentID: comment.id, body: body)
+                let visibleReply = RedditCommentModel(
+                    id: postedReply.id,
+                    author: postedReply.author,
+                    body: postedReply.body,
+                    score: postedReply.score,
+                    createdUtc: postedReply.createdUtc,
+                    replies: postedReply.replies,
+                    indentationLevel: comment.indentationLevel + 1
+                )
+                await MainActor.run {
+                    onReplyPosted(comment.id, visibleReply)
+                }
+            }
+        }
+        .alert("Reddit Action Failed", isPresented: Binding(
+            get: { actionErrorMessage != nil },
+            set: { if !$0 { actionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(actionErrorMessage ?? "")
+        }
+    }
+
+    private func submitVote(_ newDirection: RedditVoteDirection) {
+        guard !isSubmittingVote else { return }
+
+        let previousDirection = voteDirection
+        voteDirection = newDirection
+        isSubmittingVote = true
+
+        Task {
+            do {
+                try await redditService.voteComment(commentID: comment.id, direction: newDirection)
+            } catch {
+                voteDirection = previousDirection
+                actionErrorMessage = error.localizedDescription
+            }
+            isSubmittingVote = false
+        }
+    }
+
+    private func copyCommentLink() {
+        let text = commentURL.absoluteString
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+
+    private var commentCard: some View {
+        HStack(alignment: .top, spacing: 12) {
+            avatarView
+
+            VStack(alignment: .leading, spacing: 10) {
+                commentHeader
+
+                if !isCollapsed {
+                    commentBodyContent
+                    commentImages
+                    commentLinks
+                    commentActionRow
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(cardFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(cardBorder, lineWidth: 1)
+        )
+        #if os(macOS)
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.2 : 0.06), radius: 10, x: 0, y: 5)
+        #else
+        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 3, x: 0, y: 1)
+        #endif
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                if depth > 0 {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(replyRailColor)
+                        .frame(width: 3)
+                        .padding(.vertical, 10)
+                }
+
+                commentCard
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, leadingIndent)
+
+            if !isCollapsed {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(visibleReplies) { reply in
+                        CommentView(
+                            comment: reply,
+                            post: post,
+                            redditService: redditService,
+                            onReplyPosted: onReplyPosted
+                        )
+                    }
+
+                    if shouldLimitReplies && comment.replies.count > 5 {
+                        Button(action: {
+                            isCollapsed.toggle()
+                        }) {
+                            HStack(spacing: 6) {
+                                Text("Show \(comment.replies.count - 5) more replies")
+                                Image(systemName: "chevron.down")
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(accentColor)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(accentColor.opacity(0.12))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, leadingIndent + 44)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+struct RedditCommentReplySheet: View {
+    let title: String
+    let contextSystemImage: String
+    let contextTitle: String
+    let contextBody: String
+    let placeholder: String
+    let onSubmit: (String) async throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var replyText = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+
+    init(comment: RedditCommentModel, onSubmit: @escaping (String) async throws -> Void) {
+        self.title = "Reply"
+        self.contextSystemImage = "arrowshape.turn.up.left.fill"
+        self.contextTitle = "Replying to u/\(comment.author)"
+        self.contextBody = comment.body
+        self.placeholder = "Write your reply..."
+        self.onSubmit = onSubmit
+    }
+
+    init(post: RedditPost, onSubmit: @escaping (String) async throws -> Void) {
+        self.title = "Comment"
+        self.contextSystemImage = "bubble.left.and.text.bubble.right.fill"
+        self.contextTitle = "Commenting on r/\(post.subreddit)"
+        self.contextBody = post.title
+        self.placeholder = "Write your comment..."
+        self.onSubmit = onSubmit
+    }
+
+    private var canSubmit: Bool {
+        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSubmitting
+    }
+
+    var body: some View {
+        if colorScheme == .dark {
+            darkReplyComposer
+        } else {
+            lightReplyComposer
+        }
+    }
+
+    private var darkReplyComposer: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.055, green: 0.058, blue: 0.095),
+                    Color(red: 0.025, green: 0.026, blue: 0.047)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.035),
+                        Color(red: 0.35, green: 0.18, blue: 0.75).opacity(0.08),
+                        Color.clear
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                darkHeader
+
+                VStack(alignment: .leading, spacing: 18) {
+                    parentCommentPreview
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.07))
+                        .frame(height: 1)
+
+                    ZStack(alignment: .topLeading) {
+                        if replyText.isEmpty {
+                            Text(placeholder)
+                                .font(.system(size: 21, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.80, green: 0.82, blue: 0.94).opacity(0.82))
+                                .padding(.top, 10)
+                                .padding(.leading, 5)
+                        }
+
+                        TextEditor(text: $replyText)
+                            .font(.system(size: 20, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .tint(Color(red: 0.78, green: 0.62, blue: 1.0))
+                            .scrollContentBackground(.hidden)
+                            .background(Color.clear)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if let errorMessage {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                            Text(errorMessage)
+                                .font(.footnote.weight(.medium))
+                        }
+                        .foregroundStyle(Color(red: 1.0, green: 0.62, blue: 0.62))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color(red: 0.32, green: 0.08, blue: 0.12).opacity(0.42))
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 28)
+                .padding(.bottom, 18)
+            }
+        }
+        .presentationBackground(.clear)
+    }
+
+    private var darkHeader: some View {
+        HStack {
+            Button {
+                dismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.79, green: 0.61, blue: 1.0))
+                    .padding(.horizontal, 22)
+                    .frame(height: 44)
+                    .background {
+                        Capsule(style: .continuous)
+                            .fill(Color(red: 0.13, green: 0.14, blue: 0.24).opacity(0.96))
+                            .overlay {
+                                Capsule(style: .continuous)
+                                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                            }
+                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmitting)
+
+            Spacer()
+
+            Text(title)
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.90))
+
+            Spacer()
+
+            Button {
+                submitReply()
+            } label: {
+                Group {
+                    if isSubmitting {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Color(red: 0.79, green: 0.61, blue: 1.0))
+                    } else {
+                        Text("Submit")
+                            .font(.system(size: 18, weight: .semibold))
+                    }
+                }
+                .foregroundStyle(canSubmit ? Color(red: 0.79, green: 0.61, blue: 1.0) : Color.white.opacity(0.34))
+                .padding(.horizontal, 22)
+                .frame(minWidth: 94, minHeight: 44)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(Color(red: 0.13, green: 0.14, blue: 0.24).opacity(canSubmit ? 0.96 : 0.52))
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .stroke(Color.white.opacity(canSubmit ? 0.06 : 0.035), lineWidth: 1)
+                        }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSubmit)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+    }
+
+    private var parentCommentPreview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                Image(systemName: contextSystemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.79, green: 0.61, blue: 1.0))
+
+                Text(contextTitle)
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(Color(red: 0.79, green: 0.81, blue: 0.94))
+                    .lineLimit(1)
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Capsule(style: .continuous)
+                    .fill(Color(red: 0.79, green: 0.61, blue: 1.0).opacity(0.75))
+                    .frame(width: 4)
+
+                Text(contextBody)
+                    .font(.system(size: 15, weight: .medium))
+                    .lineSpacing(3)
+                    .foregroundStyle(Color(red: 0.78, green: 0.80, blue: 0.91))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var lightReplyComposer: some View {
+        NavigationView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(contextTitle)
+                        .font(.headline)
+                    Text(contextBody)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(4)
+                }
+
+                TextEditor(text: $replyText)
+                    .frame(minHeight: 180)
+                    .padding(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    )
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundColor(.red)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding()
+            .navigationTitle(title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .disabled(isSubmitting)
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSubmitting ? "Posting..." : "Submit") {
+                        submitReply()
+                    }
+                    .disabled(!canSubmit)
+                }
+            }
+        }
+    }
+
+    private func submitReply() {
+        guard canSubmit else { return }
+        isSubmitting = true
+        errorMessage = nil
+
+        Task {
+            do {
+                try await onSubmit(replyText)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSubmitting = false
+        }
+    }
+}
+
+struct CommentThreadView: View {
+    @EnvironmentObject private var appState: AppState
+    let comments: [RedditCommentModel]
+    let post: RedditPost
+    let onReplyPosted: (String, RedditCommentModel) -> Void
+    
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 10) {
+            ForEach(comments) { comment in
+                CommentView(
+                    comment: comment,
+                    post: post,
+                    redditService: appState.redditService,
+                    onReplyPosted: onReplyPosted
+                )
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct CommentSummaryView: View {
+    let summary: CommentSummary
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Comment Summary")
+                .font(.headline)
+            
+            Text(cleanAndFormatCommentSummaryForDisplay(summary.summary))
+                .padding()
+                .modifier(CommentGlassModifier(cornerRadius: 8))
+            
+            HStack {
+                Text("Sentiment: ")
+                    .fontWeight(.semibold)
+                
+                Text(summary.sentiment.rawValue.capitalized)
+                    .foregroundColor(sentimentColor(summary.sentiment))
+            }
+            
+            if !summary.topCommenters.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Top Commenters:")
+                        .fontWeight(.semibold)
+                    
+                    ForEach(summary.topCommenters, id: \.self) { commenter in
+                        Text("• u/\(commenter)")
+                    }
+                }
+            }
+            
+            if !summary.mainTopics.isEmpty {
+                VStack(alignment: .leading) {
+                    Text("Main Topics:")
+                        .fontWeight(.semibold)
+                    
+                    Text(summary.mainTopics.joined(separator: ", "))
+                }
+            }
+            
+            Text("Based on \(summary.commentCount) comments")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .modifier(CommentGlassModifier(cornerRadius: 12, isSubtle: true))
+    }
+    
+    private func sentimentColor(_ sentiment: CommentSummary.CommentSentiment) -> Color {
+        switch sentiment {
+        case .positive:
+            return .green
+        case .negative:
+            return .red
+        case .mixed:
+            return .orange
+        case .neutral:
+            return .gray
+        }
+    }
+}
+
+// Image popup view for displaying images in fullscreen
+struct ImagePopupView: View {
+    let imageURL: URL
+    @Environment(\.presentationMode) var presentationMode
+    @State private var zoomScale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    let minZoom: CGFloat = 0.5
+    let maxZoom: CGFloat = 5.0
+    
+    // Check if URL is a GIF
+    private var isGIF: Bool {
+        let urlString = imageURL.absoluteString.lowercased()
+        return urlString.contains(".gif") || 
+               urlString.contains("giphy.com") || 
+               urlString.contains("gfycat.com") || 
+               urlString.contains("imgur.com") ||
+               urlString.contains("v.redd.it") ||
+               urlString.contains("media.giphy.com") ||
+               urlString.contains("giant.gfycat.com") ||
+               urlString.contains("i.imgur.com")
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.black
+                .edgesIgnoringSafeArea(.all)
+            
+            GeometryReader { geometry in
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: { 
+                            presentationMode.wrappedValue.dismiss()
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title)
+                                .foregroundColor(.white)
+                        }
+                        .padding()
+                    }
+                    
+                    ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                        Group {
+                            if isGIF {
+                                // Use animated image for GIFs
+                                KFAnimatedImage(imageURL)
+                                    .placeholder {
+                                        VStack {
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            Text("Loading GIF...")
+                                                .foregroundColor(.white)
+                                                .padding(.top)
+                                        }
+                                    }
+                                    .cancelOnDisappear(true)
+                                    .scaledToFit()
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .scaleEffect(zoomScale)
+                            } else {
+                                // Use regular image for non-GIFs
+                                KFImage(imageURL)
+                                    .resizable()
+                                    .placeholder {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    }
+                                    .cancelOnDisappear(true)
+                                    .scaledToFit()
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .scaleEffect(zoomScale)
+                            }
+                        }
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    let newScale = lastScale * value
+                                    zoomScale = min(max(newScale, minZoom), maxZoom)
+                                }
+                                .onEnded { value in
+                                    lastScale = zoomScale
+                                }
+                        )
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+    }
+}
+
+// Comment glass modifier for consistent glass effects with iOS 26 beta features
+struct CommentGlassModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let isSubtle: Bool
+    
+    init(cornerRadius: CGFloat = 12, isSubtle: Bool = false) {
+        self.cornerRadius = cornerRadius
+        self.isSubtle = isSubtle
+    }
+    
+    func body(content: Content) -> some View {
+        if #available(iOS 15.0, macOS 12.0, *) {
+            // Use material effects available in iOS 15+
+            if isSubtle {
+                content
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+            } else {
+                content
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
+                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+            }
+        } else {
+            content
+                .background(
+                    Color.secondary.opacity(isSubtle ? 0.05 : 0.1)
+                )
+                .cornerRadius(cornerRadius)
+        }
+    }
+}
