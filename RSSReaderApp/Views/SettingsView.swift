@@ -854,14 +854,7 @@ struct SettingsView: View {
                                     .fontWeight(.semibold)
                             }
 
-                            Button(action: {
-                                isClearingCaches = true
-                                appState.clearAllCaches {
-                                    updateCacheSize()
-                                    refreshStorageBreakdown()
-                                    isClearingCaches = false
-                                }
-                            }) {
+                            Button(action: clearAllCaches) {
                                 HStack {
                                     if isClearingCaches {
                                         ProgressView()
@@ -1245,6 +1238,15 @@ struct SettingsView: View {
     
     private func updateCacheSize() {
         cacheSizeDisplay = appState.getCacheSize()
+    }
+
+    private func clearAllCaches() {
+        isClearingCaches = true
+        appState.clearAllCaches {
+            updateCacheSize()
+            refreshStorageBreakdown()
+            isClearingCaches = false
+        }
     }
 
     private func refreshStorageBreakdown() {
