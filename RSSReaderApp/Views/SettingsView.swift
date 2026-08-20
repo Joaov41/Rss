@@ -559,29 +559,7 @@ struct SettingsView: View {
                     }
                 }
                     
-                    Section("API Keys") {
-                        SecureField("Gemini API Key", text: $geminiApiKey)
-                            .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
-                                cornerRadius: 12,
-                                tintColor: .purple.opacity(0.3)
-                            ))
-                            .onChange(of: geminiApiKey) { newValue in
-                                var newSettings = appState.settings
-                                newSettings.geminiApiKey = newValue
-                                appState.updateSettings(newSettings)
-                            }
-
-                        SecureField("OpenAI API Key (for TTS)", text: $openaiApiKey)
-                            .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
-                                cornerRadius: 12,
-                                tintColor: .blue.opacity(0.3)
-                            ))
-                            .onChange(of: openaiApiKey) { newValue in
-                                var newSettings = appState.settings
-                                newSettings.openaiApiKey = newValue
-                                appState.updateSettings(newSettings)
-                            }
-                    }
+                    apiKeysSection
 
                     redditAuthSection
 
@@ -948,6 +926,33 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .settingsGlassPanel()
+    }
+
+    @ViewBuilder
+    private var apiKeysSection: some View {
+        Section("API Keys") {
+            SecureField("Gemini API Key", text: $geminiApiKey)
+                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
+                    cornerRadius: 12,
+                    tintColor: .purple.opacity(0.3)
+                ))
+                .onChange(of: geminiApiKey) { newValue in
+                    var newSettings = appState.settings
+                    newSettings.geminiApiKey = newValue
+                    appState.updateSettings(newSettings)
+                }
+
+            SecureField("OpenAI API Key (for TTS)", text: $openaiApiKey)
+                .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
+                    cornerRadius: 12,
+                    tintColor: .blue.opacity(0.3)
+                ))
+                .onChange(of: openaiApiKey) { newValue in
+                    var newSettings = appState.settings
+                    newSettings.openaiApiKey = newValue
+                    appState.updateSettings(newSettings)
+                }
+        }
     }
 
     @ViewBuilder
