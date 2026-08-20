@@ -1,10 +1,8 @@
 // swift-litert-lm — audio through the Foundation Models API.
 //
-// Apple's Foundation Models transcript has built-in text and *image* segments,
-// but no audio. The custom-segment hook (`Transcript.CustomSegment`) lets a
-// backend carry arbitrary modalities through the FM API. `LiteRTAudioSegment`
-// uses it to feed audio into Gemma 4's audio tower — audio understanding through
-// the Foundation Models API, which Apple's own system model does not offer.
+// The Xcode 27 beta 5 Foundation Models transcript has text and image
+// segments, but no custom audio segment case. Keep this payload type available
+// for callers that store audio alongside prompts.
 //
 //   let model   = try await LiteRTLanguageModel(.gemma4_E2B)
 //   let session = LanguageModelSession(model: model)
@@ -18,15 +16,13 @@
 import Foundation
 import FoundationModels
 
-/// A Foundation Models prompt segment carrying audio for a LiteRT backend.
-///
-/// `Transcript.CustomSegment` supplies `promptRepresentation`, `description`, and
-/// equality for free; we only provide `id` + `content`. Include it in a prompt
-/// via the `@PromptBuilder` overloads of `respond`/`streamResponse`.
+/// A Foundation Models payload carrying audio for a LiteRT backend.
+/// The payload remains `Codable`, `Equatable`, and `Sendable` for storage and
+/// can be reintroduced into a provider-specific prompt representation later.
 @available(iOS 27.0, macOS 27.0, *)
-public struct LiteRTAudioSegment: Transcript.CustomSegment {
-  /// The segment payload. Must be `Codable`/`Equatable`/`Sendable` per the
-  /// protocol; raw audio bytes (e.g. a WAV file's contents) satisfy that.
+public struct LiteRTAudioSegment: Sendable, Equatable, Identifiable {
+  /// Raw audio bytes (e.g. a WAV file's contents) satisfy the payload's
+  /// `Codable`/`Equatable`/`Sendable` requirements.
   public struct Content: Codable, Equatable, Sendable {
     public var data: Data
     public init(data: Data) { self.data = data }

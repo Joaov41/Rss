@@ -44,11 +44,10 @@ public struct LiteRTLanguageModel: LanguageModel {
       model, storageDirectory: storageDirectory, onProgress: onDownloadProgress)
     self.executorConfiguration = LiteRTExecutor.Configuration(model: model, modelPath: path)
     // Declared capabilities: guided generation (best-effort schema-in-prompt; see
-    // the executor) and vision (gates image attachments). Audio/video ride the
-    // custom-segment hook and are not capability-gated.
+    // the executor) and vision (gates image attachments).
     var capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration, .toolCalling]
     if model.supportedModalities.contains(.vision) { capabilities.append(.vision) }
-    self.capabilities = LanguageModelCapabilities(capabilities: capabilities)
+    self.capabilities = LanguageModelCapabilities(capabilities)
   }
 
   /// Create the backend from a **local `.litertlm` file** — no catalog, no
@@ -83,7 +82,7 @@ public struct LiteRTLanguageModel: LanguageModel {
       maxTokens: maxTokens)
     var capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration, .toolCalling]
     if modalities.contains(.vision) { capabilities.append(.vision) }
-    self.capabilities = LanguageModelCapabilities(capabilities: capabilities)
+    self.capabilities = LanguageModelCapabilities(capabilities)
   }
 
   /// Release every cached LiteRT engine built for FM sessions, freeing their
@@ -349,8 +348,7 @@ public final class LiteRTExecutor: LanguageModelExecutor {
     return String(data: data, encoding: .utf8) ?? ""
   }
 
-  /// Map FM segments to LiteRT content: text, image attachments, and audio via
-  /// the `LiteRTAudioSegment` custom segment.
+  /// Map Foundation Models segments to LiteRT content: text and image attachments.
   private static func contents(of segments: [Transcript.Segment]) -> [Content] {
     var out: [Content] = []
     for segment in segments {
@@ -360,12 +358,6 @@ public final class LiteRTExecutor: LanguageModelExecutor {
       case .attachment(let attachment):
         if case .image(let image) = attachment.content, let png = pngData(from: image.cgImage) {
           out.append(.imageData(png))
-        }
-      case .custom(let custom):
-        if let audio = custom as? LiteRTAudioSegment {
-          out.append(.audioData(audio.content.data))
-        } else if let video = custom as? LiteRTVideoSegment {
-          out.append(contentsOf: video.content.frames.map { Content.imageData($0) })
         }
       case .structure:
         break  // structured (guided-generation) content — a later phase

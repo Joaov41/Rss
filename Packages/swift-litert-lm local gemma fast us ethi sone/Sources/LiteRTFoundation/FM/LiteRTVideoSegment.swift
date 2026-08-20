@@ -1,10 +1,9 @@
 // swift-litert-lm — video through the Foundation Models API.
 //
-// Like audio, video has no built-in FM transcript segment. `LiteRTVideoSegment`
-// carries app-sampled video frames (PNG bytes) through the custom-segment hook;
-// the executor feeds them to Gemma 4 as a sequence of images. Pair it with
-// `VideoFrameSampler` — video understanding through the Foundation Models API,
-// which Apple's system model does not offer.
+// The beta5 Foundation Models transcript has no custom video segment case.
+// Keep the app-sampled video frames (PNG bytes) available as a payload;
+// provider-specific integrations can feed them to Gemma 4 as a sequence of images.
+// Use `VideoFrameSampler` with a provider-specific integration as needed.
 //
 //   let frames = try await VideoFrameSampler.sampleFrames(from: videoURL, count: 4)
 //   let answer = try await session.respond {
@@ -17,9 +16,9 @@
 import Foundation
 import FoundationModels
 
-/// A Foundation Models prompt segment carrying sampled video frames.
+/// A Foundation Models payload carrying sampled video frames.
 @available(iOS 27.0, macOS 27.0, *)
-public struct LiteRTVideoSegment: Transcript.CustomSegment {
+public struct LiteRTVideoSegment: Sendable, Equatable, Identifiable {
   /// Sampled frames as image bytes (e.g. PNG), in temporal order.
   public struct Content: Codable, Equatable, Sendable {
     public var frames: [Data]
