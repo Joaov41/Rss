@@ -844,76 +844,7 @@ struct SettingsView: View {
                         .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
                     }
 
-                    Section("Cache Management") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Removable Cache Size:")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text(verbatim: cacheSizeDisplay)
-                                    .fontWeight(.semibold)
-                            }
-
-                            Button(action: clearAllCaches) {
-                                HStack {
-                                    if isClearingCaches {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Clearing…")
-                                    } else {
-                                        Image(systemName: "trash.fill")
-                                        Text("Clear All Caches")
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                            .disabled(isClearingCaches)
-                            .settingsGlassButtonStyle(prominent: true)
-                            .tint(.red)
-
-                            Text("Clears removable caches and preserves downloaded LiteRT and MLX models.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Divider()
-
-                            Button(action: {
-                                isCleaningFailedModelDownloads = true
-                                failedModelDownloadCleanupStatus = nil
-                                appState.clearFailedModelDownloads { message in
-                                    failedModelDownloadCleanupStatus = message
-                                    updateCacheSize()
-                                    refreshStorageBreakdown()
-                                    isCleaningFailedModelDownloads = false
-                                }
-                            }) {
-                                HStack {
-                                    if isCleaningFailedModelDownloads {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Cleaning…")
-                                    } else {
-                                        Image(systemName: "arrow.down.doc.fill")
-                                        Text("Clean Failed Model Downloads")
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                            .disabled(isCleaningFailedModelDownloads)
-                            .settingsGlassButtonStyle()
-
-                            Text("Removes only incomplete .download files. Completed LiteRT and MLX models are kept.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            if let failedModelDownloadCleanupStatus {
-                                Text(failedModelDownloadCleanupStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    cacheManagementSection
 
                     storageBreakdownSection
 
@@ -1116,6 +1047,80 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .settingsGlassPanel()
+    }
+
+    @ViewBuilder
+    private var cacheManagementSection: some View {
+        Section("Cache Management") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Removable Cache Size:")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(verbatim: cacheSizeDisplay)
+                        .fontWeight(.semibold)
+                }
+
+                Button(action: clearAllCaches) {
+                    HStack {
+                        if isClearingCaches {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Clearing…")
+                        } else {
+                            Image(systemName: "trash.fill")
+                            Text("Clear All Caches")
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .disabled(isClearingCaches)
+                .settingsGlassButtonStyle(prominent: true)
+                .tint(.red)
+
+                Text("Clears removable caches and preserves downloaded LiteRT and MLX models.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Divider()
+
+                Button(action: {
+                    isCleaningFailedModelDownloads = true
+                    failedModelDownloadCleanupStatus = nil
+                    appState.clearFailedModelDownloads { message in
+                        failedModelDownloadCleanupStatus = message
+                        updateCacheSize()
+                        refreshStorageBreakdown()
+                        isCleaningFailedModelDownloads = false
+                    }
+                }) {
+                    HStack {
+                        if isCleaningFailedModelDownloads {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Cleaning…")
+                        } else {
+                            Image(systemName: "arrow.down.doc.fill")
+                            Text("Clean Failed Model Downloads")
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .disabled(isCleaningFailedModelDownloads)
+                .settingsGlassButtonStyle()
+
+                Text("Removes only incomplete .download files. Completed LiteRT and MLX models are kept.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if let failedModelDownloadCleanupStatus {
+                    Text(failedModelDownloadCleanupStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.vertical, 8)
+        }
     }
 
     @ViewBuilder
