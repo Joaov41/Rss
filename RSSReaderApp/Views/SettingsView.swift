@@ -915,90 +915,7 @@ struct SettingsView: View {
                         .padding(.vertical, 8)
                     }
 
-                    Section("Storage Breakdown") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("App Container")
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                if isLoadingStorageBreakdown {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Button {
-                                        refreshStorageBreakdown()
-                                    } label: {
-                                        Image(systemName: "arrow.clockwise")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-
-                            if storageBreakdownItems.isEmpty {
-                                Text(isLoadingStorageBreakdown ? "Scanning storage…" : "No storage details found.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                ForEach(storageBreakdownItems) { item in
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
-
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.name)
-                                                .font(.subheadline)
-                                                .fontWeight(.semibold)
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                            Text(item.detail)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                                        Text(item.sizeText)
-                                            .font(.caption)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
-
-                                        ZStack {
-                                            if item.cleanupKind != nil || item.isModelStorage {
-                                                Button(role: .destructive) {
-                                                    pendingStorageBreakdownDelete = item
-                                                    showStorageBreakdownDeleteConfirm = true
-                                                } label: {
-                                                    Image(systemName: "trash")
-                                                }
-                                                .buttonStyle(.borderless)
-                                                .disabled(isDeletingStorageBreakdown)
-                                            }
-                                        }
-                                        .frame(width: 24, alignment: .center)
-                                    }
-                                    .padding(.vertical, 3)
-                                }
-                            }
-
-                            if let storageBreakdownStatus {
-                                Text(storageBreakdownStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
-                    }
+                    storageBreakdownSection
 
                     Section("Local Model Storage") {
                         VStack(alignment: .leading, spacing: 12) {
@@ -1199,6 +1116,94 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .settingsGlassPanel()
+    }
+
+    @ViewBuilder
+    private var storageBreakdownSection: some View {
+        Section("Storage Breakdown") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("App Container")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    if isLoadingStorageBreakdown {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Button {
+                            refreshStorageBreakdown()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                if storageBreakdownItems.isEmpty {
+                    Text(isLoadingStorageBreakdown ? "Scanning storage…" : "No storage details found.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(storageBreakdownItems) { item in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: item.isModelStorage ? "cube.box.fill" : "folder.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, alignment: .center)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.name)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Text(item.detail)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Text(item.sizeText)
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .frame(minWidth: 64, alignment: .trailing)
+
+                            ZStack {
+                                if item.cleanupKind != nil || item.isModelStorage {
+                                    Button(role: .destructive) {
+                                        pendingStorageBreakdownDelete = item
+                                        showStorageBreakdownDeleteConfirm = true
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(isDeletingStorageBreakdown)
+                                }
+                            }
+                            .frame(width: 24, alignment: .center)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+
+                if let storageBreakdownStatus {
+                    Text(storageBreakdownStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Text("Removable cache rows exclude local models. Use the model rows or Local Model Storage to delete downloaded models.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+        }
     }
 
     @ViewBuilder
