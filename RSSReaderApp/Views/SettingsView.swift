@@ -590,38 +590,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    Section("Local TTS Engine") {
-                        Picker("Engine", selection: $localTTSEngine) {
-                            ForEach(LocalTTSEngine.availableEngines) { engine in
-                                Text(engine.displayName).tag(engine)
-                            }
-                        }
-                        .onChange(of: localTTSEngine) { newValue in
-                            appState.summaryService.setLocalTTSEngine(newValue)
-                            var newSettings = appState.settings
-                            newSettings.localTTSEngine = newValue
-                            appState.updateSettings(newSettings)
-                            if newValue == .kokoro {
-                                kokoroVoice = appState.summaryService.getKokoroVoice()
-                                kokoroSpeed = appState.summaryService.getKokoroSpeed()
-                                kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
-                            }
-                        }
-
-                        if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
-                            Text("MLX TTS requires the MLXAudio package and model access.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if localTTSEngine == .kokoro {
-                            Text("MLX TTS runs fully on device. First use may download large model assets.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Uses system voices for on-device speech.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
+                    localTTSEngineSection
 
                     mlxTTSSection
                     
@@ -924,6 +893,42 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .settingsGlassPanel()
+    }
+
+    @ViewBuilder
+    private var localTTSEngineSection: some View {
+        Section("Local TTS Engine") {
+            Picker("Engine", selection: $localTTSEngine) {
+                ForEach(LocalTTSEngine.availableEngines) { engine in
+                    Text(engine.displayName).tag(engine)
+                }
+            }
+            .onChange(of: localTTSEngine) { newValue in
+                appState.summaryService.setLocalTTSEngine(newValue)
+                var newSettings = appState.settings
+                newSettings.localTTSEngine = newValue
+                appState.updateSettings(newSettings)
+                if newValue == .kokoro {
+                    kokoroVoice = appState.summaryService.getKokoroVoice()
+                    kokoroSpeed = appState.summaryService.getKokoroSpeed()
+                    kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
+                }
+            }
+
+            if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
+                Text("MLX TTS requires the MLXAudio package and model access.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if localTTSEngine == .kokoro {
+                Text("MLX TTS runs fully on device. First use may download large model assets.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Uses system voices for on-device speech.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
     }
 
     private func modelStorageIcon(for kind: LocalModelStorageItem.Kind) -> some View {
