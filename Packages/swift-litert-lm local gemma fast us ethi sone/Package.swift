@@ -66,7 +66,10 @@ let package = Package(
     .target(
       name: "LiteRTFoundation",
       dependencies: ["LiteRTLM"],
-      path: "Sources/LiteRTFoundation"
+      path: "Sources/LiteRTFoundation",
+      // The FM adapter uses beta-only FoundationModels symbols and is not
+      // part of the public App Store SDK lane built with Xcode 26.
+      exclude: ["FM"]
     ),
   ]
 )

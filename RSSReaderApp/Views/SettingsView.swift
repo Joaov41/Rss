@@ -850,7 +850,7 @@ struct SettingsView: View {
                                 Text("Removable Cache Size:")
                                     .foregroundColor(.secondary)
                                 Spacer()
-                                Text(cacheSizeDisplay)
+                                Text(verbatim: cacheSizeDisplay)
                                     .fontWeight(.semibold)
                             }
 
