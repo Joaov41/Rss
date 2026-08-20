@@ -440,13 +440,7 @@ struct SettingsView: View {
                     Button {
                         appState.manualCloudRefresh()
                     } label: {
-                        if appState.manualCloudSyncState == .syncing {
-                            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
-                        } else if appState.manualCloudSyncState == .completed {
-                            Label("Synced", systemImage: "checkmark.circle.fill")
-                        } else {
-                            Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
-                        }
+                        cloudSyncButtonLabel
                     }
                     .settingsGlassButtonStyle(prominent: true)
                     .tint(.blue)
@@ -1051,6 +1045,17 @@ struct SettingsView: View {
                     Text(error).font(.caption).foregroundColor(.red)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var cloudSyncButtonLabel: some View {
+        if appState.manualCloudSyncState == .syncing {
+            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+        } else if appState.manualCloudSyncState == .completed {
+            Label("Synced", systemImage: "checkmark.circle.fill")
+        } else {
+            Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
         }
     }
 
