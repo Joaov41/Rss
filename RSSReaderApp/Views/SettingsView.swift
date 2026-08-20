@@ -753,9 +753,7 @@ struct SettingsView: View {
                             } else {
                                 ForEach(modelStorageItems) { item in
                                     HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: item.kind == .liteRT ? "cube.box.fill" : "cpu.fill")
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 22, alignment: .center)
+                                        modelStorageIcon(for: item.kind)
 
                                         VStack(alignment: .leading, spacing: 3) {
                                             HStack(spacing: 6) {
@@ -926,6 +924,12 @@ struct SettingsView: View {
         .preferredColorScheme(settingsPreferredColorScheme)
         .environment(\.colorScheme, effectiveSettingsColorScheme)
         .settingsGlassPanel()
+    }
+
+    private func modelStorageIcon(for kind: LocalModelStorageItem.Kind) -> some View {
+        Image(systemName: kind == .liteRT ? "cube.box.fill" : "cpu.fill")
+            .foregroundStyle(.secondary)
+            .frame(width: 22, alignment: .center)
     }
 
     @ViewBuilder
