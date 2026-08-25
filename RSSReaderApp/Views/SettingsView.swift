@@ -417,6 +417,11 @@ struct SettingsView: View {
             .frame(minWidth: 64, alignment: .trailing)
     }
 
+    private var storageBreakdownContainerLabel: some View {
+        Text("App Container")
+            .foregroundColor(.secondary)
+    }
+
     @ViewBuilder
     private var modelStorageStatusView: some View {
         if let modelStorageStatus {
@@ -1003,8 +1008,7 @@ struct SettingsView: View {
                     Section("Storage Breakdown") {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
-                                Text("App Container")
-                                    .foregroundColor(.secondary)
+                                storageBreakdownContainerLabel
                                 Spacer()
                                 if isLoadingStorageBreakdown {
                                     ProgressView()
