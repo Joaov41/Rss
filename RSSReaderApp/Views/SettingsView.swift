@@ -387,6 +387,14 @@ struct SettingsView: View {
         }
     }
 
+    private func storageBreakdownItemName(_ item: AppStorageBreakdownItem) -> some View {
+        Text(item.name)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -963,11 +971,7 @@ struct SettingsView: View {
                                             .frame(width: 22, alignment: .center)
 
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.name)
-                                                .font(.subheadline)
-                                                .fontWeight(.semibold)
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
+                                            storageBreakdownItemName(item)
                                             Text(item.detail)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
