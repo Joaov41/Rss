@@ -1,0 +1,241 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -resolvePackageDependencies -project "rss mac/RSSReaderApp.xcodeproj" -scheme "RSSReaderApp (macOS)" -disablePackageRepositoryCache
+
+Resolve Package Graph
+
+Fetching from https://github.com/apple/swift-collections.git
+
+Fetching from https://github.com/apple/swift-nio.git
+
+Fetching from https://github.com/apple/swift-distributed-tracing.git
+
+Fetching from https://github.com/apple/swift-atomics.git
+
+Fetching from https://github.com/apple/swift-http-structured-headers.git
+
+Fetching from https://github.com/apple/swift-service-context.git
+
+Fetching from https://github.com/apple/swift-http-types.git
+
+Fetching from https://github.com/apple/swift-nio-transport-services.git
+
+Fetching from https://github.com/apple/swift-system.git
+
+Fetching from https://github.com/ml-explore/mlx-swift
+
+Fetching from https://github.com/apple/swift-crypto.git
+
+Fetching from https://github.com/apple/swift-configuration.git
+
+Fetching from https://github.com/ml-explore/mlx-swift-lm
+
+Fetching from https://github.com/apple/swift-algorithms.git
+
+Fetching from https://github.com/swift-server/swift-service-lifecycle
+
+Fetching from https://github.com/nmdias/FeedKit
+
+Fetching from https://github.com/apple/swift-nio-ssl.git
+
+Fetching from https://github.com/onevcat/Kingfisher
+
+Fetching from https://github.com/apple/swift-async-algorithms.git
+
+Fetching from https://github.com/apple/swift-asn1.git
+
+Fetching from https://github.com/apple/swift-nio-extras.git
+
+Fetching from https://github.com/apple/swift-log.git
+
+Fetching from file:///Volumes/BackUP%20/My%20projects%202/rss/rss%20mac/Packages/EventSource
+
+Fetching from https://github.com/apple/swift-numerics
+
+Fetching from https://github.com/mattt/swift-xet.git
+
+Fetching from https://github.com/huggingface/swift-transformers
+
+Fetching from https://github.com/apple/swift-certificates.git
+
+Fetching from https://github.com/huggingface/swift-huggingface.git
+
+Fetching from https://github.com/huggingface/swift-jinja.git
+
+Fetching from https://github.com/swift-server/async-http-client
+
+Fetching from https://github.com/scinfu/SwiftSoup
+
+Fetching from https://github.com/apple/swift-nio-http2.git
+
+Fetching from https://github.com/ibireme/yyjson.git
+
+Creating working copy of package ‘swift-http-structured-headers’
+
+Creating working copy of package ‘swift-atomics’
+
+Creating working copy of package ‘swift-http-types’
+
+Creating working copy of package ‘swift-distributed-tracing’
+
+Creating working copy of package ‘swift-service-context’
+
+Creating working copy of package ‘swift-collections’
+
+Creating working copy of package ‘swift-nio’
+
+Checking out 1.7.0 of package ‘swift-http-structured-headers’
+
+Checking out 2.97.1 of package ‘swift-nio’
+
+Creating working copy of package ‘swift-nio-transport-services’
+
+Checking out 1.3.0 of package ‘swift-collections’
+
+Checking out 1.5.1 of package ‘swift-http-types’
+
+Checking out 1.4.1 of package ‘swift-distributed-tracing’
+
+Checking out 1.3.0 of package ‘swift-atomics’
+
+Checking out 1.3.0 of package ‘swift-service-context’
+
+Creating working copy of package ‘swift-crypto’
+
+Checking out 1.28.0 of package ‘swift-nio-transport-services’
+
+Creating working copy of package ‘swift-configuration’
+
+Creating working copy of package ‘mlx-swift-lm’
+
+Creating working copy of package ‘yyjson’
+
+Checking out 4.2.0 of package ‘swift-crypto’
+
+Checking out 1.2.0 of package ‘swift-configuration’
+
+Checking out main (e33eba8) of package ‘mlx-swift-lm’
+
+Creating working copy of package ‘swift-algorithms’
+
+Checking out 0.12.0 of package ‘yyjson’
+
+Checking out 1.2.1 of package ‘swift-algorithms’
+
+Creating working copy of package ‘FeedKit’
+
+Creating working copy of package ‘swift-system’
+
+Creating working copy of package ‘mlx-swift’
+
+Checking out 9.1.2 of package ‘FeedKit’
+
+Creating working copy of package ‘Kingfisher’
+
+Creating working copy of package ‘swift-service-lifecycle’
+
+Checking out 1.6.4 of package ‘swift-system’
+
+Creating working copy of package ‘swift-asn1’
+
+Checking out 0.30.6 of package ‘mlx-swift’
+
+Checking out 2.11.0 of package ‘swift-service-lifecycle’
+
+Creating working copy of package ‘swift-nio-extras’
+
+Checking out 8.3.2 of package ‘Kingfisher’
+
+Creating working copy of package ‘EventSource’
+
+Checking out 1.34.0 of package ‘swift-nio-extras’
+
+Creating working copy of package ‘swift-log’
+
+Creating working copy of package ‘swift-transformers’
+
+Checking out 1.1.9 of package ‘swift-transformers’
+
+Checking out 1.5.1 of package ‘swift-asn1’
+
+Creating working copy of package ‘swift-numerics’
+
+Checking out 1.12.0 of package ‘swift-log’
+
+Checking out 1.4.1 of package ‘EventSource’
+
+Creating working copy of package ‘swift-xet’
+
+Checking out 1.1.1 of package ‘swift-numerics’
+
+Creating working copy of package ‘async-http-client’
+
+Creating working copy of package ‘swift-async-algorithms’
+
+Creating working copy of package ‘swift-jinja’
+
+Creating working copy of package ‘swift-certificates’
+
+Checking out 1.33.1 of package ‘async-http-client’
+
+Creating working copy of package ‘SwiftSoup’
+
+Creating working copy of package ‘swift-huggingface’
+
+Checking out 0.2.3 of package ‘swift-xet’
+
+Creating working copy of package ‘swift-nio-http2’
+
+Checking out 2.3.2 of package ‘swift-jinja’
+
+Checking out 1.19.1 of package ‘swift-certificates’
+
+Checking out 2.8.8 of package ‘SwiftSoup’
+
+Checking out 1.1.3 of package ‘swift-async-algorithms’
+
+Creating working copy of package ‘swift-nio-ssl’
+
+Checking out 1.43.0 of package ‘swift-nio-http2’
+
+Checking out 2.37.0 of package ‘swift-nio-ssl’
+
+Checking out 0.6.0 of package ‘swift-huggingface’
+
+
+Resolved source packages:
+  swift-log: https://github.com/apple/swift-log.git @ 1.12.0
+  Jinja: https://github.com/huggingface/swift-jinja.git @ 2.3.2
+  swift-configuration: https://github.com/apple/swift-configuration.git @ 1.2.0
+  swift-certificates: https://github.com/apple/swift-certificates.git @ 1.19.1
+  Xet: https://github.com/mattt/swift-xet.git @ 0.2.3
+  mlx-swift-lm: https://github.com/ml-explore/mlx-swift-lm @ main (e33eba8)
+  swift-nio-ssl: https://github.com/apple/swift-nio-ssl.git @ 2.37.0
+  EventSource: file:///Volumes/BackUP%20/My%20projects%202/rss/rss%20mac/Packages/EventSource @ 1.4.1
+  MLXAudio: /Volumes/BackUP /My projects 2/rss/rss mac/Packages/mlx-audio-swift @ local
+  FeedKit: https://github.com/nmdias/FeedKit @ 9.1.2
+  swift-numerics: https://github.com/apple/swift-numerics @ 1.1.1
+  swift-nio-transport-services: https://github.com/apple/swift-nio-transport-services.git @ 1.28.0
+  async-http-client: https://github.com/swift-server/async-http-client @ 1.33.1
+  mlx-swift: https://github.com/ml-explore/mlx-swift @ 0.30.6
+  swift-asn1: https://github.com/apple/swift-asn1.git @ 1.5.1
+  swift-http-types: https://github.com/apple/swift-http-types.git @ 1.5.1
+  swift-transformers: https://github.com/huggingface/swift-transformers @ 1.1.9
+  swift-collections: https://github.com/apple/swift-collections.git @ 1.3.0
+  swift-service-context: https://github.com/apple/swift-service-context.git @ 1.3.0
+  Kingfisher: https://github.com/onevcat/Kingfisher @ 8.3.2
+  swift-http-structured-headers: https://github.com/apple/swift-http-structured-headers.git @ 1.7.0
+  swift-atomics: https://github.com/apple/swift-atomics.git @ 1.3.0
+  swift-async-algorithms: https://github.com/apple/swift-async-algorithms.git @ 1.1.3
+  swift-distributed-tracing: https://github.com/apple/swift-distributed-tracing.git @ 1.4.1
+  swift-huggingface: https://github.com/huggingface/swift-huggingface.git @ 0.6.0
+  swift-system: https://github.com/apple/swift-system.git @ 1.6.4
+  swift-algorithms: https://github.com/apple/swift-algorithms.git @ 1.2.1
+  SwiftSoup: https://github.com/scinfu/SwiftSoup @ 2.8.8
+  swift-nio-http2: https://github.com/apple/swift-nio-http2.git @ 1.43.0
+  swift-nio: https://github.com/apple/swift-nio.git @ 2.97.1
+  swift-nio-extras: https://github.com/apple/swift-nio-extras.git @ 1.34.0
+  swift-crypto: https://github.com/apple/swift-crypto.git @ 4.2.0
+  yyjson: https://github.com/ibireme/yyjson.git @ 0.12.0
+  swift-service-lifecycle: https://github.com/swift-server/swift-service-lifecycle @ 2.11.0
+
+resolved source packages: swift-log, Jinja, swift-configuration, swift-certificates, Xet, mlx-swift-lm, swift-nio-ssl, EventSource, MLXAudio, FeedKit, swift-numerics, swift-nio-transport-services, async-http-client, mlx-swift, swift-asn1, swift-http-types, swift-transformers, swift-collections, swift-service-context, Kingfisher, swift-http-structured-headers, swift-atomics, swift-async-algorithms, swift-distributed-tracing, swift-huggingface, swift-system, swift-algorithms, SwiftSoup, swift-nio-http2, swift-nio, swift-nio-extras, swift-crypto, yyjson, swift-service-lifecycle
