@@ -368,6 +368,25 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var kokoroPrecacheStatusSection: some View {
+        if kokoroPrecacheEnabled {
+            Text("Pre-cache enabled (loads models at launch).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Button("Disable Pre-cache") {
+                appState.summaryService.setKokoroPrecacheEnabled(false)
+                kokoroPrecacheEnabled = false
+                kokoroPrewarmStatus = "Pre-cache disabled (takes effect after relaunch)"
+                var newSettings = appState.settings
+                newSettings.kokoroPrecacheEnabled = false
+                appState.updateSettings(newSettings)
+            }
+            .settingsGlassButtonStyle()
+        }
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -802,21 +821,7 @@ struct SettingsView: View {
                             .settingsGlassButtonStyle(prominent: true)
                             .disabled(isKokoroPrewarming || !KokoroTTSService.shared.isAvailable)
 
-                            if kokoroPrecacheEnabled {
-                                Text("Pre-cache enabled (loads models at launch).")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-
-                                Button("Disable Pre-cache") {
-                                    appState.summaryService.setKokoroPrecacheEnabled(false)
-                                    kokoroPrecacheEnabled = false
-                                    kokoroPrewarmStatus = "Pre-cache disabled (takes effect after relaunch)"
-                                    var newSettings = appState.settings
-                                    newSettings.kokoroPrecacheEnabled = false
-                                    appState.updateSettings(newSettings)
-                                }
-                                .settingsGlassButtonStyle()
-                            }
+                            kokoroPrecacheStatusSection
 
                             if let status = kokoroPrewarmStatus {
                                 Text(status).font(.caption).foregroundColor(.green)
