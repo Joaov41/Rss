@@ -551,6 +551,26 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var opmlImportButton: some View {
+        Button(action: {
+            showingFileImporter = true
+        }) {
+            HStack {
+                if isImporting {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Importing...")
+                } else {
+                    Image(systemName: "square.and.arrow.down")
+                    Text("Import OPML")
+                }
+            }
+        }
+        .disabled(isImporting || isExporting)
+        .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
+    }
+
+    @ViewBuilder
     private var cloudSyncSection: some View {
         Section("Cloud Sync") {
             let persistenceManager = PersistenceManager.shared
@@ -960,23 +980,7 @@ struct SettingsView: View {
                     }
                     
                     Section("OPML Management") {
-                        Button(action: {
-                            showingFileImporter = true
-                        }) {
-                            HStack {
-                                if isImporting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Importing...")
-                                } else {
-                                    Image(systemName: "square.and.arrow.down")
-                                    Text("Import OPML")
-                                }
-                            }
-                        }
-                        .disabled(isImporting || isExporting)
-                        .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
-                        
+                        opmlImportButton
                         opmlExportButton
                     }
 
