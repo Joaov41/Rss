@@ -408,6 +408,15 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var modelStorageStatusView: some View {
+        if let modelStorageStatus {
+            Text(modelStorageStatus)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
     private var readHistoryMigrationButtonLabel: some View {
         if isMigratingReadHistory {
             Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
@@ -1126,11 +1135,7 @@ struct SettingsView: View {
                                 }
                             }
 
-                            if let modelStorageStatus {
-                                Text(modelStorageStatus)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
+                            modelStorageStatusView
 
                             Text("Deleting a model removes only that selected model. Other app caches and other models are left alone.")
                                 .font(.caption)
