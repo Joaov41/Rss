@@ -422,6 +422,10 @@ struct SettingsView: View {
             .foregroundColor(.secondary)
     }
 
+    private func macVoicePickerLabel(name: String, id: String) -> some View {
+        Text(name).tag(id)
+    }
+
     @ViewBuilder
     private var modelStorageStatusView: some View {
         if let modelStorageStatus {
@@ -976,7 +980,7 @@ struct SettingsView: View {
                         } else {
                             Picker("Voice", selection: $localVoiceID) {
                                 ForEach(macVoices, id: \.id) { v in
-                                    Text(v.name).tag(v.id)
+                                    macVoicePickerLabel(name: v.name, id: v.id)
                                 }
                             }
                             .onChange(of: localVoiceID) { newID in
