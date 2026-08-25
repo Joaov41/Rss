@@ -66,7 +66,8 @@ let package = Package(
     .target(
       name: "LiteRTFoundation",
       dependencies: ["LiteRTLM"],
-      path: "Sources/LiteRTFoundation"
+      path: "Sources/LiteRTFoundation",
+      exclude: ["FM"]
     ),
   ]
 )
