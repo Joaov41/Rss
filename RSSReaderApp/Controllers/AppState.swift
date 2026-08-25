@@ -4972,6 +4972,7 @@ class AppState: ObservableObject {
     
     func launchCloudRequest(for text: String, type: AppleIntelligenceRequestType, completion: ((String) -> Void)?) {
         #if canImport(FoundationModels)
+        #if swift(>=6.4)
         if #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) {
             launchPrivateCloudComputeRequest(for: text, type: type, completion: completion)
         } else {
@@ -4983,6 +4984,13 @@ class AppState: ObservableObject {
         }
         #else
         handleCloudResult(
+            "Apple Cloud requires the macOS 27 Foundation Models implementation; it is unavailable in this macOS 26 build.",
+            for: type,
+            completion: completion
+        )
+        #endif
+        #else
+        handleCloudResult(
             "Apple Cloud is unavailable because FoundationModels is not available in this build.",
             for: type,
             completion: completion
@@ -4991,6 +4999,7 @@ class AppState: ObservableObject {
     }
 
     #if canImport(FoundationModels)
+    #if swift(>=6.4)
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     private func launchPrivateCloudComputeRequest(for text: String, type: AppleIntelligenceRequestType, completion: ((String) -> Void)?) {
         print("☁️ AppState: Using Apple Private Cloud Compute for \(type)")
@@ -5061,6 +5070,7 @@ class AppState: ObservableObject {
 
         return "Apple Cloud error: \(description)"
     }
+    #endif
     #endif
     
     private func fallbackToRegularURL(text: String, type: AppleIntelligenceRequestType) {
