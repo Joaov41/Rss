@@ -241,6 +241,18 @@ struct SettingsView: View {
         }
     }
 
+    private func localTTSEngineDidChange(_ newValue: LocalTTSEngine) {
+        appState.summaryService.setLocalTTSEngine(newValue)
+        var newSettings = appState.settings
+        newSettings.localTTSEngine = newValue
+        appState.updateSettings(newSettings)
+        if newValue == .kokoro {
+            kokoroVoice = appState.summaryService.getKokoroVoice()
+            kokoroSpeed = appState.summaryService.getKokoroSpeed()
+            kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
+        }
+    }
+
     #if os(macOS)
     private var macAppearanceSelector: some View {
         HStack(spacing: 8) {
@@ -864,15 +876,7 @@ struct SettingsView: View {
                             }
                         }
                         .onChange(of: localTTSEngine) { newValue in
-                            appState.summaryService.setLocalTTSEngine(newValue)
-                            var newSettings = appState.settings
-                            newSettings.localTTSEngine = newValue
-                            appState.updateSettings(newSettings)
-                            if newValue == .kokoro {
-                                kokoroVoice = appState.summaryService.getKokoroVoice()
-                                kokoroSpeed = appState.summaryService.getKokoroSpeed()
-                                kokoroPrecacheEnabled = appState.summaryService.isKokoroPrecacheEnabled()
-                            }
+                            localTTSEngineDidChange(newValue)
                         }
 
                         localTTSEngineAvailabilityDescription
