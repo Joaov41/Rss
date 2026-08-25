@@ -395,6 +395,15 @@ struct SettingsView: View {
             .truncationMode(.tail)
     }
 
+    @ViewBuilder
+    private var readHistoryMigrationButtonLabel: some View {
+        if isMigratingReadHistory {
+            Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
+        } else {
+            Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
+        }
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -577,11 +586,7 @@ struct SettingsView: View {
                         Button {
                             showReadHistoryMigrationConfirm = true
                         } label: {
-                            if isMigratingReadHistory {
-                                Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            } else {
-                                Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            }
+                            readHistoryMigrationButtonLabel
                         }
                         .settingsGlassButtonStyle()
                         .tint(.purple)
