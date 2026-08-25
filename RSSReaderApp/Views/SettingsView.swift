@@ -407,6 +407,16 @@ struct SettingsView: View {
             .truncationMode(.tail)
     }
 
+    private func storageBreakdownItemSize(_ item: AppStorageBreakdownItem) -> some View {
+        Text(item.sizeText)
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .fixedSize()
+            .frame(minWidth: 64, alignment: .trailing)
+    }
+
     @ViewBuilder
     private var modelStorageStatusView: some View {
         if let modelStorageStatus {
@@ -1030,13 +1040,7 @@ struct SettingsView: View {
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                                        Text(item.sizeText)
-                                            .font(.caption)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .frame(minWidth: 64, alignment: .trailing)
+                                        storageBreakdownItemSize(item)
 
                                         ZStack {
                                             if item.cleanupKind != nil || item.isModelStorage {
