@@ -629,6 +629,11 @@ struct SettingsView: View {
         }
     }
 
+    private var cloudSyncPrimaryDeviceIcon: some View {
+        Image(systemName: "icloud.fill")
+            .foregroundColor(.blue)
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -800,8 +805,7 @@ struct SettingsView: View {
                     } else if let primaryName = persistenceManager.primaryDeviceNameForSubscriptions {
                         // Another device is primary
                         HStack {
-                            Image(systemName: "icloud.fill")
-                                .foregroundColor(.blue)
+                            cloudSyncPrimaryDeviceIcon
                             VStack(alignment: .leading) {
                                 Text("Syncing from:")
                                     .font(.caption)
