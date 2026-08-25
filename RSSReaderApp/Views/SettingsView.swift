@@ -416,6 +416,10 @@ struct SettingsView: View {
         }
     }
 
+    private func modelStorageIconName(for kind: LocalModelStorageItem.Kind) -> String {
+        kind == .liteRT ? "cube.box.fill" : "cpu.fill"
+    }
+
     @ViewBuilder
     private var readHistoryMigrationButtonLabel: some View {
         if isMigratingReadHistory {
@@ -1085,7 +1089,7 @@ struct SettingsView: View {
                             } else {
                                 ForEach(modelStorageItems) { item in
                                     HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: item.kind == .liteRT ? "cube.box.fill" : "cpu.fill")
+                                        Image(systemName: modelStorageIconName(for: item.kind))
                                             .foregroundStyle(.secondary)
                                             .frame(width: 22, alignment: .center)
 
