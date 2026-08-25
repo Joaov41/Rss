@@ -421,6 +421,90 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var kokoroTTSSection: some View {
+        if localTTSEngine == .kokoro {
+            Section("MLX TTS") {
+                Picker("MLX Voice", selection: $kokoroVoice) {
+                    ForEach(KokoroVoice.allCases) { voice in
+                        Text(voice.displayName).tag(voice.rawValue)
+                    }
+                }
+                .onChange(of: kokoroVoice) { newValue in
+                    appState.summaryService.setKokoroVoice(newValue)
+                    kokoroVoice = appState.summaryService.getKokoroVoice()
+                    var newSettings = appState.settings
+                    newSettings.kokoroVoice = kokoroVoice
+                    appState.updateSettings(newSettings)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Speed")
+                        Spacer()
+                        Text(String(format: "%.1fx", kokoroSpeed))
+                            .foregroundColor(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { kokoroSpeed },
+                            set: { newValue in
+                                kokoroSpeed = newValue
+                                appState.summaryService.setKokoroSpeed(newValue)
+                                var newSettings = appState.settings
+                                newSettings.kokoroSpeed = kokoroSpeed
+                                appState.updateSettings(newSettings)
+                            }
+                        ),
+                        in: 0.5...2.0,
+                        step: 0.1
+                    )
+                }
+
+                Button(action: {
+                    isKokoroPrewarming = true
+                    kokoroPrewarmError = nil
+                    kokoroPrewarmStatus = nil
+                    Task {
+                        do {
+                            try await appState.summaryService.precacheKokoroNow()
+                            await MainActor.run {
+                                isKokoroPrewarming = false
+                                kokoroPrewarmStatus = "MLX pre-cache complete"
+                                kokoroPrecacheEnabled = true
+                                var newSettings = appState.settings
+                                newSettings.kokoroPrecacheEnabled = true
+                                appState.updateSettings(newSettings)
+                            }
+                        } catch {
+                            await MainActor.run {
+                                isKokoroPrewarming = false
+                                kokoroPrewarmError = error.localizedDescription
+                            }
+                        }
+                    }
+                }) {
+                    HStack {
+                        if isKokoroPrewarming { ProgressView().scaleEffect(0.8) }
+                        else { Image(systemName: "bolt.circle") }
+                        Text("Pre-cache MLX TTS")
+                    }
+                }
+                .settingsGlassButtonStyle(prominent: true)
+                .disabled(isKokoroPrewarming || !KokoroTTSService.shared.isAvailable)
+
+                kokoroPrecacheStatusSection
+
+                if let status = kokoroPrewarmStatus {
+                    Text(status).font(.caption).foregroundColor(.green)
+                }
+                if let error = kokoroPrewarmError {
+                    Text(error).font(.caption).foregroundColor(.red)
+                }
+            }
+        }
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -769,86 +853,7 @@ struct SettingsView: View {
                         localTTSEngineAvailabilityDescription
                     }
 
-                    if localTTSEngine == .kokoro {
-                        Section("MLX TTS") {
-                            Picker("MLX Voice", selection: $kokoroVoice) {
-                                ForEach(KokoroVoice.allCases) { voice in
-                                    Text(voice.displayName).tag(voice.rawValue)
-                                }
-                            }
-                            .onChange(of: kokoroVoice) { newValue in
-                                appState.summaryService.setKokoroVoice(newValue)
-                                kokoroVoice = appState.summaryService.getKokoroVoice()
-                                var newSettings = appState.settings
-                                newSettings.kokoroVoice = kokoroVoice
-                                appState.updateSettings(newSettings)
-                            }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Speed")
-                                    Spacer()
-                                    Text(String(format: "%.1fx", kokoroSpeed))
-                                        .foregroundColor(.secondary)
-                                }
-                                Slider(
-                                    value: Binding(
-                                        get: { kokoroSpeed },
-                                        set: { newValue in
-                                            kokoroSpeed = newValue
-                                            appState.summaryService.setKokoroSpeed(newValue)
-                                            var newSettings = appState.settings
-                                            newSettings.kokoroSpeed = kokoroSpeed
-                                            appState.updateSettings(newSettings)
-                                        }
-                                    ),
-                                    in: 0.5...2.0,
-                                    step: 0.1
-                                )
-                            }
-
-                            Button(action: {
-                                isKokoroPrewarming = true
-                                kokoroPrewarmError = nil
-                                kokoroPrewarmStatus = nil
-                                Task {
-                                    do {
-                                        try await appState.summaryService.precacheKokoroNow()
-                                        await MainActor.run {
-                                            isKokoroPrewarming = false
-                                            kokoroPrewarmStatus = "MLX pre-cache complete"
-                                            kokoroPrecacheEnabled = true
-                                            var newSettings = appState.settings
-                                            newSettings.kokoroPrecacheEnabled = true
-                                            appState.updateSettings(newSettings)
-                                        }
-                                    } catch {
-                                        await MainActor.run {
-                                            isKokoroPrewarming = false
-                                            kokoroPrewarmError = error.localizedDescription
-                                        }
-                                    }
-                                }
-                            }) {
-                                HStack {
-                                    if isKokoroPrewarming { ProgressView().scaleEffect(0.8) }
-                                    else { Image(systemName: "bolt.circle") }
-                                    Text("Pre-cache MLX TTS")
-                                }
-                            }
-                            .settingsGlassButtonStyle(prominent: true)
-                            .disabled(isKokoroPrewarming || !KokoroTTSService.shared.isAvailable)
-
-                            kokoroPrecacheStatusSection
-
-                            if let status = kokoroPrewarmStatus {
-                                Text(status).font(.caption).foregroundColor(.green)
-                            }
-                            if let error = kokoroPrewarmError {
-                                Text(error).font(.caption).foregroundColor(.red)
-                            }
-                        }
-                    }
+                    kokoroTTSSection
                     
                     // Local TTS voice picker (platform-specific, only lists working voices)
                     if localTTSEngine == .system {
