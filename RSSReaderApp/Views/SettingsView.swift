@@ -404,6 +404,23 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var localTTSEngineAvailabilityDescription: some View {
+        if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
+            Text("MLX TTS requires the MLXAudio package and model access.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else if localTTSEngine == .kokoro {
+            Text("MLX TTS runs fully on device. First use may download large model assets.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            Text("Uses system voices for on-device speech.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -749,19 +766,7 @@ struct SettingsView: View {
                             }
                         }
 
-                        if localTTSEngine == .kokoro && !KokoroTTSService.shared.isAvailable {
-                            Text("MLX TTS requires the MLXAudio package and model access.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if localTTSEngine == .kokoro {
-                            Text("MLX TTS runs fully on device. First use may download large model assets.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("Uses system voices for on-device speech.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+                        localTTSEngineAvailabilityDescription
                     }
 
                     if localTTSEngine == .kokoro {
