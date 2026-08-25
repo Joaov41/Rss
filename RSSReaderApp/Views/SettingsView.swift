@@ -505,6 +505,26 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private var opmlExportButton: some View {
+        Button(action: {
+            exportOPML()
+        }) {
+            HStack {
+                if isExporting {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Exporting...")
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                    Text("Export OPML")
+                }
+            }
+        }
+        .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
+        .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
+    }
+
     var body: some View {
         settingsNavigationContainer {
             ZStack {
@@ -935,22 +955,7 @@ struct SettingsView: View {
                         .disabled(isImporting || isExporting)
                         .settingsGlassButtonStyle(tintColor: .blue.opacity(0.3))
                         
-                        Button(action: {
-                            exportOPML()
-                        }) {
-                            HStack {
-                                if isExporting {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Exporting...")
-                                } else {
-                                    Image(systemName: "square.and.arrow.up")
-                                    Text("Export OPML")
-                                }
-                            }
-                        }
-                        .disabled(isExporting || appState.subscriptions.isEmpty || isImporting)
-                        .settingsGlassButtonStyle(tintColor: .green.opacity(0.3))
+                        opmlExportButton
                     }
 
                     cacheManagementSection
