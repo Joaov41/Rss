@@ -439,6 +439,14 @@ struct SettingsView: View {
         kind == .liteRT ? "cube.box.fill" : "cpu.fill"
     }
 
+    private func modelStorageItemDetail(_ item: LocalModelStorageItem) -> some View {
+        Text("\(item.kind.rawValue) • \(item.detail)")
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
     @ViewBuilder
     private var readHistoryMigrationButtonLabel: some View {
         if isMigratingReadHistory {
@@ -1129,11 +1137,7 @@ struct SettingsView: View {
                                                         .clipShape(Capsule())
                                                 }
                                             }
-                                            Text("\(item.kind.rawValue) • \(item.detail)")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
+                                            modelStorageItemDetail(item)
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
 
