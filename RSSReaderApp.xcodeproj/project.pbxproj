@@ -867,7 +867,7 @@
 				CODE_SIGN_ENTITLEMENTS = "RSSReaderApp/RSSReaderApp (iOS)Debug.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 130;
+				CURRENT_PROJECT_VERSION = 134;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
@@ -905,7 +905,7 @@
 				CODE_SIGN_ENTITLEMENTS = "RSSReaderApp (iOS)Release.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 130;
+				CURRENT_PROJECT_VERSION = 134;
 				DEVELOPMENT_ASSET_PATHS = "\"RSSReaderApp/Preview Content\"";
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				ENABLE_PREVIEWS = YES;
@@ -1003,7 +1003,7 @@
 				CODE_SIGN_ENTITLEMENTS = LatestNewsWidget/LatestNewsWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 130;
+				CURRENT_PROJECT_VERSION = 134;
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LatestNewsWidget/Info.plist;
@@ -1031,7 +1031,7 @@
 				CODE_SIGN_ENTITLEMENTS = LatestNewsWidget/LatestNewsWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 130;
+				CURRENT_PROJECT_VERSION = 134;
 				DEVELOPMENT_TEAM = HNG8WV554B;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LatestNewsWidget/Info.plist;
