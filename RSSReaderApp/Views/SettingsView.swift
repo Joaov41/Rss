@@ -486,6 +486,74 @@ struct SettingsView: View {
             .padding(.horizontal, 4)
         }
     }
+
+    @ViewBuilder
+    private var readHistoryMigrationButtonLabel: some View {
+        if isMigratingReadHistory {
+            Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
+        } else {
+            Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
+        }
+    }
+
+    @ViewBuilder
+    private var cloudSyncSection: some View {
+        Section("Cloud Sync") {
+            let persistenceManager = PersistenceManager.shared
+
+            Button {
+                appState.manualCloudRefresh()
+            } label: {
+                if appState.manualCloudSyncState == .syncing {
+                    Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                } else if appState.manualCloudSyncState == .completed {
+                    Label("Synced", systemImage: "checkmark.circle.fill")
+                } else {
+                    Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
+                }
+            }
+            .settingsGlassButtonStyle(prominent: true)
+            .tint(.blue)
+            .disabled(appState.manualCloudSyncState == .syncing)
+
+            Text("Pull the latest read states and subscriptions from iCloud immediately.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let status = appState.manualCloudSyncStatusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(.green)
+            }
+
+            if persistenceManager.isThisDevicePrimaryForSubscriptions {
+                Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
+                    .font(.subheadline)
+
+                Button {
+                    showReadHistoryMigrationConfirm = true
+                } label: {
+                    readHistoryMigrationButtonLabel
+                }
+                .settingsGlassButtonStyle()
+                .tint(.purple)
+                .disabled(isMigratingReadHistory)
+
+                if isMigratingReadHistory {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                Text("One-time: seeds the new sync format so unread badge counts match across devices.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
     
     var body: some View {
         settingsNavigationContainer {
@@ -634,65 +702,7 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                Section("Cloud Sync") {
-                    let persistenceManager = PersistenceManager.shared
-
-                    Button {
-                        appState.manualCloudRefresh()
-                    } label: {
-                        if appState.manualCloudSyncState == .syncing {
-                            Label("Syncing…", systemImage: "arrow.triangle.2.circlepath.circle.fill")
-                        } else if appState.manualCloudSyncState == .completed {
-                            Label("Synced", systemImage: "checkmark.circle.fill")
-                        } else {
-                            Label("Sync Now", systemImage: "arrow.clockwise.circle.fill")
-                        }
-                    }
-                    .settingsGlassButtonStyle(prominent: true)
-                    .tint(.blue)
-                    .disabled(appState.manualCloudSyncState == .syncing)
-
-                    Text("Pull the latest read states and subscriptions from iCloud immediately.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if let status = appState.manualCloudSyncStatusMessage {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
-                            .font(.subheadline)
-
-                        Button {
-                            showReadHistoryMigrationConfirm = true
-                        } label: {
-                            if isMigratingReadHistory {
-                                Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            } else {
-                                Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            }
-                        }
-                        .settingsGlassButtonStyle()
-                        .tint(.purple)
-                        .disabled(isMigratingReadHistory)
-
-                        if isMigratingReadHistory {
-                            ProgressView()
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-
-                        Text("One-time: seeds the new sync format so unread badge counts match across devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                cloudSyncSection
 
                 Section("Primary Device for Subscriptions") {
                     let persistenceManager = PersistenceManager.shared
