@@ -4447,6 +4447,7 @@ class AppState: ObservableObject {
             output = try await summaryService.generateContentWithGemini(prompt: prompt)
         case .appleCloud:
             #if canImport(FoundationModels)
+            #if swift(>=6.4)
             guard #available(macOS 27.0, *) else {
                 throw BatchPodcastError.providerFailure("Apple Cloud requires macOS 27 with Apple Intelligence enabled.")
             }
@@ -4457,6 +4458,9 @@ class AppState: ObservableObject {
             } catch {
                 throw BatchPodcastError.providerFailure(privateCloudComputeErrorMessage(error))
             }
+            #else
+            throw BatchPodcastError.providerFailure("Apple Cloud requires the macOS 27 Foundation Models implementation; it is unavailable in this macOS 26 build.")
+            #endif
             #else
             throw BatchPodcastError.providerFailure("Apple Cloud is unavailable because FoundationModels is not available in this build.")
             #endif
