@@ -564,7 +564,11 @@ class FeedService {
             }
         }
         
-        return Publishers.MergeMany(articlePublishers)
+        // Keep secondary article requests bounded. A single feed can contain
+        // many truncated entries; MergeMany would otherwise start every page
+        // request at once and exhaust the shared connection pool.
+        return articlePublishers.publisher
+            .flatMap(maxPublishers: .max(4)) { $0 }
             .collect()
             .map { updatedArticles -> Feed in
                 // Sort articles by publishDate descending (most recent first)

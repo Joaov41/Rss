@@ -14,6 +14,194 @@ enum AskAISelectionAction {
 private let conversationalMarkdownParagraphMarker = "\u{E000}"
 private let conversationalMarkdownParagraphSeparator = "\n\n\(conversationalMarkdownParagraphMarker)\n\n"
 
+/// Carries the bounded source that grounded an answer into a later selection
+/// follow-up. The source and the original Q&A are kept separate so a reply
+/// selection can add its current displayed answer without losing the source.
+struct AskAISelectionOrigin {
+    let sourceLabel: String
+    let sourceText: String
+    let originalQuestion: String?
+    let originalAnswer: String?
+
+    init(
+        sourceLabel: String,
+        sourceText: String,
+        originalQuestion: String? = nil,
+        originalAnswer: String? = nil
+    ) {
+        self.sourceLabel = sourceLabel
+        self.sourceText = sourceText
+        self.originalQuestion = originalQuestion
+        self.originalAnswer = originalAnswer
+    }
+
+    var promptSourceLabel: String {
+        let hasQA = !(originalQuestion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(originalAnswer?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        return hasQA ? "Original source and Q&A context" : sourceLabel
+    }
+
+    func boundedSource(additionalAnswer: String? = nil, maxCharacters: Int = 40_000) -> String {
+        func normalized(_ value: String?) -> String {
+            guard let value else { return "" }
+            return value
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+                .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let source = normalized(sourceText)
+        let question = normalized(originalQuestion)
+        let answer = normalized(originalAnswer)
+        let currentAnswer = normalized(additionalAnswer)
+        var qaSections: [(label: String, body: String)] = []
+        if !question.isEmpty {
+            qaSections.append(("Original Q&A question", question))
+        }
+        if !answer.isEmpty {
+            qaSections.append(("Complete Q&A answer", answer))
+        }
+        if !currentAnswer.isEmpty, currentAnswer != answer {
+            qaSections.append(("Current displayed Ask AI answer", currentAnswer))
+        }
+        let sourceLabel = sourceLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Original source"
+            : sourceLabel
+        let sectionCount = (source.isEmpty ? 0 : 1) + qaSections.count
+        let separatorBudget = max(0, sectionCount - 1) * 2
+        let sourceHeaderBudget = source.isEmpty ? 0 : sourceLabel.count + 2
+        let qaHeaderBudget = qaSections.reduce(0) { $0 + $1.label.count + 2 }
+        let availableBodyBudget = max(0, maxCharacters - separatorBudget - sourceHeaderBudget - qaHeaderBudget)
+        let qaBodyCount = qaSections.reduce(0) { $0 + $1.body.count }
+
+        // Keep at least a quarter of the available body budget for the source
+        // when both the source and Q&A are oversized. This prevents a long
+        // answer from silently replacing the article or Reddit grounding.
+        let sourceMinimumBudget = source.isEmpty ? 0 : min(source.count, max(1, availableBodyBudget / 4))
+        let sourceBudget: Int
+        if source.isEmpty {
+            sourceBudget = 0
+        } else if source.count + qaBodyCount <= availableBodyBudget {
+            sourceBudget = source.count
+        } else {
+            let qaReservation = min(qaBodyCount, max(0, availableBodyBudget - sourceMinimumBudget))
+            sourceBudget = min(source.count, max(sourceMinimumBudget, availableBodyBudget - qaReservation))
+        }
+
+        let qaBudget = max(0, availableBodyBudget - sourceBudget)
+        var qaBodyBudgets = Array(repeating: 0, count: qaSections.count)
+        var remainingQABudget = qaBudget
+        for index in qaSections.indices where remainingQABudget > 0 {
+            qaBodyBudgets[index] = min(1, qaSections[index].body.count)
+            remainingQABudget -= qaBodyBudgets[index]
+        }
+        while remainingQABudget > 0 {
+            var madeProgress = false
+            for index in qaSections.indices where remainingQABudget > 0 {
+                guard qaBodyBudgets[index] < qaSections[index].body.count else { continue }
+                qaBodyBudgets[index] += 1
+                remainingQABudget -= 1
+                madeProgress = true
+            }
+            if !madeProgress { break }
+        }
+
+        var sections: [String] = []
+        if sourceBudget > 0 {
+            sections.append("\(sourceLabel):\n\(source.prefix(sourceBudget))")
+        }
+        for (index, section) in qaSections.enumerated() where qaBodyBudgets[index] > 0 {
+            sections.append("\(section.label):\n\(section.body.prefix(qaBodyBudgets[index]))")
+        }
+
+        let composed = sections.joined(separator: "\n\n")
+        return composed.count > maxCharacters ? String(composed.prefix(maxCharacters)) : composed
+    }
+}
+
+func buildAskAISelectionPrompt(
+    selectedText: String,
+    extractedContext: String,
+    sourceContext: String,
+    sourceLabel: String = "Original source"
+) -> String {
+    func normalized(_ value: String, maxCharacters: Int) -> String {
+        var normalized = value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+            .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.count > maxCharacters {
+            normalized = String(normalized.prefix(maxCharacters))
+        }
+        return normalized
+    }
+
+    let selected = normalized(selectedText, maxCharacters: 8_000)
+    let context = normalized(extractedContext, maxCharacters: 16_000)
+    let source = normalized(sourceContext, maxCharacters: 40_000)
+    let label = normalized(sourceLabel, maxCharacters: 120)
+    guard !selected.isEmpty else { return "" }
+
+    if !source.isEmpty {
+        return """
+        Answer the question using only the selected text, nearby rendered context, and original source material.
+
+        Rules:
+        - Return plain text only.
+        - Do not use Markdown symbols, headings, bullets, or code fences.
+        - Use short paragraphs separated by a blank line when the answer has multiple ideas.
+        - Treat the selected text as the thing being asked about.
+        - Use the original source material to verify, explain, or add relevant detail.
+        - If the original source material does not answer it, say the information is not available in the source.
+
+        Question:
+        What is said about this selected text in the original source?
+
+        Selected text:
+        \(selected)
+
+        Nearby rendered context:
+        \(context.isEmpty ? "(No nearby rendered context was captured.)" : context)
+
+        \(label.isEmpty ? "Original source" : label):
+        \(source)
+        """
+    }
+
+    return """
+    Answer the question using only the selected text and nearby rendered context.
+
+    Rules:
+    - Return plain text only.
+    - Do not use Markdown symbols, headings, bullets, or code fences.
+    - Use short paragraphs separated by a blank line when the answer has multiple ideas.
+    - If the selected text and nearby context do not answer it, say the information is not available.
+
+    Question:
+    What is said about this selected text?
+
+    Selected text:
+    \(selected)
+
+    Nearby rendered context:
+    \(context.isEmpty ? "(No nearby rendered context was captured.)" : context)
+    """
+}
+
+func askAINearbyRenderedContext(selectedText: String, in renderedText: String, window: Int = 320) -> String {
+    let selected = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !selected.isEmpty else { return "" }
+    let text = renderedText
+    guard let range = text.range(of: selected) else {
+        return String(text.prefix(window * 2))
+    }
+    let start = text.index(range.lowerBound, offsetBy: -window, limitedBy: text.startIndex) ?? text.startIndex
+    let end = text.index(range.upperBound, offsetBy: window, limitedBy: text.endIndex) ?? text.endIndex
+    return String(text[start..<end])
+}
+
 /// Preserve Markdown block syntax while making provider-supplied prose line
 /// breaks visible in the native macOS text view.
 func normalizeAIReplyMarkdown(_ input: String) -> String {
@@ -242,6 +430,7 @@ struct AskAIResponseSheet: View {
     let isLoading: Bool
     let response: String?
     var markdownResponse: String? = nil
+    var selectionOrigin: AskAISelectionOrigin? = nil
     let errorMessage: String?
     let onClose: () -> Void
     let onCopy: () -> Void
@@ -260,6 +449,7 @@ struct AskAIResponseSheet: View {
                     isLoading: false,
                     response: followUpResponse,
                     markdownResponse: followUpMarkdownResponse,
+                    selectionOrigin: selectionOrigin,
                     errorMessage: nil,
                     onClose: {
                         showFollowUpSheet = false
@@ -418,25 +608,18 @@ struct AskAIResponseSheet: View {
         let selected = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let context = formatAskAIResponseForDisplay(currentAnswer)
         guard !selected.isEmpty, !context.isEmpty else { return }
+        let nearbyContext = askAINearbyRenderedContext(selectedText: selected, in: context)
 
-        let prompt = """
-        Answer the question using only the selected text and the current Ask AI answer.
-
-        Rules:
-        - Return plain text only.
-        - Do not use Markdown symbols, headings, bullets, or code fences.
-        - Use short paragraphs separated by a blank line when the answer has multiple ideas.
-        - If the current answer does not contain enough information, say so.
-
-        Question:
-        What is said about this selected text in the current answer?
-
-        Selected text:
-        \(selected)
-
-        Current Ask AI Answer:
-        \(context)
-        """
+        let origin = selectionOrigin ?? AskAISelectionOrigin(
+            sourceLabel: "Current Ask AI answer",
+            sourceText: context
+        )
+        let prompt = buildAskAISelectionPrompt(
+            selectedText: selected,
+            extractedContext: nearbyContext,
+            sourceContext: origin.boundedSource(additionalAnswer: context),
+            sourceLabel: origin.promptSourceLabel
+        )
 
         followUpResponse = nil
         followUpMarkdownResponse = nil

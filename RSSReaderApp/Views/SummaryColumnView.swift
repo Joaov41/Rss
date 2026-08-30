@@ -48,6 +48,7 @@ struct SummaryColumnView: View {
     @State private var selectionAskAIMarkdownResponse: String?
     @State private var selectionAskAIError: String?
     @State private var selectionAskAITask: Task<Void, Never>?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
 
     private var shouldShowExplicitWebAIControls: Bool {
         appState.settings.selectedSummaryProvider != .webAI
@@ -317,6 +318,7 @@ struct SummaryColumnView: View {
                 isLoading: isSelectionAskAIInFlight,
                 response: selectionAskAIResponse,
                 markdownResponse: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 errorMessage: selectionAskAIError,
                 onClose: { showSelectionAskAIResponse = false },
                 onCopy: copySelectionAskAIResponse
@@ -887,7 +889,11 @@ struct SummaryColumnView: View {
         appState.requestSummary(for: article)
     }
 
-    private func askAIFromSummaryColumnSelection(_ selection: String, article: Article, action: AskAISelectionAction) {
+    private func askAIFromSummaryColumnSelection(
+        _ selection: String,
+        article: Article,
+        action: AskAISelectionAction
+    ) {
         let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -898,10 +904,17 @@ struct SummaryColumnView: View {
         selectionAskAIError = nil
         showSelectionAskAIResponse = true
 
+        let source = appState.articleSelectionSourceContext(for: article)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text
+        )
         let prompt = appState.articleQAPrompt(
             article: article,
             question: "What is said about \(trimmed)?"
         )
+        guard !prompt.isEmpty else { return }
+        selectionAskAIOrigin = origin
 
         selectionAskAITask = Task {
             let answer = await withCheckedContinuation { continuation in
