@@ -297,12 +297,19 @@ final class GlobalSummaryService {
         let index: Int
         let post: RedditPost
         let topLevel: [RedditCommentModel]
+        let allComments: [RedditCommentModel]
         let rateLimitRemaining: Double?
         let rateLimitReset: Double?
         let retryAfter: Double?
     }
 
-    private func processBatch(batch: [(index: Int, post: RedditPost)], batchIndex: Int, topComments: Int) -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never> {
+    private static func flattenedCommentTexts(_ comments: [RedditCommentModel]) -> [String] {
+        comments.flatMap { comment in
+            ["u/\(comment.author): \(comment.body)"] + flattenedCommentTexts(comment.replies)
+        }
+    }
+
+    private func processBatch(batch: [(index: Int, post: RedditPost)], batchIndex: Int, topComments: Int) -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never> {
         print("📱 GlobalSummaryService: Processing batch \(batchIndex + 1) with \(batch.count) posts")
 
         let maxRetriesPerPost = 2
@@ -323,9 +330,11 @@ final class GlobalSummaryService {
 
         func fetchWithRetry(pair: (index: Int, post: RedditPost), attempt: Int) -> AnyPublisher<CommentFetchOutcome, Never> {
             self.redditService
-                .fetchCommentsDetailed(for: pair.post.id, in: pair.post.subreddit, limit: topComments, depth: 0)
+                .fetchCommentsDetailed(for: pair.post.id, in: pair.post.subreddit, limit: topComments, depth: 10)
                 .flatMap { result -> AnyPublisher<CommentFetchOutcome, Never> in
-                    let sortedTopLevel = result.comments
+                    let filteredComments = result.comments
+                        .filter { $0.author.lowercased() != "automoderator" }
+                    let sortedTopLevel = filteredComments
                         .filter { $0.indentationLevel == 0 }
                         .sorted { $0.score > $1.score }
                     let limited = Array(sortedTopLevel.prefix(topComments))
@@ -363,6 +372,7 @@ final class GlobalSummaryService {
                     }
 
                     let topLevel: [RedditCommentModel]
+                    let allComments: [RedditCommentModel]
                     if hadError && limited.isEmpty {
                         let baseMessage = (result.error as? LocalizedError)?.errorDescription ?? result.error?.localizedDescription ?? "Unknown error"
                         let sanitized = baseMessage.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -380,14 +390,17 @@ final class GlobalSummaryService {
                         )
                         print("⚠️ GlobalSummaryService: Using placeholder comment for post \(pair.post.id) after retries exhausted")
                         topLevel = [placeholder]
+                        allComments = [placeholder]
                     } else {
                         topLevel = limited
+                        allComments = filteredComments
                     }
 
                     let outcome = CommentFetchOutcome(
                         index: pair.index,
                         post: pair.post,
                         topLevel: topLevel,
+                        allComments: allComments,
                         rateLimitRemaining: result.rateLimitRemaining,
                         rateLimitReset: result.rateLimitReset,
                         retryAfter: result.retryAfter
@@ -424,7 +437,7 @@ final class GlobalSummaryService {
 
         return processSequentially(remaining: ArraySlice(batch), accumulated: [])
             .map { outcomes in
-                outcomes.map { (index: $0.index, post: $0.post, topLevel: $0.topLevel) }
+                outcomes.map { (index: $0.index, post: $0.post, topLevel: $0.topLevel, allComments: $0.allComments) }
             }
             .eraseToAnyPublisher()
     }
@@ -468,8 +481,8 @@ final class GlobalSummaryService {
 
         let indexed = posts.enumerated().map { (idx, post) in (index: idx, post: post) }
 
-        // OPTIMIZED: Since we now only fetch 10 top-level comments (not 100+ with replies),
-        // we can use larger batches without hitting rate limits
+        // Keep the requested number of top-level roots for the summary payload while retaining
+        // every comment returned by the same fetch for cached global Q&A grounding.
         let batchSize = 10
         let batches = stride(from: 0, to: indexed.count, by: batchSize).map {
             Array(indexed[$0..<min($0 + batchSize, indexed.count)])
@@ -494,13 +507,13 @@ final class GlobalSummaryService {
             }
         }
 
-        func monitorBatch(_ publisher: AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never>) -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never> {
+        func monitorBatch(_ publisher: AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never>) -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never> {
             publisher
                 .handleEvents(receiveOutput: { _ in reportBatchCompletion() })
                 .eraseToAnyPublisher()
         }
         #else
-        func monitorBatch(_ publisher: AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never>) -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never> {
+        func monitorBatch(_ publisher: AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never>) -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never> {
             publisher
         }
         #endif
@@ -525,9 +538,9 @@ final class GlobalSummaryService {
 
         // CRITICAL FIX: Process batches SEQUENTIALLY, not in parallel
         // This is the key to avoiding rate limits - we must chain batches one after another
-        let firstBatchPublisher: AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never>
+        let firstBatchPublisher: AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never>
         if batches.isEmpty {
-            firstBatchPublisher = Just([(index: Int, post: RedditPost, topLevel: [RedditCommentModel])]()).eraseToAnyPublisher()
+            firstBatchPublisher = Just([(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])]()).eraseToAnyPublisher()
         } else {
             firstBatchPublisher = monitorBatch(processBatch(batch: batches[0], batchIndex: 0, topComments: topComments))
         }
@@ -538,7 +551,7 @@ final class GlobalSummaryService {
             let batchIndex = idx + 1 // Adjust index since we're using dropFirst()
 
             return accumulated
-                .flatMap { previousResults -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel])], Never> in
+                .flatMap { previousResults -> AnyPublisher<[(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])], Never> in
                     // Reduced delay since we're now fetching much less data (10 comments vs 100+)
                     return Just(())
                         .delay(for: .milliseconds(500), scheduler: DispatchQueue.global(qos: .userInitiated)) // Reduced to 0.5s for faster summary overview
@@ -587,7 +600,7 @@ final class GlobalSummaryService {
                 let ordered = results.sorted { $0.index < $1.index }
                 let postIds = ordered.map { $0.post.id }
                 let cachedContexts = ordered.map { triple in
-                    (triple.post, triple.topLevel.map { "u/\($0.author): \($0.body)" })
+                    (triple.post, Self.flattenedCommentTexts(triple.allComments))
                 }
                 self.redditCommentsCacheReporter?(cachedContexts)
                 let payload: [RedditPayloadItem] = ordered.map { triple in
@@ -4390,17 +4403,19 @@ class AppState: ObservableObject {
         sourceLabel: String,
         sourceText: String,
         question: String,
-        preferCompleteAnswer: Bool = false
+        preferCompleteAnswer: Bool = false,
+        additionalRules: String = ""
     ) -> String {
         let answerLengthRule = preferCompleteAnswer
             ? "- Give a complete answer using as much relevant detail as the source supports; use short paragraphs if needed."
             : "- Keep the answer concise, using short paragraphs if needed."
+        let additionalRuleText = additionalRules.isEmpty ? "" : "\n\(additionalRules)"
 
         return """
         Answer the question using only the source material.
 
         Rules:
-        - Use only facts present in the source.
+        - Use only facts present in the source.\(additionalRuleText)
         - If the source does not answer the question, say the information is not available in the source.
         - Return plain text only.
         - Do not use Markdown symbols, headings, bullets, or code fences.
@@ -4425,6 +4440,33 @@ class AppState: ObservableObject {
             preferCompleteAnswer: preferCompleteAnswer,
             maxCharacters: nil
         )
+    }
+
+    private func geminiArticleQAPrompt(article: Article, question: String) -> String {
+        let sourceText = "Title: \(article.title)\n\n\(normalizedSummarySourceText(cleanedArticleContent(article)))"
+        return """
+        Answer the question using only the complete article source.
+
+        Rules:
+        - Read the complete article source before deciding whether the answer is available.
+        - Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests; derive them from the article's explicit content and relationships.
+        - Resolve clear references, paraphrases, and equivalent terms from the surrounding article context.
+        - Do not invent details or make an unsupported inference.
+        - If no explicit or contextually supported answer exists anywhere in the article, say the information is not available in the article.
+        - Return plain text only.
+        - Do not use Markdown symbols, headings, bullets, or code fences.
+        - Keep the answer concise, using short paragraphs if needed.
+
+        <source_label>Article</source_label>
+        <source_text>
+        \(sourceText)
+        </source_text>
+
+        Question:
+        \(question.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        Return only the answer.
+        """
     }
 
     private func localArticleQAPrompt(article: Article, question: String, preferCompleteAnswer: Bool = false) -> String {
@@ -4461,8 +4503,47 @@ class AppState: ObservableObject {
             sourceLabel: comments.isEmpty ? "Reddit post" : "Reddit post and comments",
             sourceText: redditSummarySourceText(post: post, comments: comments),
             question: question,
-            preferCompleteAnswer: preferCompleteAnswer
+            preferCompleteAnswer: preferCompleteAnswer,
+            additionalRules: """
+            - Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests. Infer the best-supported theme from the post and the relevant or recurring viewpoints in the comments; the source does not need to use the literal word "theme".
+            - For those synthesis questions, answer with the overall idea supported by the source instead of requiring a sentence that explicitly labels a theme.
+            """
         )
+    }
+
+    private func geminiRedditQAPrompt(
+        post: RedditPost,
+        comments: [RedditCommentModel],
+        question: String
+    ) -> String {
+        let sourceLabel = comments.isEmpty ? "Reddit post" : "Reddit post and comments"
+        let sourceText = redditSummarySourceText(post: post, comments: comments)
+
+        return """
+        Answer the question using only the source material.
+
+        Rules:
+        - Read the complete source before deciding whether the answer is available.
+        - Use the title, post, and comments together.
+        - Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests. Infer the best-supported theme from the post and the relevant or recurring viewpoints in the comments; the source does not need to use the literal word "theme".
+        - For those synthesis questions, answer with the overall idea supported by the source instead of requiring a sentence that explicitly labels a theme.
+        - Resolve clear references, paraphrases, pronouns, and equivalent terms from their surrounding context; do not require the question and source to use identical words.
+        - Do not invent details or resolve a genuinely ambiguous reference without evidence from the source.
+        - Say the information is not available only when no explicit or contextually supported answer exists anywhere in the source; do not use that response merely because the word "theme" is not written literally.
+        - Return plain text only.
+        - Do not use Markdown symbols, headings, bullets, or code fences.
+        - Keep the answer concise, using short paragraphs if needed.
+
+        <source_label>\(sourceLabel)</source_label>
+        <source_text>
+        \(sourceText)
+        </source_text>
+
+        Question:
+        \(question.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        Return only the answer.
+        """
     }
 
     func articleSelectionSourceContext(for article: Article) -> (label: String, text: String) {
@@ -6646,13 +6727,17 @@ class AppState: ObservableObject {
             for (index, post) in posts.enumerated() {
                 let comments = await self.fetchTopCommentsForWebGlobalSummary(post: post, topComments: topComments)
                 cachedCommentContexts.append(
-                    (post, comments.map { "u/\($0.author): \($0.body)" })
+                    (post, comments.flatMap { self.extractAllCommentTexts(from: $0) })
                 )
+                let summaryComments = comments
+                    .filter { $0.indentationLevel == 0 }
+                    .sorted { $0.score > $1.score }
+                    .prefix(max(1, topComments))
 
                 do {
                     let rawSummary = try await self.performWebAIRequestAsync(
                         title: "Reddit Summary \(index + 1) of \(posts.count)",
-                        prompt: self.redditPostSummaryPrompt(post: post, comments: comments)
+                        prompt: self.redditPostSummaryPrompt(post: post, comments: Array(summaryComments))
                     )
                     let cleaned = self.cleanAndFormatRedditSummaryTextForDisplay(rawSummary)
 
@@ -6687,7 +6772,7 @@ class AppState: ObservableObject {
         await withCheckedContinuation { continuation in
             var cancellable: AnyCancellable?
             cancellable = redditService
-                .fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: topComments, depth: 0)
+                .fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: topComments, depth: 10)
                 .receive(on: RunLoop.main)
                 .sink { result in
                     if let error = result.error {
@@ -6696,9 +6781,8 @@ class AppState: ObservableObject {
 
                     let filtered = result.comments
                         .filter { $0.author.lowercased() != "automoderator" }
-                        .sorted { $0.score > $1.score }
 
-                    continuation.resume(returning: Array(filtered.prefix(max(1, topComments))))
+                    continuation.resume(returning: filtered)
                     cancellable?.cancel()
                 }
             if let cancellable {
@@ -10466,7 +10550,7 @@ class AppState: ObservableObject {
         // Original Gemini code
         isLoading = true
 
-        let prompt = articleQAPrompt(article: article, question: question)
+        let prompt = geminiArticleQAPrompt(article: article, question: question)
 
         summaryService.summarizeText("", customPrompt: prompt)
             .receive(on: RunLoop.main)
@@ -10727,7 +10811,7 @@ class AppState: ObservableObject {
         // Original Gemini code
         isLoading = true
 
-        let prompt = redditQAPrompt(post: post, comments: comments, question: question)
+        let prompt = geminiRedditQAPrompt(post: post, comments: comments, question: question)
 
         summaryService.summarizeText("", customPrompt: prompt)
             .receive(on: RunLoop.main)
@@ -11139,7 +11223,7 @@ class AppState: ObservableObject {
             let body = normalizedSummarySourceText(post.content)
             let commentSection: String
             if comments.isEmpty {
-                commentSection = "  - No top comments captured."
+                commentSection = "  - No comments captured."
             } else {
                 commentSection = comments.map { "  - \(normalizedSummarySourceText($0))" }.joined(separator: "\n")
             }
@@ -11149,7 +11233,7 @@ class AppState: ObservableObject {
             Title: \(post.title)
             Body:
             \(body.isEmpty ? "(No body text provided)" : body)
-            Top Comments:
+            Comments (including nested replies):
             \(commentSection)
             """
         }.joined(separator: "\n\n")
@@ -11178,13 +11262,14 @@ class AppState: ObservableObject {
         }
         
         let publishers = posts.map { post in
-            redditService.fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: topComments, depth: 0)
+            redditService.fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: topComments, depth: 10)
                 .map { result -> (RedditPost, [String]) in
                     if let error = result.error {
                         print("⚠️ AppState.GlobalQA: Comment fetch error for \(post.id): \(error.localizedDescription)")
                     }
                     let filtered = result.comments.filter { $0.author.lowercased() != "automoderator" }
-                    let comments = Array(filtered.prefix(max(1, topComments))).map { "u/\($0.author): \($0.body)" }
+                    let comments = filtered
+                        .flatMap { self.extractAllCommentTexts(from: $0) }
                     if comments.isEmpty {
                         return (post, ["No comments captured for this post."])
                     }

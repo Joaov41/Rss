@@ -306,6 +306,113 @@ func attributedAskAIResponseForDisplay(_ input: String) -> AttributedString {
     )) ?? AttributedString(value)
 }
 
+/// Carries the bounded source that grounded an answer into a later selection
+/// follow-up. The source and the original Q&A are kept separate so a reply
+/// selection can add its current displayed answer without losing the source.
+struct AskAISelectionOrigin {
+    let sourceLabel: String
+    let sourceText: String
+    let originalQuestion: String?
+    let originalAnswer: String?
+
+    init(
+        sourceLabel: String,
+        sourceText: String,
+        originalQuestion: String? = nil,
+        originalAnswer: String? = nil
+    ) {
+        self.sourceLabel = sourceLabel
+        self.sourceText = sourceText
+        self.originalQuestion = originalQuestion
+        self.originalAnswer = originalAnswer
+    }
+
+    var promptSourceLabel: String {
+        let hasQA = !(originalQuestion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(originalAnswer?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        return hasQA ? "Original source and Q&A context" : sourceLabel
+    }
+
+    func boundedSource(additionalAnswer: String? = nil, maxCharacters: Int = 40_000) -> String {
+        func normalized(_ value: String?) -> String {
+            guard let value else { return "" }
+            return value
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+                .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let source = normalized(sourceText)
+        let question = normalized(originalQuestion)
+        let answer = normalized(originalAnswer)
+        let currentAnswer = normalized(additionalAnswer)
+        var qaSections: [(label: String, body: String)] = []
+        if !question.isEmpty {
+            qaSections.append(("Original Q&A question", question))
+        }
+        if !answer.isEmpty {
+            qaSections.append(("Complete Q&A answer", answer))
+        }
+        if !currentAnswer.isEmpty, currentAnswer != answer {
+            qaSections.append(("Current displayed Ask AI answer", currentAnswer))
+        }
+        let sourceLabel = sourceLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Original source"
+            : sourceLabel
+        let sectionCount = (source.isEmpty ? 0 : 1) + qaSections.count
+        let separatorBudget = max(0, sectionCount - 1) * 2
+        let sourceHeaderBudget = source.isEmpty ? 0 : sourceLabel.count + 2
+        let qaHeaderBudget = qaSections.reduce(0) { $0 + $1.label.count + 2 }
+        let availableBodyBudget = max(0, maxCharacters - separatorBudget - sourceHeaderBudget - qaHeaderBudget)
+        let qaBodyCount = qaSections.reduce(0) { $0 + $1.body.count }
+
+        // Keep at least a quarter of the available body budget for the source
+        // when both the source and Q&A are oversized. This prevents a long
+        // answer from silently replacing the article or Reddit grounding.
+        let sourceMinimumBudget = source.isEmpty ? 0 : min(source.count, max(1, availableBodyBudget / 4))
+        let sourceBudget: Int
+        if source.isEmpty {
+            sourceBudget = 0
+        } else if source.count + qaBodyCount <= availableBodyBudget {
+            sourceBudget = source.count
+        } else {
+            let qaReservation = min(qaBodyCount, max(0, availableBodyBudget - sourceMinimumBudget))
+            sourceBudget = min(source.count, max(sourceMinimumBudget, availableBodyBudget - qaReservation))
+        }
+
+        let qaBudget = max(0, availableBodyBudget - sourceBudget)
+        var qaBodyBudgets = Array(repeating: 0, count: qaSections.count)
+        var remainingQABudget = qaBudget
+        for index in qaSections.indices where remainingQABudget > 0 {
+            qaBodyBudgets[index] = min(1, qaSections[index].body.count)
+            remainingQABudget -= qaBodyBudgets[index]
+        }
+        while remainingQABudget > 0 {
+            var madeProgress = false
+            for index in qaSections.indices where remainingQABudget > 0 {
+                guard qaBodyBudgets[index] < qaSections[index].body.count else { continue }
+                qaBodyBudgets[index] += 1
+                remainingQABudget -= 1
+                madeProgress = true
+            }
+            if !madeProgress { break }
+        }
+
+        var sections: [String] = []
+        if sourceBudget > 0 {
+            sections.append("\(sourceLabel):\n\(source.prefix(sourceBudget))")
+        }
+        for (index, section) in qaSections.enumerated() where qaBodyBudgets[index] > 0 {
+            sections.append("\(section.label):\n\(section.body.prefix(qaBodyBudgets[index]))")
+        }
+
+        let composed = sections.joined(separator: "\n\n")
+        return composed.count > maxCharacters ? String(composed.prefix(maxCharacters)) : composed
+    }
+
+}
+
 func buildAskAISelectionPrompt(selectedText: String, extractedContext: String) -> String {
     buildAskAISelectionPrompt(
         selectedText: selectedText,
@@ -565,6 +672,7 @@ struct AskAIResponseSheet: View {
     let question: String
     let answer: String
     var markdownAnswer: String? = nil
+    var selectionOrigin: AskAISelectionOrigin? = nil
     var onCopy: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -626,6 +734,7 @@ struct AskAIResponseSheet: View {
                 question: followUpPrompt,
                 answer: followUpAnswer,
                 markdownAnswer: followUpMarkdownAnswer,
+                selectionOrigin: selectionOrigin,
                 onCopy: {
                     UIPasteboard.general.string = followUpAnswer
                 }
@@ -644,8 +753,11 @@ struct AskAIResponseSheet: View {
         let prompt = buildAskAISelectionPrompt(
             selectedText: selectedText,
             extractedContext: context,
-            sourceContext: answer,
-            sourceLabel: "Current Ask AI Answer"
+            sourceContext: (selectionOrigin ?? AskAISelectionOrigin(
+                sourceLabel: "Current Ask AI answer",
+                sourceText: answer
+            )).boundedSource(additionalAnswer: answer),
+            sourceLabel: (selectionOrigin?.promptSourceLabel ?? "Current Ask AI answer")
         )
         guard !prompt.isEmpty else { return }
 
