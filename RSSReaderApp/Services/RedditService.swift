@@ -133,6 +133,7 @@ class RedditService {
     private var userAvatarMissingCache = Set<String>()
     private var subredditIconCache: [String: URL] = [:]
     private var subredditIconMissingCache = Set<String>()
+    private let subredditIconCacheLock = NSLock()
 
     // Rate limiting properties
     private var lastRequestTime = Date.distantPast
@@ -202,15 +203,16 @@ class RedditService {
 
     /// Ensures we don't exceed rate limits by waiting between requests
     private func waitForRateLimit() async {
-        rateLimitLock.lock()
-        defer { rateLimitLock.unlock() }
+        let waitTime = rateLimitLock.withLock { () -> TimeInterval in
+            let now = Date()
+            let scheduledTime = max(now, lastRequestTime.addingTimeInterval(minRequestInterval))
+            lastRequestTime = scheduledTime
+            return scheduledTime.timeIntervalSince(now)
+        }
 
-        let timeSinceLastRequest = Date().timeIntervalSince(lastRequestTime)
-        if timeSinceLastRequest < minRequestInterval {
-            let waitTime = minRequestInterval - timeSinceLastRequest
+        if waitTime > 0 {
             try? await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
         }
-        lastRequestTime = Date()
     }
 
     // MARK: - OAuth Headers
@@ -548,8 +550,11 @@ class RedditService {
         let cacheKey = subreddit.lowercased()
 
         guard !subreddit.isEmpty else { return nil }
-        if let cachedURL = subredditIconCache[cacheKey] { return cachedURL }
-        if subredditIconMissingCache.contains(cacheKey) { return nil }
+        let cachedState = subredditIconCacheLock.withLock {
+            (subredditIconCache[cacheKey], subredditIconMissingCache.contains(cacheKey))
+        }
+        if let cachedURL = cachedState.0 { return cachedURL }
+        if cachedState.1 { return nil }
 
         await ensureValidTokenIfNeeded()
         await waitForRateLimit()
@@ -563,7 +568,9 @@ class RedditService {
         }
 
         guard let url = components.url else {
-            subredditIconMissingCache.insert(cacheKey)
+            subredditIconCacheLock.withLock {
+                _ = subredditIconMissingCache.insert(cacheKey)
+            }
             return nil
         }
 
@@ -576,7 +583,9 @@ class RedditService {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200...299).contains(httpResponse.statusCode) else {
-                subredditIconMissingCache.insert(cacheKey)
+                subredditIconCacheLock.withLock {
+                    _ = subredditIconMissingCache.insert(cacheKey)
+                }
                 return nil
             }
 
@@ -585,15 +594,26 @@ class RedditService {
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .first(where: { !$0.isEmpty })
             guard let iconURL = Self.cleanedAvatarURL(from: rawIcon) else {
-                subredditIconMissingCache.insert(cacheKey)
+                subredditIconCacheLock.withLock {
+                    _ = subredditIconMissingCache.insert(cacheKey)
+                }
                 return nil
             }
 
-            subredditIconCache[cacheKey] = iconURL
+            subredditIconCacheLock.withLock {
+                subredditIconCache[cacheKey] = iconURL
+            }
             return iconURL
         } catch {
             print("⚠️ RedditService: Failed to fetch icon for r/\(subreddit): \(error.localizedDescription)")
-            subredditIconMissingCache.insert(cacheKey)
+            if error is CancellationError ||
+                (error as NSError).domain == NSURLErrorDomain &&
+                (error as NSError).code == NSURLErrorCancelled {
+                return nil
+            }
+            subredditIconCacheLock.withLock {
+                _ = subredditIconMissingCache.insert(cacheKey)
+            }
             return nil
         }
     }

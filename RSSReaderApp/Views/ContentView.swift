@@ -4388,103 +4388,95 @@ struct ContentView: View {
         }
     }
     
-    private var favoriteArticlesForList: [Article] {
-        appState.feeds.flatMap { $0.articles }
-            .filter { $0.isFavorite }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoritePostsForList: [RedditPost] {
-        appState.redditFeeds.flatMap { $0.posts }
-            .filter { $0.isFavorite }
-            .sorted(by: { $0.publishDate > $1.publishDate })
-    }
-
-    private var favoriteTrackedItemIDs: [String] {
-        favoriteArticlesForList.map(\.id) + favoritePostsForList.map(\.id)
-    }
-
-    @ViewBuilder
-    private var favoritesArticlesSection: some View {
-        Section(header: Text("RSS Articles")) {
-            if favoriteArticlesForList.isEmpty {
-                Text("No favorite articles")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoriteArticlesForList) { article in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
-                        appState.selectedArticle = article
-                        if !article.isRead {
-                            appState.markArticleAsRead(article)
-                        }
-                    }) {
-                        ArticleRow(article: article)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .id(articleListID(for: article))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleArticleFavorite(article)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var favoritesRedditSection: some View {
-        Section(header: Text("Reddit Posts")) {
-            if favoritePostsForList.isEmpty {
-                Text("No favorite posts")
-                    .foregroundColor(.secondary)
-                    .padding()
-            } else {
-                ForEach(favoritePostsForList) { post in
-                    Button(action: {
-                        appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
-                        appState.selectedRedditPost = post
-                        if !post.isRead {
-                            appState.markRedditPostAsRead(post)
-                        }
-                    }) {
-                        RedditPostRow(post: post)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .id(redditPostListID(for: post))
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            appState.toggleRedditPostFavorite(post)
-                        } label: {
-                            Label("Remove", systemImage: "star.slash")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     var favoritesView: some View {
         List {
-            favoritesArticlesSection
-            favoritesRedditSection
+            Section(header: Text("RSS Articles")) {
+                let favoriteArticles = appState.feeds.flatMap { $0.articles }
+                    .filter { $0.isFavorite }
+                    .sorted(by: { $0.publishDate > $1.publishDate })
+                
+                if favoriteArticles.isEmpty {
+                    Text("No favorite articles")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(favoriteArticles) { article in
+                        Button(action: {
+                            // Set article and navigate
+                            appState.saveScrollPosition(for: "favorites_category", itemID: article.id)
+                            appState.selectedArticle = article
+                            if !article.isRead {
+                                appState.markArticleAsRead(article)
+                            }
+                        }) {
+                            ArticleRow(article: article)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(articleListID(for: article))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleArticleFavorite(article)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Section(header: Text("Reddit Posts")) {
+                let favoritePosts = appState.redditFeeds.flatMap { $0.posts }
+                    .filter { $0.isFavorite }
+                    .sorted(by: { $0.publishDate > $1.publishDate })
+                
+                if favoritePosts.isEmpty {
+                    Text("No favorite posts")
+                        .foregroundColor(.secondary)
+                        .padding()
+                } else {
+                    ForEach(favoritePosts) { post in
+                        Button(action: {
+                            // Set post and navigate
+                            appState.saveScrollPosition(for: "favorites_category", itemID: post.id)
+                            appState.selectedRedditPost = post
+                            if !post.isRead {
+                                appState.markRedditPostAsRead(post)
+                            }
+                        }) {
+                            RedditPostRow(post: post)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .id(redditPostListID(for: post))
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                appState.toggleRedditPostFavorite(post)
+                            } label: {
+                                Label("Remove", systemImage: "star.slash")
+                            }
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.plain)
         .feedListColumnStyle(
             colorScheme: colorScheme,
             scrollOffset: feedListScrollOffset,
             restorationKey: "favorites_category",
-            trackedItemIDs: favoriteTrackedItemIDs
+            trackedItemIDs: appState.feeds.flatMap { $0.articles }
+                .filter(\.isFavorite)
+                .sorted(by: { $0.publishDate > $1.publishDate })
+                .map(\.id)
+                + appState.redditFeeds.flatMap { $0.posts }
+                .filter(\.isFavorite)
+                .sorted(by: { $0.publishDate > $1.publishDate })
+                .map(\.id)
         ) { offset in
             feedListScrollOffset = offset
         }
@@ -5489,7 +5481,9 @@ struct DraggableGlobalSummaryView: View {
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
     @State private var selectionAskAIMarkdownResponse: String?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
     @State private var showSelectionAskAISheet = false
+    @State private var qaSelectionOrigin: AskAISelectionOrigin?
     @State private var baseSummaryClipboardText: String?
     @State private var cachedSummaryClipboardText: String?
     @State private var cachedFormattedAggregateSummary: String?
@@ -6547,6 +6541,7 @@ struct DraggableGlobalSummaryView: View {
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
                 markdownAnswer: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 onCopy: { copySummaryToClipboard(text: selectionAskAIResponse) }
             )
             #if os(iOS)
@@ -6737,11 +6732,20 @@ struct DraggableGlobalSummaryView: View {
         isProcessingQA = true
         qaAnswerText = ""
         qaAnswerMarkdownText = nil
+        qaSelectionOrigin = nil
         
         appState.askQuestionAboutGlobalSummary(question: trimmed) { answer in
             DispatchQueue.main.async {
                 self.qaAnswerMarkdownText = answer
                 self.qaAnswerText = formatAskAIResponseForDisplay(answer)
+                if let source = self.sourceContextForGlobalSelection() {
+                    self.qaSelectionOrigin = AskAISelectionOrigin(
+                        sourceLabel: source.label,
+                        sourceText: source.text,
+                        originalQuestion: trimmed,
+                        originalAnswer: self.qaAnswerText
+                    )
+                }
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
             }
@@ -6765,11 +6769,20 @@ struct DraggableGlobalSummaryView: View {
         isProcessingQA = true
         qaAnswerText = ""
         qaAnswerMarkdownText = nil
+        qaSelectionOrigin = nil
 
         appState.askWebQuestionAboutGlobalSummary(question: trimmed) { answer in
             DispatchQueue.main.async {
                 self.qaAnswerMarkdownText = answer
                 self.qaAnswerText = formatAskAIResponseForDisplay(answer)
+                if let source = self.sourceContextForGlobalSelection() {
+                    self.qaSelectionOrigin = AskAISelectionOrigin(
+                        sourceLabel: source.label,
+                        sourceText: source.text,
+                        originalQuestion: trimmed,
+                        originalAnswer: self.qaAnswerText
+                    )
+                }
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
             }
@@ -6783,6 +6796,7 @@ struct DraggableGlobalSummaryView: View {
         isProcessingQA = true
         qaAnswerText = ""
         qaAnswerMarkdownText = nil
+        qaSelectionOrigin = nil
         appState.askQuestionAboutSavedGlobalSummaries(
             question: trimmed,
             useWebAI: useWebAI
@@ -6790,6 +6804,14 @@ struct DraggableGlobalSummaryView: View {
             DispatchQueue.main.async {
                 self.qaAnswerMarkdownText = answer
                 self.qaAnswerText = formatAskAIResponseForDisplay(answer)
+                if let source = self.sourceContextForGlobalSelection() {
+                    self.qaSelectionOrigin = AskAISelectionOrigin(
+                        sourceLabel: source.label,
+                        sourceText: source.text,
+                        originalQuestion: trimmed,
+                        originalAnswer: self.qaAnswerText
+                    )
+                }
                 self.isProcessingQA = false
                 self.showAnswerSheet = true
             }
@@ -6800,6 +6822,7 @@ struct DraggableGlobalSummaryView: View {
         qaQuestionText = ""
         qaAnswerText = ""
         qaAnswerMarkdownText = nil
+        qaSelectionOrigin = nil
         qaInlineError = nil
         isProcessingQA = false
         if !keepInterface {
@@ -6829,6 +6852,9 @@ struct DraggableGlobalSummaryView: View {
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
         selectionAskAIMarkdownResponse = nil
+        selectionAskAIOrigin = sourceContext.map {
+            AskAISelectionOrigin(sourceLabel: $0.label, sourceText: $0.text)
+        }
         isAskingSelectionAI = true
 
         let answerHandler: (String) -> Void = { answer in
@@ -6870,6 +6896,9 @@ struct DraggableGlobalSummaryView: View {
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
         selectionAskAIMarkdownResponse = nil
+        selectionAskAIOrigin = sourceContext.map {
+            AskAISelectionOrigin(sourceLabel: $0.label, sourceText: $0.text)
+        }
         isAskingSelectionAI = true
 
         let answerHandler: (String) -> Void = { answer in
@@ -6901,17 +6930,33 @@ struct DraggableGlobalSummaryView: View {
         guard !isAskingSelectionAI else { return }
 
         let currentAnswer = qaAnswerText
+        let origin = qaSelectionOrigin
+            ?? sourceContextForGlobalSelection().map {
+                AskAISelectionOrigin(
+                    sourceLabel: $0.label,
+                    sourceText: $0.text,
+                    originalQuestion: qaQuestionText,
+                    originalAnswer: currentAnswer
+                )
+            }
+            ?? AskAISelectionOrigin(
+                sourceLabel: "Original source",
+                sourceText: "",
+                originalQuestion: qaQuestionText,
+                originalAnswer: currentAnswer
+            )
         let prompt = buildAskAISelectionPrompt(
             selectedText: selectedText,
             extractedContext: context,
-            sourceContext: currentAnswer,
-            sourceLabel: "Current Summary Answer"
+            sourceContext: origin.boundedSource(additionalAnswer: currentAnswer),
+            sourceLabel: origin.promptSourceLabel
         )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
         selectionAskAIMarkdownResponse = nil
+        selectionAskAIOrigin = origin
         isAskingSelectionAI = true
         showAnswerSheet = false
 
@@ -11359,6 +11404,7 @@ struct ArticleDetailView: View {
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
     @State private var selectionAskAIMarkdownResponse: String?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
     @State private var showSelectionAskAISheet = false
     @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
     @State private var isArticleMetadataChromeHidden: Bool = false
@@ -11573,6 +11619,7 @@ struct ArticleDetailView: View {
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
                 markdownAnswer: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 onCopy: { setPlatformClipboardString(selectionAskAIResponse) }
             )
             #if os(iOS)
@@ -12667,8 +12714,8 @@ struct ArticleDetailView: View {
             SelectableText(
                 text: qaState.answerText,
                 markdownText: qaState.markdownAnswerText.map(normalizeConversationalAIReplyMarkdown),
-                onAskAI: handleAskAISelection(selectedText:context:),
-                onAskAIWeb: handleAskAIWebSelection(selectedText:context:),
+                onAskAI: handleQAAskAISelection(selectedText:context:),
+                onAskAIWeb: handleQAAskAIWebSelection(selectedText:context:),
                 onPodcastTimestampTap: podcastTimestampTapHandler(for: article),
                 textIsPrecleaned: true
             )
@@ -12789,20 +12836,63 @@ struct ArticleDetailView: View {
         runSelectionAskAI(selectedText: selectedText, context: context, useWebPath: true)
     }
 
-    private func runSelectionAskAI(selectedText: String, context: String, useWebPath: Bool) {
+    private func handleQAAskAISelection(selectedText: String, context: String) {
+        guard let article = appState.selectedArticle else { return }
+        let source = appState.articleSelectionSourceContext(for: article)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: qaState.previousQuestionText ?? qaState.questionText,
+            originalAnswer: qaState.answerText
+        )
+        runSelectionAskAI(
+            selectedText: selectedText,
+            context: context,
+            useWebPath: false,
+            selectionOrigin: origin
+        )
+    }
+
+    private func handleQAAskAIWebSelection(selectedText: String, context: String) {
+        guard let article = appState.selectedArticle else { return }
+        let source = appState.articleSelectionSourceContext(for: article)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: qaState.previousQuestionText ?? qaState.questionText,
+            originalAnswer: qaState.answerText
+        )
+        runSelectionAskAI(
+            selectedText: selectedText,
+            context: context,
+            useWebPath: true,
+            selectionOrigin: origin
+        )
+    }
+
+    private func runSelectionAskAI(
+        selectedText: String,
+        context: String,
+        useWebPath: Bool,
+        selectionOrigin: AskAISelectionOrigin? = nil
+    ) {
         guard !isAskingSelectionAI else { return }
         let sourceContext = appState.selectedArticle.map { appState.articleSelectionSourceContext(for: $0) }
+        let origin = selectionOrigin ?? sourceContext.map {
+            AskAISelectionOrigin(sourceLabel: $0.label, sourceText: $0.text)
+        }
         let prompt = buildAskAISelectionPrompt(
             selectedText: selectedText,
             extractedContext: context,
-            sourceContext: sourceContext?.text ?? "",
-            sourceLabel: sourceContext?.label ?? ""
+            sourceContext: origin?.boundedSource() ?? "",
+            sourceLabel: origin?.promptSourceLabel ?? ""
         )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
         selectionAskAIMarkdownResponse = nil
+        selectionAskAIOrigin = origin
         isAskingSelectionAI = true
 
         let finish: (String) -> Void = { answer in

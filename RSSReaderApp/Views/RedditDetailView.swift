@@ -144,6 +144,7 @@ struct RedditDetailView: View {
     private let redditTopAnchor = "redditDetailTopAnchor"
     private let redditPostSummaryAnchor = "redditPostSummaryAnchor"
     private let redditCommentSummaryAnchor = "redditCommentSummaryAnchor"
+    private let redditQAAnchor = "redditDetailQAAnchor"
     private let iphoneDetailHorizontalInset: CGFloat = 16
 
     private var detailBackground: Color {
@@ -212,6 +213,7 @@ struct RedditDetailView: View {
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
     @State private var selectionAskAIMarkdownResponse: String?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
     @State private var showSelectionAskAISheet = false
 
     private var qaAnswerUnavailable: Bool {
@@ -258,6 +260,9 @@ struct RedditDetailView: View {
             if let post = appState.selectedRedditPost {
                 ScrollViewReader { proxy in
                     postDetailView(for: post, proxy: proxy)
+                        .onChange(of: showQAInterface) { isVisible in
+                            scrollToRedditQAIfNeeded(isVisible: isVisible, proxy: proxy)
+                        }
                 }
                 .onAppear {
                     // Load comments when view appears
@@ -313,6 +318,7 @@ struct RedditDetailView: View {
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
                 markdownAnswer: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 onCopy: {
                     #if os(iOS)
                     UIPasteboard.general.string = selectionAskAIResponse
@@ -383,6 +389,16 @@ struct RedditDetailView: View {
     private func scrollToSummarySection(_ anchor: String, using proxy: ScrollViewProxy) {
         withAnimation(.easeInOut(duration: 0.35)) {
             proxy.scrollTo(anchor, anchor: UnitPoint(x: 0.5, y: 0.12))
+        }
+    }
+
+    private func scrollToRedditQAIfNeeded(isVisible: Bool, proxy: ScrollViewProxy) {
+        guard isVisible else { return }
+
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                proxy.scrollTo(redditQAAnchor, anchor: UnitPoint(x: 0.5, y: 0.12))
+            }
         }
     }
 
@@ -1208,6 +1224,7 @@ struct RedditDetailView: View {
         .padding(24)
         .background(redditQACardBackground)
         .padding(.bottom, 16)
+        .id(redditQAAnchor)
     }
 
     private func redditQAHeader(post: RedditPost) -> some View {
@@ -1357,8 +1374,8 @@ struct RedditDetailView: View {
             SelectableText(
                 text: answerText,
                 markdownText: markdownAnswerText.map(normalizeConversationalAIReplyMarkdown),
-                onAskAI: handleAskAISelection(selectedText:context:),
-                onAskAIWeb: handleAskAIWebSelection(selectedText:context:),
+                onAskAI: handleQAAskAISelection(selectedText:context:),
+                onAskAIWeb: handleQAAskAIWebSelection(selectedText:context:),
                 textIsPrecleaned: true
             )
             .fixedSize(horizontal: false, vertical: true)
@@ -2407,22 +2424,65 @@ struct RedditDetailView: View {
         runSelectionAskAI(selectedText: selectedText, context: context, useWebPath: true)
     }
 
-    private func runSelectionAskAI(selectedText: String, context: String, useWebPath: Bool) {
+    private func handleQAAskAISelection(selectedText: String, context: String) {
+        guard let post = appState.selectedRedditPost else { return }
+        let source = appState.redditSelectionSourceContext(post: post, comments: comments)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: previousQuestionText ?? questionText,
+            originalAnswer: answerText
+        )
+        runSelectionAskAI(
+            selectedText: selectedText,
+            context: context,
+            useWebPath: false,
+            selectionOrigin: origin
+        )
+    }
+
+    private func handleQAAskAIWebSelection(selectedText: String, context: String) {
+        guard let post = appState.selectedRedditPost else { return }
+        let source = appState.redditSelectionSourceContext(post: post, comments: comments)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: previousQuestionText ?? questionText,
+            originalAnswer: answerText
+        )
+        runSelectionAskAI(
+            selectedText: selectedText,
+            context: context,
+            useWebPath: true,
+            selectionOrigin: origin
+        )
+    }
+
+    private func runSelectionAskAI(
+        selectedText: String,
+        context: String,
+        useWebPath: Bool,
+        selectionOrigin: AskAISelectionOrigin? = nil
+    ) {
         guard !isAskingSelectionAI else { return }
         let sourceContext = appState.selectedRedditPost.map {
             appState.redditSelectionSourceContext(post: $0, comments: comments)
         }
+        let origin = selectionOrigin ?? sourceContext.map {
+            AskAISelectionOrigin(sourceLabel: $0.label, sourceText: $0.text)
+        }
         let prompt = buildAskAISelectionPrompt(
             selectedText: selectedText,
             extractedContext: context,
-            sourceContext: sourceContext?.text ?? "",
-            sourceLabel: sourceContext?.label ?? ""
+            sourceContext: origin?.boundedSource() ?? "",
+            sourceLabel: origin?.promptSourceLabel ?? ""
         )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
         selectionAskAIMarkdownResponse = nil
+        selectionAskAIOrigin = origin
         isAskingSelectionAI = true
 
         let finish: (String) -> Void = { answer in

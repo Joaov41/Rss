@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 #if os(iOS)
 import AVFoundation
 import UIKit
+import WebKit
 #elseif os(macOS)
 import AppKit
 #endif
@@ -144,6 +145,10 @@ struct SettingsView: View {
     @State private var summarizeConnectionStatus: String? = nil
     @State private var isTestingPCCGatewayConnection = false
     @State private var pccGatewayConnectionStatus: String? = nil
+    #if os(iOS)
+    @State private var isChatGPTWebAILoggedIn = false
+    @State private var isGeminiWebAILoggedIn = false
+    #endif
     private let mlxModelBookmarkKey = "MLXExternalModelBookmark"
     private let mlxModelPathKey = "MLXExternalModelPath"
     
@@ -173,7 +178,60 @@ struct SettingsView: View {
             appState.openWebAILoginSession(for: provider)
         }
     }
-    
+
+    private var chatGPTLoginButtonTitle: String {
+        #if os(iOS)
+        isChatGPTWebAILoggedIn ? "Logged In to ChatGPT" : "Log In to ChatGPT"
+        #else
+        "Log In to ChatGPT"
+        #endif
+    }
+
+    private var geminiLoginButtonTitle: String {
+        #if os(iOS)
+        isGeminiWebAILoggedIn ? "Logged In to Gemini" : "Log In to Gemini"
+        #else
+        "Log In to Gemini"
+        #endif
+    }
+
+    #if os(iOS)
+    private func refreshChatGPTWebAILoginState() {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            let isLoggedIn = cookies.contains { cookie in
+                let domain = cookie.domain.lowercased()
+                let name = cookie.name.lowercased()
+                let isChatGPTDomain = domain.contains("chatgpt.com") || domain.contains("openai.com")
+                let isSessionCookie = name.contains("session-token") || name.contains("auth-session")
+                return isChatGPTDomain && isSessionCookie
+            }
+
+            DispatchQueue.main.async {
+                isChatGPTWebAILoggedIn = isLoggedIn
+            }
+        }
+    }
+
+    private func refreshGeminiWebAILoginState() {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            let authenticatedCookieNames: Set<String> = [
+                "sid", "hsid", "ssid", "apisid", "sapisid",
+                "__secure-1psid", "__secure-3psid"
+            ]
+            let isLoggedIn = cookies.contains { cookie in
+                let domain = cookie.domain.lowercased()
+                let name = cookie.name.lowercased()
+                let isGoogleDomain = domain == "google.com" || domain.hasSuffix(".google.com")
+                return isGoogleDomain && authenticatedCookieNames.contains(name)
+            }
+
+            DispatchQueue.main.async {
+                isGeminiWebAILoggedIn = isLoggedIn
+            }
+        }
+    }
+    #endif
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -274,25 +332,31 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
 
                             HStack(spacing: 10) {
-                                Button("Log In to ChatGPT") {
+                                Button(chatGPTLoginButtonTitle) {
                                     launchWebAILogin(.chatgpt)
                                 }
                                 .buttonStyle(.bordered)
 
                                 Button("Reset ChatGPT") {
                                     appState.resetWebAISession(for: .chatgpt)
+                                    #if os(iOS)
+                                    isChatGPTWebAILoggedIn = false
+                                    #endif
                                 }
                                 .buttonStyle(.bordered)
                             }
 
                             HStack(spacing: 10) {
-                                Button("Log In to Gemini") {
+                                Button(geminiLoginButtonTitle) {
                                     launchWebAILogin(.gemini)
                                 }
                                 .buttonStyle(.bordered)
 
                                 Button("Reset Gemini") {
                                     appState.resetWebAISession(for: .gemini)
+                                    #if os(iOS)
+                                    isGeminiWebAILoggedIn = false
+                                    #endif
                                 }
                                 .buttonStyle(.bordered)
                             }
@@ -1064,6 +1128,10 @@ struct SettingsView: View {
             }
             .onAppear {
                 loadCurrentSettings()
+                #if os(iOS)
+                refreshChatGPTWebAILoginState()
+                refreshGeminiWebAILoginState()
+                #endif
                 updateCacheSize()
                 refreshStorageBreakdown()
                 refreshModelStorage()
@@ -2048,76 +2116,68 @@ extension SettingsView {
     private func loadLocalVoices() {
         #if os(iOS)
         if #available(iOS 14.0, *) {
-            // Build list of working iOS voices (prefer ttsbundle; any language)
-            let all = AVSpeechSynthesisVoice.speechVoices()
-            
-            // Filter out com.apple.voice on Mac as they don't work
-            let availableVoices: [AVSpeechSynthesisVoice]
-            if ProcessInfo.processInfo.isiOSAppOnMac {
-                availableVoices = all.filter { !$0.identifier.contains("com.apple.voice") }
-            } else {
-                availableVoices = all
-            }
-            
-            // Map all available voices with quality labels
-            let entries = availableVoices.map { v -> (id: String, title: String) in
-                let qualityLabel: String
-                switch v.quality {
-                case .premium:
-                    qualityLabel = "★ Premium"
-                case .enhanced:
-                    qualityLabel = "Enhanced"
-                default:
-                    qualityLabel = "Default"
-                }
-                return (id: v.identifier, title: "\(v.name) (\(qualityLabel))")
-            }
-            
-            // Sort by quality (premium first) then by name
-            iosVoices = entries.sorted { a, b in
-                // Premium voices first
-                if a.title.contains("★ Premium") && !b.title.contains("★ Premium") { return true }
-                if !a.title.contains("★ Premium") && b.title.contains("★ Premium") { return false }
-                // Then Enhanced
-                if a.title.contains("Enhanced") && b.title.contains("Default") { return true }
-                if a.title.contains("Default") && b.title.contains("Enhanced") { return false }
-                // Then alphabetical
-                return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-            }
+            let savedVoiceID = UserDefaults.standard.string(forKey: iosVoiceKey)
+            let voiceDefaultsKey = iosVoiceKey
+            let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
 
-            // Load saved or automatically select best available voice
-            if let sel = UserDefaults.standard.string(forKey: iosVoiceKey), !sel.isEmpty {
-                localVoiceID = sel
-            } else {
-                // Auto-select best available voice: Premium > Enhanced > Default
-                let currentLang = AVSpeechSynthesisVoice.currentLanguageCode()
-                
-                // Try to find best voice for current language
-                let premiumVoices = availableVoices.filter { 
-                    $0.language == currentLang && $0.quality == .premium 
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Keep the existing voice enumeration, filtering, sorting, and selection
+                // behavior off the main thread so Settings can finish presenting.
+                let all = AVSpeechSynthesisVoice.speechVoices()
+                let availableVoices = isRunningOnMac
+                    ? all.filter { !$0.identifier.contains("com.apple.voice") }
+                    : all
+
+                let entries = availableVoices.map { voice -> (id: String, title: String) in
+                    let qualityLabel: String
+                    switch voice.quality {
+                    case .premium:
+                        qualityLabel = "★ Premium"
+                    case .enhanced:
+                        qualityLabel = "Enhanced"
+                    default:
+                        qualityLabel = "Default"
+                    }
+                    return (id: voice.identifier, title: "\(voice.name) (\(qualityLabel))")
+                }.sorted { a, b in
+                    if a.title.contains("★ Premium") && !b.title.contains("★ Premium") { return true }
+                    if !a.title.contains("★ Premium") && b.title.contains("★ Premium") { return false }
+                    if a.title.contains("Enhanced") && b.title.contains("Default") { return true }
+                    if a.title.contains("Default") && b.title.contains("Enhanced") { return false }
+                    return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
                 }
-                let enhancedVoices = availableVoices.filter { 
-                    $0.language == currentLang && $0.quality == .enhanced 
-                }
-                let defaultVoices = availableVoices.filter { 
-                    $0.language == currentLang && $0.quality == .default 
-                }
-                
-                if let premium = premiumVoices.first {
-                    localVoiceID = premium.identifier
-                    print("🔊 [Settings] Auto-selected PREMIUM voice: \(premium.name)")
-                } else if let enhanced = enhancedVoices.first {
-                    localVoiceID = enhanced.identifier
-                    print("🔊 [Settings] Auto-selected Enhanced voice: \(enhanced.name)")
-                } else if let defaultVoice = defaultVoices.first {
-                    localVoiceID = defaultVoice.identifier
-                    print("🔊 [Settings] Auto-selected Default voice: \(defaultVoice.name)")
+
+                let automaticSelection: (id: String, name: String, qualityLabel: String)?
+                if let savedVoiceID, !savedVoiceID.isEmpty {
+                    automaticSelection = nil
                 } else {
-                    localVoiceID = iosVoices.first?.id ?? ""
+                    let currentLang = AVSpeechSynthesisVoice.currentLanguageCode()
+                    let matchingVoices = availableVoices.filter { $0.language == currentLang }
+                    if let premium = matchingVoices.first(where: { $0.quality == .premium }) {
+                        automaticSelection = (premium.identifier, premium.name, "PREMIUM")
+                    } else if let enhanced = matchingVoices.first(where: { $0.quality == .enhanced }) {
+                        automaticSelection = (enhanced.identifier, enhanced.name, "Enhanced")
+                    } else if let defaultVoice = matchingVoices.first(where: { $0.quality == .default }) {
+                        automaticSelection = (defaultVoice.identifier, defaultVoice.name, "Default")
+                    } else {
+                        automaticSelection = nil
+                    }
                 }
-                
-                if !localVoiceID.isEmpty { 
-                    UserDefaults.standard.set(localVoiceID, forKey: iosVoiceKey) 
+
+                let selectedVoiceID = (savedVoiceID?.isEmpty == false)
+                    ? savedVoiceID!
+                    : (automaticSelection?.id ?? entries.first?.id ?? "")
+
+                DispatchQueue.main.async {
+                    iosVoices = entries
+                    localVoiceID = selectedVoiceID
+
+                    if let automaticSelection {
+                        print("🔊 [Settings] Auto-selected \(automaticSelection.qualityLabel) voice: \(automaticSelection.name)")
+                    }
+                    if savedVoiceID?.isEmpty != false, !selectedVoiceID.isEmpty {
+                        UserDefaults.standard.set(selectedVoiceID, forKey: voiceDefaultsKey)
+                    }
                 }
             }
         }

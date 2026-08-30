@@ -39,6 +39,7 @@ struct SummaryColumnView: View {
     @State private var selectionAskAIPrompt = ""
     @State private var selectionAskAIResponse = ""
     @State private var selectionAskAIMarkdownResponse: String?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
     @State private var showSelectionAskAISheet = false
 #if os(iOS)
     @State private var audioPlayer: AVAudioPlayer?
@@ -302,6 +303,7 @@ struct SummaryColumnView: View {
                 question: selectionAskAIPrompt,
                 answer: selectionAskAIResponse,
                 markdownAnswer: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 onCopy: { copyToClipboard(selectionAskAIResponse) }
             )
             #if os(iOS)
@@ -763,17 +765,21 @@ struct SummaryColumnView: View {
     private func runSelectionAskAI(selectedText: String, context: String, useWebPath: Bool) {
         guard !isAskingSelectionAI else { return }
         let sourceContext = appState.selectedArticle.map { appState.articleSelectionSourceContext(for: $0) }
+        let origin = sourceContext.map {
+            AskAISelectionOrigin(sourceLabel: $0.label, sourceText: $0.text)
+        }
         let prompt = buildAskAISelectionPrompt(
             selectedText: selectedText,
             extractedContext: context,
-            sourceContext: sourceContext?.text ?? "",
-            sourceLabel: sourceContext?.label ?? ""
+            sourceContext: origin?.boundedSource() ?? "",
+            sourceLabel: origin?.promptSourceLabel ?? ""
         )
         guard !prompt.isEmpty else { return }
 
         selectionAskAIPrompt = prompt
         selectionAskAIResponse = ""
         selectionAskAIMarkdownResponse = nil
+        selectionAskAIOrigin = origin
         isAskingSelectionAI = true
 
         let finish: (String) -> Void = { answer in
