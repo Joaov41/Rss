@@ -218,6 +218,7 @@ struct RedditDetailView: View {
     @State private var selectionAskAIMarkdownResponse: String?
     @State private var selectionAskAIError: String?
     @State private var selectionAskAITask: Task<Void, Never>?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
     
     // TTS state variables for Q&A
     @State private var isSynthesizingSpeechQA: Bool = false
@@ -360,6 +361,7 @@ struct RedditDetailView: View {
                 isLoading: isSelectionAskAIInFlight,
                 response: selectionAskAIResponse,
                 markdownResponse: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 errorMessage: selectionAskAIError,
                 onClose: { showSelectionAskAIResponse = false },
                 onCopy: copySelectionAskAIResponse
@@ -1016,10 +1018,10 @@ struct RedditDetailView: View {
                                         .font(.body)
                                         .foregroundColor(.primary)
                                         .onAskAI { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .standard)
+                                            askAIFromRedditQASelection(selection, context: paragraphs.joined(separator: "\n\n"), post: post, action: .standard)
                                         }
                                         .onAskAIWeb { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .web)
+                                            askAIFromRedditQASelection(selection, context: paragraphs.joined(separator: "\n\n"), post: post, action: .web)
                                         }
                                         .padding(.vertical, 16)
                                         .padding(.horizontal, 20)
@@ -1034,10 +1036,10 @@ struct RedditDetailView: View {
                                         .font(.body)
                                         .foregroundColor(.primary)
                                         .onAskAI { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .standard)
+                                            askAIFromRedditQASelection(selection, context: answerText, post: post, action: .standard)
                                         }
                                         .onAskAIWeb { selection in
-                                            askAIFromRedditSelection(selection, post: post, action: .web)
+                                            askAIFromRedditQASelection(selection, context: answerText, post: post, action: .web)
                                         }
                                         .padding(.vertical, 16)
                                         .padding(.horizontal, 20)
@@ -2090,7 +2092,35 @@ Each item ≤ 2–3 sentences.
         }
     }
 
-    private func askAIFromRedditSelection(_ selection: String, post: RedditPost, action: AskAISelectionAction) {
+    private func askAIFromRedditQASelection(
+        _ selection: String,
+        context: String,
+        post: RedditPost,
+        action: AskAISelectionAction
+    ) {
+        let source = appState.redditSelectionSourceContext(post: post, comments: comments)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: previousQuestionText ?? questionText,
+            originalAnswer: answerText
+        )
+        askAIFromRedditSelection(
+            selection,
+            context: askAINearbyRenderedContext(selectedText: selection, in: context),
+            post: post,
+            action: action,
+            selectionOrigin: origin
+        )
+    }
+
+    private func askAIFromRedditSelection(
+        _ selection: String,
+        context: String = "",
+        post: RedditPost,
+        action: AskAISelectionAction,
+        selectionOrigin: AskAISelectionOrigin? = nil
+    ) {
         let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -2101,11 +2131,24 @@ Each item ≤ 2–3 sentences.
         selectionAskAIError = nil
         showSelectionAskAIResponse = true
 
-        let prompt = appState.redditQAPrompt(
-            post: post,
-            comments: comments,
-            question: "What is said about \(trimmed)?"
-        )
+        let prompt: String
+        if let selectionOrigin {
+            prompt = buildAskAISelectionPrompt(
+                selectedText: trimmed,
+                extractedContext: context,
+                sourceContext: selectionOrigin.boundedSource(additionalAnswer: answerText),
+                sourceLabel: selectionOrigin.promptSourceLabel
+            )
+        } else {
+            prompt = appState.redditQAPrompt(
+                post: post,
+                comments: comments,
+                question: "What is said about \(trimmed)?"
+            )
+        }
+        guard !prompt.isEmpty else { return }
+
+        self.selectionAskAIOrigin = selectionOrigin
 
         selectionAskAITask = Task {
             let answer = await withCheckedContinuation { continuation in

@@ -1,0 +1,7 @@
+.build/
+.deriveddata/
+.xcode-derived-data/
+DerivedData/
+build/
+_tmp/
+Packages/mlx-audio-swift/build/

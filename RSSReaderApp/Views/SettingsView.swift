@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 #if os(iOS)
 import AVFoundation
 #elseif os(macOS)
@@ -179,6 +180,8 @@ struct SettingsView: View {
     @State private var isCheckingHealth: Bool = false
     @State private var geminiHealthCheck: (isWorking: Bool, responseTime: TimeInterval?, error: String?)? = nil
     @State private var openaiHealthCheck: (isWorking: Bool, responseTime: TimeInterval?, error: String?)? = nil
+    @State private var isChatGPTWebAILoggedIn = false
+    @State private var isGeminiWebAILoggedIn = false
 
     // MLX Local model management
     @State private var isLoadingMLXModel = false
@@ -190,6 +193,7 @@ struct SettingsView: View {
     @State private var summarizeConnectionStatus: String? = nil
     @State private var isTestingPCCGatewayConnection = false
     @State private var pccGatewayConnectionStatus: String? = nil
+    @State private var pendingWebAILoginProvider: WebAIProvider?
     private let mlxModelBookmarkKey = "MLXExternalModelBookmark"
     private let mlxModelPathKey = "MLXExternalModelPath"
     
@@ -221,6 +225,42 @@ struct SettingsView: View {
         presentationMode.wrappedValue.dismiss()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             appState.openWebAILoginSession(for: provider)
+        }
+    }
+
+    private var chatGPTLoginButtonTitle: String {
+        isChatGPTWebAILoggedIn ? "Logged in to ChatGPT" : "Log In to ChatGPT"
+    }
+
+    private var geminiLoginButtonTitle: String {
+        isGeminiWebAILoggedIn ? "Logged in to Gemini" : "Log In to Gemini"
+    }
+
+    private func refreshWebAILoginStates() {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            let chatGPTLoggedIn = cookies.contains { cookie in
+                let domain = cookie.domain.lowercased()
+                let name = cookie.name.lowercased()
+                let isChatGPTDomain = domain.contains("chatgpt.com") || domain.contains("openai.com")
+                let isSessionCookie = name.contains("session-token") || name.contains("auth-session")
+                return isChatGPTDomain && isSessionCookie
+            }
+
+            let authenticatedGoogleCookieNames: Set<String> = [
+                "sid", "hsid", "ssid", "apisid", "sapisid",
+                "__secure-1psid", "__secure-3psid"
+            ]
+            let geminiLoggedIn = cookies.contains { cookie in
+                let domain = cookie.domain.lowercased()
+                let name = cookie.name.lowercased()
+                let isGoogleDomain = domain == "google.com" || domain.hasSuffix(".google.com")
+                return isGoogleDomain && authenticatedGoogleCookieNames.contains(name)
+            }
+
+            DispatchQueue.main.async {
+                isChatGPTWebAILoggedIn = chatGPTLoggedIn
+                isGeminiWebAILoggedIn = geminiLoggedIn
+            }
         }
     }
 
@@ -373,25 +413,27 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
 
                             HStack(spacing: 10) {
-                                Button("Log In to ChatGPT") {
-                                    launchWebAILogin(.chatgpt)
+                                Button(chatGPTLoginButtonTitle) {
+                                    pendingWebAILoginProvider = .chatgpt
                                 }
                                 .settingsGlassButtonStyle()
 
                                 Button("Reset ChatGPT") {
                                     appState.resetWebAISession(for: .chatgpt)
+                                    isChatGPTWebAILoggedIn = false
                                 }
                                 .settingsGlassButtonStyle()
                             }
 
                             HStack(spacing: 10) {
-                                Button("Log In to Gemini") {
-                                    launchWebAILogin(.gemini)
+                                Button(geminiLoginButtonTitle) {
+                                    pendingWebAILoginProvider = .gemini
                                 }
                                 .settingsGlassButtonStyle()
 
                                 Button("Reset Gemini") {
                                     appState.resetWebAISession(for: .gemini)
+                                    isGeminiWebAILoggedIn = false
                                 }
                                 .settingsGlassButtonStyle()
                             }
@@ -1119,6 +1161,17 @@ struct SettingsView: View {
                 .safeAreaPadding(.vertical, 8)
                 .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                 .padding()
+
+                if let provider = pendingWebAILoginProvider {
+                    WebAILoginWarningPopup(
+                        provider: provider,
+                        onCancel: { pendingWebAILoginProvider = nil },
+                        onContinue: {
+                            pendingWebAILoginProvider = nil
+                            launchWebAILogin(provider)
+                        }
+                    )
+                }
             }
             .navigationTitle("Settings")
             #if os(iOS)
@@ -1197,6 +1250,7 @@ struct SettingsView: View {
             }
             .onAppear {
                 loadCurrentSettings()
+                refreshWebAILoginStates()
                 updateCacheSize()
                 refreshStorageBreakdown()
                 refreshModelStorage()
@@ -1244,7 +1298,10 @@ struct SettingsView: View {
     }
     
     private func updateCacheSize() {
-        cacheSizeDisplay = appState.getCacheSize()
+        cacheSizeDisplay = "Calculating…"
+        appState.loadCacheSize { display in
+            cacheSizeDisplay = display
+        }
     }
 
     private func refreshStorageBreakdown() {
@@ -2233,6 +2290,46 @@ struct OPMLDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         let data = try Data(contentsOf: url)
         return FileWrapper(regularFileWithContents: data)
+    }
+}
+
+private struct WebAILoginWarningPopup: View {
+    let provider: WebAIProvider
+    let onCancel: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("IMPORTANT")
+                    .font(.headline)
+
+                Text("Do not use your main ChatGPT or Gemini account. Create a free new account just to use with this app. The providers may terminate access at any time. These model options are optional and come with no guarantees.")
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 10) {
+                    Button(action: onCancel) {
+                        Text("Cancel")
+                            .frame(maxWidth: .infinity)
+                    }
+                        .settingsGlassButtonStyle()
+                    Button(action: onContinue) {
+                        Text("Continue to \(provider.displayName)")
+                            .frame(maxWidth: .infinity)
+                    }
+                        .settingsGlassButtonStyle(prominent: true)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 520)
+            .modifier(AdaptiveGlassModifier(cornerRadius: 24))
+            .padding(.horizontal, 24)
+        }
+        .zIndex(10)
     }
 }
 

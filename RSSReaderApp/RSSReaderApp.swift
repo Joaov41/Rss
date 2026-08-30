@@ -1,10 +1,22 @@
 import SwiftUI
 import Combine
+import Kingfisher
 
 @main
 struct RSSReaderApp: App {
     @StateObject private var appState = AppState()
     @AppStorage("appearanceMode") private var appearanceMode: Int = 0 // 0: System, 1: Light, 2: Dark
+
+    init() {
+        #if os(macOS)
+        let configuration = ImageDownloader.default.sessionConfiguration
+        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 90
+        ImageDownloader.default.sessionConfiguration = configuration
+        #endif
+    }
     
     var colorScheme: ColorScheme? {
         switch appearanceMode {

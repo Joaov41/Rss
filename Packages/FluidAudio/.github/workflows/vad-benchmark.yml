@@ -1,0 +1,177 @@
+name: VAD Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vad-benchmark:
+    name: VAD Benchmark
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.1"
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swift-6.1-${{ hashFiles('Package.swift', 'Sources/FluidAudio/ModelRegistry.swift', 'Sources/FluidAudio/ModelNames.swift') }}
+
+      - name: Cache VAD models
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Application Support/FluidAudio/Models/silero-vad-coreml
+          key: ${{ runner.os }}-vad-models-${{ hashFiles('Sources/FluidAudio/ModelRegistry.swift', 'Sources/FluidAudio/ModelNames.swift') }}
+
+      - name: Cache VOiCES dataset
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Application Support/FluidAudio/voicesSubset
+          key: ${{ runner.os }}-voices-subset-${{ hashFiles('Sources/FluidAudioCLI/Commands/VadBenchmark.swift') }}
+
+      - name: Cache MUSAN noise samples
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Application Support/FluidAudio/vadDataset
+          key: ${{ runner.os }}-vad-dataset-mini50-${{ hashFiles('Sources/FluidAudioCLI/DatasetParsers/DatasetDownloader.swift') }}
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Run MUSAN VAD Benchmark
+        id: musan_benchmark
+        run: |
+          echo "🎯 Running MUSAN benchmark..."
+          swift run fluidaudiocli vad-benchmark \
+            --dataset mini50 \
+            --all-files \
+            --threshold 0.5 \
+            --output musan_vad_results.json
+
+      - name: Run VOiCES VAD Benchmark
+        id: voices_benchmark
+        run: |
+          echo "🎯 Running VOiCES benchmark..."
+          swift run fluidaudiocli vad-benchmark \
+            --dataset voices-subset \
+            --all-files \
+            --threshold 0.5 \
+            --output voices_vad_results.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vad-benchmark-${{ github.sha }}
+          path: |
+            musan_vad_results.json
+            voices_vad_results.json
+          retention-days: 30
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let reportContent = '## VAD Benchmark Results\n\n';
+
+            try {
+              // Read MUSAN results
+              let musanResults = null;
+              if (fs.existsSync('musan_vad_results.json')) {
+                musanResults = JSON.parse(fs.readFileSync('musan_vad_results.json', 'utf8'));
+              }
+
+              // Read VOiCES results
+              let voicesResults = null;
+              if (fs.existsSync('voices_vad_results.json')) {
+                voicesResults = JSON.parse(fs.readFileSync('voices_vad_results.json', 'utf8'));
+              }
+
+              if (musanResults || voicesResults) {
+                reportContent += `### Performance Comparison\n\n`;
+                reportContent += `| Dataset | Accuracy | Precision | Recall | F1-Score | RTFx | Files |\n`;
+                reportContent += `|---------|----------|-----------|--------|----------|------|-------|\n`;
+
+                if (musanResults) {
+                  const rtfx = musanResults.rtfx < 1 && musanResults.rtfx > 0 ?
+                    `${(1.0/musanResults.rtfx).toFixed(1)}x faster` :
+                    `${musanResults.rtfx?.toFixed(1)}x slower`;
+                  reportContent += `| MUSAN | ${musanResults.accuracy?.toFixed(1)}% | ${musanResults.precision?.toFixed(1)}% | ${musanResults.recall?.toFixed(1)}% | ${musanResults.f1_score?.toFixed(1)}% | ${rtfx} | ${musanResults.total_files} |\n`;
+                }
+
+                if (voicesResults) {
+                  const rtfx = voicesResults.rtfx < 1 && voicesResults.rtfx > 0 ?
+                    `${(1.0/voicesResults.rtfx).toFixed(1)}x faster` :
+                    `${voicesResults.rtfx?.toFixed(1)}x slower`;
+                  reportContent += `| VOiCES | ${voicesResults.accuracy?.toFixed(1)}% | ${voicesResults.precision?.toFixed(1)}% | ${voicesResults.recall?.toFixed(1)}% | ${voicesResults.f1_score?.toFixed(1)}% | ${rtfx} | ${voicesResults.total_files} |\n`;
+                }
+
+                reportContent += `\n### Dataset Details\n\n`;
+                reportContent += `- **MUSAN**: Music, Speech, and Noise dataset - standard VAD evaluation\n`;
+                reportContent += `- **VOiCES**: Voices Obscured in Complex Environmental Settings - tests robustness in real-world conditions\n\n`;
+
+                // Add performance assessment
+                const avgF1 = ((musanResults?.f1_score || 0) + (voicesResults?.f1_score || 0)) /
+                              ((musanResults ? 1 : 0) + (voicesResults ? 1 : 0));
+
+                if (avgF1 >= 70.0) {
+                  reportContent += `✅: Average F1-Score above 70%\n`;
+                } else if (avgF1 >= 60.0) {
+                  reportContent += `⚠️: Average F1-Score above 60%\n`;
+                } else {
+                  reportContent += `❌: Average F1-Score below 60%\n`;
+                }
+
+              } else {
+                reportContent += `❌ Benchmark failed - no results generated\n`;
+              }
+
+              reportContent += '<!-- fluidaudio-benchmark-vad -->';
+
+              // Find and update existing comment
+              const { data: comments } = await github.rest.issues.listComments({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+
+              const existingComment = comments.find(c =>
+                c.body.includes('<!-- fluidaudio-benchmark-vad -->')
+              );
+
+              if (existingComment) {
+                await github.rest.issues.updateComment({
+                  comment_id: existingComment.id,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: reportContent
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: reportContent
+                });
+              }
+            } catch (error) {
+              console.error('Failed to post comment:', error);
+            }

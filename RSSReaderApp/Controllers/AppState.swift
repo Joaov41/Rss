@@ -143,6 +143,12 @@ final class GlobalSummaryService {
     var throughputReporter: ((String) -> Void)?
     var redditCommentsCacheReporter: (([(RedditPost, [String])]) -> Void)?
 
+    private static func flattenedCommentTexts(_ comments: [RedditCommentModel]) -> [String] {
+        comments.flatMap { comment in
+            ["u/\(comment.author): \(comment.body)"] + flattenedCommentTexts(comment.replies)
+        }
+    }
+
     init(summaryService: SummaryService, redditService: RedditService, settingsProvider: @escaping () -> AppSettings = { PersistenceManager.shared.loadSettings() }, cloudRequestHandler: ((String, @escaping (String) -> Void) -> Void)? = nil) {
         self.summaryService = summaryService
         self.redditService = redditService
@@ -200,18 +206,20 @@ final class GlobalSummaryService {
                 }
 
                 Task(priority: .userInitiated) {
-                    var results: Array<(index: Int, post: RedditPost, topLevel: [RedditCommentModel])?> = Array(repeating: nil, count: orderedPosts.count)
+                    var results: Array<(index: Int, post: RedditPost, topLevel: [RedditCommentModel], allComments: [RedditCommentModel])?> = Array(repeating: nil, count: orderedPosts.count)
                     var pendingIndices = Set(orderedPosts.map { $0.index })
                     var sequentialIndices = Set<Int>()
                     var triggeredSequential = false
 
                     func storeResult(for index: Int, result: RedditCommentFetchResult) {
                         let post = orderedPosts[index].post
-                        let topLevel = result.comments
+                        let filteredComments = result.comments
+                            .filter { $0.author.lowercased() != "automoderator" }
+                        let topLevel = filteredComments
                             .filter { $0.indentationLevel == 0 }
                             .sorted { $0.score > $1.score }
                         let limited = Array(topLevel.prefix(topComments))
-                        results[index] = (index: index, post: post, topLevel: limited)
+                        results[index] = (index: index, post: post, topLevel: limited, allComments: filteredComments)
                         print("📱 GlobalSummaryService: Collected \(limited.count) comments for post ID: \(post.id)")
                         if let error = result.errorDescription, !error.isEmpty {
                             print("⚠️ GlobalSummaryService: Comment fetch warning for post ID \(post.id) – \(error)")
@@ -228,7 +236,7 @@ final class GlobalSummaryService {
                             let entry = orderedPosts[nextParallelIndex]
                             nextParallelIndex += 1
                             group.addTask {
-                                let result = await self.redditService.fetchCommentsDetailed(for: entry.post.id, in: entry.post.subreddit, limit: topComments, depth: 0)
+                                let result = await self.redditService.fetchCommentsDetailed(for: entry.post.id, in: entry.post.subreddit, limit: topComments, depth: 10)
                                 return (entry.index, result)
                             }
                         }
@@ -290,7 +298,7 @@ final class GlobalSummaryService {
 
                             let entry = orderedPosts[index]
                             print("📱 GlobalSummaryService: Sequentially refetching comments for post index \(index) in r/\(entry.post.subreddit)")
-                            let fetchResult = await self.redditService.fetchCommentsDetailed(for: entry.post.id, in: entry.post.subreddit, limit: topComments, depth: 0)
+                            let fetchResult = await self.redditService.fetchCommentsDetailed(for: entry.post.id, in: entry.post.subreddit, limit: topComments, depth: 10)
                             storeResult(for: index, result: fetchResult)
                             if let updatedStatus = fetchResult.rateLimit {
                                 lastRateStatus = updatedStatus
@@ -301,14 +309,14 @@ final class GlobalSummaryService {
                     for index in 0..<orderedPosts.count {
                         if results[index] == nil {
                             let post = orderedPosts[index].post
-                            results[index] = (index: index, post: post, topLevel: [])
+                            results[index] = (index: index, post: post, topLevel: [], allComments: [])
                         }
                     }
 
                     let ordered = results.compactMap { $0 }.sorted { $0.index < $1.index }
                     let postIds = ordered.map { $0.post.id }
                     let cachedContexts = ordered.map { triple in
-                        let comments = triple.topLevel.map { "u/\($0.author): \(Self.firstNChars($0.body, 500))" }
+                        let comments = Self.flattenedCommentTexts(triple.allComments)
                         return (triple.post, comments)
                     }
                     self.redditCommentsCacheReporter?(cachedContexts)
@@ -2320,14 +2328,26 @@ class AppState: ObservableObject {
         isRefreshingFeeds = true
         let group = DispatchGroup()
 
-        // Refresh RSS feeds
-        for subscription in subscriptions where subscription.type == .rss {
+        // Refresh RSS feeds with bounded concurrency. Launching every saved
+        // subscription at once can overwhelm CFNetwork's TLS work on macOS.
+        let rssSubscriptions = subscriptions.filter { $0.type == .rss }
+        if !rssSubscriptions.isEmpty {
             group.enter()
-                fetchArticleFeed(for: subscription)
-                    .receive(on: RunLoop.main)
-                    .sink(receiveCompletion: { _ in
+            rssSubscriptions.publisher
+                .flatMap(maxPublishers: .max(3)) { [weak self] subscription -> AnyPublisher<(Subscription, Feed), Never> in
+                    guard let self else {
+                        return Empty(completeImmediately: true).eraseToAnyPublisher()
+                    }
+
+                    return self.fetchArticleFeed(for: subscription)
+                        .map { (subscription, $0) }
+                        .catch { _ in Empty(completeImmediately: true) }
+                        .eraseToAnyPublisher()
+                }
+                .receive(on: RunLoop.main)
+                .sink(receiveCompletion: { _ in
                     group.leave()
-                }, receiveValue: { [weak self] feed in
+                }, receiveValue: { [weak self] subscription, feed in
                     // Apply read and favorite status from persistence
                     var processedFeed = feed
                     let existingSummaries = self?.feeds
@@ -2350,7 +2370,7 @@ class AppState: ObservableObject {
                        let subscription = self?.subscriptions.first(where: { $0.url == processedFeed.url }) {
                         self?.markSubscriptionAsPodcast(subscription, resolvedTitle: processedFeed.title)
                     }
-                    
+
                     // Defer to avoid modifying during view updates
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
                         if let index = self?.feeds.firstIndex(where: { $0.url == subscription.url }) {
@@ -2501,15 +2521,13 @@ class AppState: ObservableObject {
         
         print("📱 AppState: Found \(redditSubscriptions.count) Reddit subscriptions to refresh")
         
-        // Refresh Reddit feeds
+        // Show cached/placeholder content immediately before the bounded refresh.
         for subscription in redditSubscriptions {
             if let cachedFeed = hydratedCachedRedditFeed(subreddit: subscription.url, sortOption: requestedSortOption) {
                 print("📱 AppState: Showing cached \(requestedSortOption.rawValue) feed for r/\(subscription.url) while refreshing")
                 updateVisibleRedditFeedIfNeeded(cachedFeed, sortOption: requestedSortOption)
             }
 
-            group.enter()
-            
             // Create a temporary feed object with loading state if needed
             // Defer the append to avoid modifying during view updates
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
@@ -2524,12 +2542,30 @@ class AppState: ObservableObject {
                     self.redditFeedSortState[subscription.url] = requestedSortOption
                 }
             }
-            
-            redditService.fetchSubreddit(subreddit: subscription.url, sortOption: requestedSortOption)
+        }
+
+        // Refresh Reddit feeds with bounded concurrency so a large subscription
+        // library cannot exhaust CFNetwork alongside RSS and image requests.
+        if !redditSubscriptions.isEmpty {
+            group.enter()
+            redditSubscriptions.publisher
+                .flatMap(maxPublishers: .max(2)) { [weak self] subscription -> AnyPublisher<(Subscription, RedditFeed), Never> in
+                    guard let self else {
+                        return Empty(completeImmediately: true).eraseToAnyPublisher()
+                    }
+
+                    return self.redditService.fetchSubreddit(
+                        subreddit: subscription.url,
+                        sortOption: requestedSortOption
+                    )
+                    .map { (subscription, $0) }
+                    .catch { _ in Empty(completeImmediately: true) }
+                    .eraseToAnyPublisher()
+                }
                 .receive(on: RunLoop.main)
-                .sink(receiveCompletion: { completion in
+                .sink(receiveCompletion: { _ in
                     group.leave()
-                }, receiveValue: { [weak self] redditFeed in
+                }, receiveValue: { [weak self] subscription, redditFeed in
                     guard let self = self else { return }
                     
                     let rateStatus = self.redditService.latestFeedRateLimitStatus(for: subscription.url)
@@ -3473,17 +3509,19 @@ class AppState: ObservableObject {
         sourceLabel: String,
         sourceText: String,
         question: String,
-        preferCompleteAnswer: Bool = false
+        preferCompleteAnswer: Bool = false,
+        additionalRules: String = ""
     ) -> String {
         let answerLengthRule = preferCompleteAnswer
             ? "- Give a complete answer using as much relevant detail as the source supports; use short paragraphs if needed."
             : "- Keep the answer concise, using short paragraphs if needed."
+        let additionalRuleText = additionalRules.isEmpty ? "" : "\n\(additionalRules)"
 
         return """
         Answer the question using only the source material.
 
         Rules:
-        - Use only facts present in the source.
+        - Use only facts present in the source.\(additionalRuleText)
         - If the source does not answer the question, say the information is not available in the source.
         - Return plain text only.
         - Do not use Markdown symbols, headings, bullets, or code fences.
@@ -3516,6 +3554,33 @@ class AppState: ObservableObject {
         )
     }
 
+    private func geminiArticleQAPrompt(article: Article, question: String) -> String {
+        let sourceText = "Title: \(article.title)\n\n\(fullArticleContext(article))"
+        return """
+        Answer the question using only the complete article source.
+
+        Rules:
+        - Read the complete article source before deciding whether the answer is available.
+        - Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests; derive them from the article's explicit content and relationships.
+        - Resolve clear references, paraphrases, and equivalent terms from the surrounding article context.
+        - Do not invent details or make an unsupported inference.
+        - If no explicit or contextually supported answer exists anywhere in the article, say the information is not available in the article.
+        - Return plain text only.
+        - Do not use Markdown symbols, headings, bullets, or code fences.
+        - Keep the answer concise, using short paragraphs if needed.
+
+        <source_label>Article</source_label>
+        <source_text>
+        \(sourceText)
+        </source_text>
+
+        Question:
+        \(question.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        Return only the answer.
+        """
+    }
+
     private func articleFullQAPrompt(article: Article, question: String, preferCompleteAnswer: Bool = false) -> String {
         strictQAPrompt(
             sourceLabel: "Article",
@@ -3539,7 +3604,11 @@ class AppState: ObservableObject {
             sourceLabel: "Reddit post and all retrieved comments",
             sourceText: fullRedditContext(post: post, comments: comments),
             question: question,
-            preferCompleteAnswer: true
+            preferCompleteAnswer: true,
+            additionalRules: """
+            - Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests. Infer the best-supported theme from the post and the relevant or recurring viewpoints in the comments; the source does not need to use the literal word "theme".
+            - For those synthesis questions, answer with the overall idea supported by the source instead of requiring a sentence that explicitly labels a theme.
+            """
         )
     }
 
@@ -3548,7 +3617,33 @@ class AppState: ObservableObject {
             sourceLabel: comments.isEmpty ? "Reddit post" : "Reddit post and comments",
             sourceText: fullRedditContext(post: post, comments: comments),
             question: question,
-            preferCompleteAnswer: preferCompleteAnswer
+            preferCompleteAnswer: preferCompleteAnswer,
+            additionalRules: """
+            - Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests. Infer the best-supported theme from the post and the relevant or recurring viewpoints in the comments; the source does not need to use the literal word "theme".
+            - For those synthesis questions, answer with the overall idea supported by the source instead of requiring a sentence that explicitly labels a theme.
+            """
+        )
+    }
+
+    func articleSelectionSourceContext(for article: Article) -> (label: String, text: String) {
+        let sourceText = """
+        Title: \(article.title)
+        Source: \(article.feedTitle)
+        Link: \(article.url?.absoluteString ?? article.feedURL)
+
+        \(normalizedSummarySourceText(cleanedArticleContent(article), maxCharacters: 18_000))
+        """
+        return ("Original article source", sourceText)
+    }
+
+    func redditSelectionSourceContext(
+        post: RedditPost,
+        comments: [RedditCommentModel]
+    ) -> (label: String, text: String) {
+        let source = redditSummarySourceText(post: post, comments: comments)
+        return (
+            comments.isEmpty ? "Original Reddit post source" : "Original Reddit post and comments source",
+            source.count > 40_000 ? String(source.prefix(40_000)) : source
         )
     }
 
@@ -6112,13 +6207,17 @@ class AppState: ObservableObject {
             for (index, post) in posts.enumerated() {
                 let comments = await self.fetchTopCommentsForWebGlobalSummary(post: post, topComments: topComments)
                 cachedCommentContexts.append(
-                    (post, comments.map { "u/\($0.author): \($0.body)" })
+                    (post, comments.flatMap { self.extractAllCommentTexts(from: $0) })
                 )
+                let summaryComments = comments
+                    .filter { $0.indentationLevel == 0 }
+                    .sorted { $0.score > $1.score }
+                    .prefix(max(1, topComments))
 
                 do {
                     let rawSummary = try await self.performWebAIRequestAsync(
                         title: "Reddit Summary \(index + 1) of \(posts.count)",
-                        prompt: self.redditPostSummaryPrompt(post: post, comments: comments)
+                        prompt: self.redditPostSummaryPrompt(post: post, comments: Array(summaryComments))
                     )
                     let cleaned = self.cleanMarkdownArtifactsForDisplay(rawSummary)
 
@@ -6154,15 +6253,14 @@ class AppState: ObservableObject {
                     for: post.id,
                     in: post.subreddit,
                     limit: topComments,
-                    depth: 0
+                    depth: 10
                 )
                 if let error = result.errorDescription, !error.isEmpty {
                     print("⚠️ AppState.WebAI: Comment fetch error for \(post.id): \(error)")
                 }
                 let filtered = result.comments
                     .filter { $0.author.lowercased() != "automoderator" }
-                    .sorted { $0.score > $1.score }
-                continuation.resume(returning: Array(filtered.prefix(max(1, topComments))))
+                continuation.resume(returning: filtered)
             }
         }
     }
@@ -6965,6 +7063,15 @@ class AppState: ObservableObject {
 
             await MainActor.run {
                 completion(message)
+            }
+        }
+    }
+
+    func loadCacheSize(completion: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let display = self.getCacheSize()
+            DispatchQueue.main.async {
+                completion(display)
             }
         }
     }
@@ -8046,16 +8153,7 @@ class AppState: ObservableObject {
         // Original Gemini code
         isLoading = true
 
-        let prompt = """
-        Article Title: \(article.title)
-        Article Content:
-        \(article.content)
-        
-        Based solely on the information in the article above, please answer the following question:
-        \(question)
-        
-        If the answer cannot be determined from the article, please state that the information is not available in the article.
-        """
+        let prompt = geminiArticleQAPrompt(article: article, question: question)
         
         summaryService.summarizeText("", customPrompt: prompt)
             .receive(on: RunLoop.main)
@@ -8299,12 +8397,15 @@ class AppState: ObservableObject {
         Comments:
         \(combinedComments)
         
+        Read the complete post and comments before deciding whether the answer is available. Use the title, post, and comments together. Resolve clear references, paraphrases, pronouns, and equivalent terms from their surrounding context instead of requiring the request and source to use identical words. Do not invent details or resolve a genuinely ambiguous reference without evidence from the source.
+        Questions asking for the theme, main topic, central idea, or main argument are grounded synthesis requests. Infer the best-supported theme from the post and the relevant or recurring viewpoints in the comments; the source does not need to use the literal word "theme". For those synthesis questions, answer with the overall idea supported by the source instead of requiring a sentence that explicitly labels a theme.
+
         Based solely on the information in the Reddit post and comments above, answer the following request. Produce ONLY a compact JSON array of paragraph strings (e.g., ["First paragraph.", "Second paragraph."]). Each paragraph must contain no more than 2–3 sentences. Do not include Markdown, headings, bullet points, or code fences. Do not add any commentary outside the JSON array.
 
         Request:
         \(question)
         
-        If the answer cannot be determined from the post or comments, please return ["The information is not available in the provided content."].
+        Return ["The information is not available in the provided content."] only when no explicit or contextually supported answer exists anywhere in the post or comments.
         """
         
         summaryService.summarizeText("", customPrompt: prompt)
@@ -8697,7 +8798,7 @@ class AppState: ObservableObject {
             let body = sanitizedSnippet(from: post.content, limit: 1200)
             let commentSection: String
             if comments.isEmpty {
-                commentSection = "  - No top comments captured."
+                commentSection = "  - No comments captured."
             } else {
                 commentSection = comments.map { "  - \(truncateText($0, limit: 400))" }.joined(separator: "\n")
             }
@@ -8707,7 +8808,7 @@ class AppState: ObservableObject {
             Title: \(post.title)
             Body:
             \(body.isEmpty ? "(No body text provided)" : body)
-            Top Comments:
+            Comments (including nested replies):
             \(commentSection)
             """
         }.joined(separator: "\n\n")
@@ -8736,13 +8837,14 @@ class AppState: ObservableObject {
         }
         
         let publishers = posts.map { post in
-            redditService.fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: topComments, depth: 0)
+            redditService.fetchCommentsDetailed(for: post.id, in: post.subreddit, limit: topComments, depth: 10)
                 .map { result -> (RedditPost, [String]) in
                     if let errorDesc = result.errorDescription {
                         print("⚠️ AppState.GlobalQA: Comment fetch error for \(post.id): \(errorDesc)")
                     }
                     let filtered = result.comments.filter { $0.author.lowercased() != "automoderator" }
-                    let comments = Array(filtered.prefix(max(1, topComments))).map { "u/\($0.author): \($0.body)" }
+                    let comments = filtered
+                        .flatMap { self.extractAllCommentTexts(from: $0) }
                     if comments.isEmpty {
                         return (post, ["No comments captured for this post."])
                     }

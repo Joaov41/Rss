@@ -2,6 +2,7 @@ import SwiftUI
 @preconcurrency import WebKit
 import Combine
 import SwiftSoup
+import Kingfisher
 #if os(iOS)
 import UIKit
 #elseif os(macOS)
@@ -4607,15 +4608,16 @@ struct DomainIconView: View {
             if let domain = domain {
                 // Create a Google favicon URL
                 if let googleFaviconURL = URL(string: "https://www.google.com/s2/favicons?domain=\(domain)&sz=64") {
-                    AsyncImage(url: googleFaviconURL) { image in
-                        image
-                            .resizable()
-                            .scaledToFit()
-                    } placeholder: {
-                        // While loading, show a placeholder with the domain's first letter
-                        DomainLetterView(domain: domain, size: size)
-                    }
-                    .frame(width: size, height: size)
+                    KFImage(googleFaviconURL)
+                        .retry(maxCount: 3, interval: .seconds(0.5))
+                        .cacheOriginalImage()
+                        .placeholder {
+                            // While loading, show a placeholder with the domain's first letter
+                            DomainLetterView(domain: domain, size: size)
+                        }
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: size, height: size)
                 } else {
                     // If URL creation failed, use a placeholder
                     DomainLetterView(domain: domain, size: size)
@@ -5004,6 +5006,7 @@ private struct FeedRowThumbnailView: View {
     let height: CGFloat
     let contentMode: SwiftUI.ContentMode
     let usesBlurredBackdrop: Bool
+    @State private var didFail = false
 
     init(
         url: URL,
@@ -5020,53 +5023,54 @@ private struct FeedRowThumbnailView: View {
     }
 
     var body: some View {
-        AsyncImage(url: url, transaction: Transaction(animation: .none)) { phase in
-            switch phase {
-            case .success(let image):
-                if usesBlurredBackdrop {
-                    ZStack {
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: width, height: height)
-                            .clipped()
-                            .blur(radius: 14)
-                            .scaleEffect(1.08)
-
-                        Color.black.opacity(0.12)
-
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: width, height: height)
-                    }
-                } else {
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: contentMode)
-                        .frame(width: width, height: height)
-                        .clipped()
-                }
-            case .failure:
+        Group {
+            if didFail {
                 ZStack {
                     Rectangle()
                         .fill(AppColors.systemGray5)
                     Image(systemName: "photo")
                         .foregroundColor(.gray)
                 }
-            case .empty:
+            } else if usesBlurredBackdrop {
                 ZStack {
-                    Rectangle()
-                        .fill(AppColors.systemGray5)
-                    ProgressView()
+                    reliableImage(contentMode: .fill)
+                        .blur(radius: 14)
+                        .scaleEffect(1.08)
+
+                    Color.black.opacity(0.12)
+
+                    reliableImage(contentMode: .fit)
                 }
-            @unknown default:
-                EmptyView()
+            } else {
+                reliableImage(contentMode: contentMode)
             }
         }
         .frame(width: width, height: height)
         .clipped()
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onChange(of: url) { _, _ in
+            didFail = false
+        }
+    }
+
+    private func reliableImage(contentMode: SwiftUI.ContentMode) -> some View {
+        KFImage(url)
+            .retry(maxCount: 3, interval: .seconds(0.75))
+            .cacheOriginalImage()
+            .onFailure { _ in
+                didFail = true
+            }
+            .placeholder {
+                ZStack {
+                    Rectangle()
+                        .fill(AppColors.systemGray5)
+                    ProgressView()
+                }
+            }
+            .resizable()
+            .aspectRatio(contentMode: contentMode)
+            .frame(width: width, height: height)
+            .clipped()
     }
 }
 
@@ -5520,6 +5524,7 @@ struct ArticleDetailView: View {
     @State private var selectionAskAIMarkdownResponse: String?
     @State private var selectionAskAIError: String?
     @State private var selectionAskAITask: Task<Void, Never>?
+    @State private var selectionAskAIOrigin: AskAISelectionOrigin?
     @State private var articleChromeRestoreWorkItem: DispatchWorkItem?
     @State private var isArticleReaderLoading = true
     @State private var youtubePlaybackError: String?
@@ -5773,6 +5778,7 @@ struct ArticleDetailView: View {
                         isLoading: isSelectionAskAIInFlight,
                         response: selectionAskAIResponse,
                         markdownResponse: selectionAskAIMarkdownResponse,
+                        selectionOrigin: selectionAskAIOrigin,
                         errorMessage: selectionAskAIError,
                         onClose: { showSelectionAskAIResponse = false },
                         onCopy: copySelectionAskAIResponse
@@ -5788,6 +5794,7 @@ struct ArticleDetailView: View {
                 isLoading: isSelectionAskAIInFlight,
                 response: selectionAskAIResponse,
                 markdownResponse: selectionAskAIMarkdownResponse,
+                selectionOrigin: selectionAskAIOrigin,
                 errorMessage: selectionAskAIError,
                 onClose: { showSelectionAskAIResponse = false },
                 onCopy: copySelectionAskAIResponse
@@ -6874,10 +6881,10 @@ struct ArticleDetailView: View {
                 normalizesMarkdownParagraphs: qaState.markdownAnswerText != nil
             )
             .onAskAI { selectedText in
-                handleAskAISelection(selectedText: selectedText, context: qaState.answerText)
+                handleQAAskAISelection(selectedText: selectedText, context: qaState.answerText)
             }
             .onAskAIWeb { selectedText in
-                handleAskAIWebSelection(selectedText: selectedText, context: qaState.answerText)
+                handleQAAskAIWebSelection(selectedText: selectedText, context: qaState.answerText)
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 16)
@@ -7018,7 +7025,49 @@ struct ArticleDetailView: View {
         askAIFromArticleSelection(selectedText, article: article, action: .web)
     }
 
-    private func askAIFromArticleSelection(_ selection: String, article: Article, action: AskAISelectionAction) {
+    private func handleQAAskAISelection(selectedText: String, context: String) {
+        guard let article = appState.selectedArticle else { return }
+        let source = appState.articleSelectionSourceContext(for: article)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: qaState.previousQuestionText ?? qaState.questionText,
+            originalAnswer: qaState.answerText
+        )
+        askAIFromArticleSelection(
+            selectedText,
+            context: askAINearbyRenderedContext(selectedText: selectedText, in: context),
+            article: article,
+            action: .standard,
+            selectionOrigin: origin
+        )
+    }
+
+    private func handleQAAskAIWebSelection(selectedText: String, context: String) {
+        guard let article = appState.selectedArticle else { return }
+        let source = appState.articleSelectionSourceContext(for: article)
+        let origin = AskAISelectionOrigin(
+            sourceLabel: source.label,
+            sourceText: source.text,
+            originalQuestion: qaState.previousQuestionText ?? qaState.questionText,
+            originalAnswer: qaState.answerText
+        )
+        askAIFromArticleSelection(
+            selectedText,
+            context: askAINearbyRenderedContext(selectedText: selectedText, in: context),
+            article: article,
+            action: .web,
+            selectionOrigin: origin
+        )
+    }
+
+    private func askAIFromArticleSelection(
+        _ selection: String,
+        context: String = "",
+        article: Article,
+        action: AskAISelectionAction,
+        selectionOrigin: AskAISelectionOrigin? = nil
+    ) {
         let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -7029,10 +7078,23 @@ struct ArticleDetailView: View {
         selectionAskAIError = nil
         showSelectionAskAIResponse = true
 
-        let prompt = appState.articleQAPrompt(
-            article: article,
-            question: "What is said about \(trimmed)?"
-        )
+        let prompt: String
+        if let selectionOrigin {
+            prompt = buildAskAISelectionPrompt(
+                selectedText: trimmed,
+                extractedContext: context,
+                sourceContext: selectionOrigin.boundedSource(additionalAnswer: qaState.answerText),
+                sourceLabel: selectionOrigin.promptSourceLabel
+            )
+        } else {
+            prompt = appState.articleQAPrompt(
+                article: article,
+                question: "What is said about \(trimmed)?"
+            )
+        }
+        guard !prompt.isEmpty else { return }
+
+        self.selectionAskAIOrigin = selectionOrigin
 
         selectionAskAITask = Task {
             let answer = await withCheckedContinuation { continuation in

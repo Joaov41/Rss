@@ -167,17 +167,22 @@ class RedditService {
 
     // MARK: - Rate Limiting
 
-    /// Ensures we don't exceed rate limits by waiting between requests
-    private func waitForRateLimit() async {
+    private func reserveRateLimitSlot() -> TimeInterval {
         rateLimitLock.lock()
         defer { rateLimitLock.unlock() }
 
-        let timeSinceLastRequest = Date().timeIntervalSince(lastRequestTime)
-        if timeSinceLastRequest < minRequestInterval {
-            let waitTime = minRequestInterval - timeSinceLastRequest
+        let now = Date()
+        let nextRequestTime = max(now, lastRequestTime.addingTimeInterval(minRequestInterval))
+        lastRequestTime = nextRequestTime
+        return nextRequestTime.timeIntervalSince(now)
+    }
+
+    /// Ensures we don't exceed rate limits without holding a lock across suspension.
+    private func waitForRateLimit() async {
+        let waitTime = reserveRateLimitSlot()
+        if waitTime > 0 {
             try? await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
         }
-        lastRequestTime = Date()
     }
 
     private func captureRateLimit(from response: HTTPURLResponse,
