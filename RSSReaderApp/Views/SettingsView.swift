@@ -149,6 +149,7 @@ struct SettingsView: View {
     @State private var isChatGPTWebAILoggedIn = false
     @State private var isGeminiWebAILoggedIn = false
     #endif
+    @State private var pendingWebAILoginProvider: WebAIProvider?
     private let mlxModelBookmarkKey = "MLXExternalModelBookmark"
     private let mlxModelPathKey = "MLXExternalModelPath"
     
@@ -333,7 +334,7 @@ struct SettingsView: View {
 
                             HStack(spacing: 10) {
                                 Button(chatGPTLoginButtonTitle) {
-                                    launchWebAILogin(.chatgpt)
+                                    pendingWebAILoginProvider = .chatgpt
                                 }
                                 .buttonStyle(.bordered)
 
@@ -348,7 +349,7 @@ struct SettingsView: View {
 
                             HStack(spacing: 10) {
                                 Button(geminiLoginButtonTitle) {
-                                    launchWebAILogin(.gemini)
+                                    pendingWebAILoginProvider = .gemini
                                 }
                                 .buttonStyle(.bordered)
 
@@ -1048,6 +1049,16 @@ struct SettingsView: View {
                 )
                 .onPreferenceChange(SettingsFormWidthPreferenceKey.self) { width in
                     settingsFormWidth = width
+                }
+                if let provider = pendingWebAILoginProvider {
+                    WebAILoginWarningPopup(
+                        provider: provider,
+                        onCancel: { pendingWebAILoginProvider = nil },
+                        onContinue: {
+                            pendingWebAILoginProvider = nil
+                            launchWebAILogin(provider)
+                        }
+                    )
                 }
             }
             .navigationTitle("Settings")
@@ -2214,6 +2225,46 @@ struct OPMLDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         let data = try Data(contentsOf: url)
         return FileWrapper(regularFileWithContents: data)
+    }
+}
+
+private struct WebAILoginWarningPopup: View {
+    let provider: WebAIProvider
+    let onCancel: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("IMPORTANT")
+                    .font(.headline)
+
+                Text("Do not use your main ChatGPT or Gemini account. Create a free new account just to use with this app. The providers may terminate access at any time. These model options are optional and come with no guarantees.")
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 10) {
+                    Button(action: onCancel) {
+                        Text("Cancel")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    Button(action: onContinue) {
+                        Text("Continue to \(provider.displayName)")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 520)
+            .modifier(AdaptiveGlassModifier(cornerRadius: 24))
+            .padding(.horizontal, 24)
+        }
+        .zIndex(10)
     }
 }
 
