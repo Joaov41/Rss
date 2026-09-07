@@ -1608,7 +1608,7 @@ extension View {
 
     // Swipe back gesture that works from anywhere on screen (for list views on iPhone)
     @ViewBuilder
-    func anywhereSwipeBack(enabled: Bool, isTracking: Binding<Bool>? = nil, perform action: @escaping () -> Void) -> some View {
+    func anywhereSwipeBack(enabled: Bool, trackpadEnabled: Bool = true, isTracking: Binding<Bool>? = nil, perform action: @escaping () -> Void) -> some View {
         if enabled {
             self
                 // Touch-based swipe gesture
@@ -1657,7 +1657,7 @@ extension View {
                 #if os(iOS)
                 // Trackpad scroll gesture overlay (must not block vertical scrolling)
                 .overlay(
-                    TrackpadScrollGestureOverlay(onSwipeRight: action)
+                    TrackpadScrollGestureOverlay(isEnabled: trackpadEnabled, onSwipeRight: action)
                 )
                 #endif
         } else {
@@ -1674,20 +1674,24 @@ extension View {
 // Trackpad scroll gesture overlay using allowedScrollTypesMask
 // This captures trackpad two-finger scroll without blocking touch events
 struct TrackpadScrollGestureOverlay: UIViewRepresentable {
+    var isEnabled: Bool = true
     let onSwipeRight: () -> Void
 
     func makeUIView(context: Context) -> TrackpadGestureView {
         let view = TrackpadGestureView(onSwipeRight: onSwipeRight)
+        view.isBackSwipeEnabled = isEnabled
         return view
     }
 
     func updateUIView(_ uiView: TrackpadGestureView, context: Context) {
         uiView.onSwipeRight = onSwipeRight
+        uiView.isBackSwipeEnabled = isEnabled
     }
 }
 
 class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
     var onSwipeRight: () -> Void
+    var isBackSwipeEnabled = true
     private var accumulatedX: CGFloat = 0
     private var accumulatedY: CGFloat = 0
     private var hasTriggered = false
@@ -1753,6 +1757,7 @@ class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func handleTrackpadPan(_ gesture: UIPanGestureRecognizer) {
+        guard isBackSwipeEnabled else { return }
         switch gesture.state {
         case .began:
             accumulatedX = 0
@@ -1790,6 +1795,12 @@ class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
     }
 
     // MARK: - UIGestureRecognizerDelegate
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Reject a hidden list's entire gesture so it cannot navigate again when
+        // the detail closes during the same swipe. Keep the list itself mounted.
+        return isBackSwipeEnabled
+    }
 
     // Only respond to indirect pointer (trackpad/mouse), not direct touches
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -5067,7 +5078,12 @@ struct ContentView: View {
             }
         }
         #if os(iOS)
-        .anywhereSwipeBack(enabled: isPhoneStyleLayout, isTracking: $isBackSwipeInProgress) {
+        .anywhereSwipeBack(
+            enabled: isPhoneStyleLayout,
+            trackpadEnabled: appState.selectedArticle == nil
+                && appState.selectedRedditPost == nil,
+            isTracking: $isBackSwipeInProgress
+        ) {
             if isPhoneStyleLayout && appState.activeSubscriptionURL == subscription.url {
                 appState.exitActiveSubscriptionView()
             }
@@ -5247,7 +5263,12 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(isPhoneStyleLayout)
             .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
-            .anywhereSwipeBack(enabled: isPhoneStyleLayout, isTracking: $isBackSwipeInProgress) {
+            .anywhereSwipeBack(
+                enabled: isPhoneStyleLayout,
+                trackpadEnabled: appState.selectedArticle == nil
+                    && appState.selectedRedditPost == nil,
+                isTracking: $isBackSwipeInProgress
+            ) {
                 if isPhoneStyleLayout && appState.activeSubscriptionURL == subscription.url {
                     appState.exitActiveSubscriptionView()
                 }

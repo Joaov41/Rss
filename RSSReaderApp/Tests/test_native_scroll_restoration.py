@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -43,6 +44,26 @@ class NativeScrollRestorationTests(unittest.TestCase):
             ".allowsHitTesting(appState.selectedArticle == nil && appState.selectedRedditPost == nil)",
             CONTENT_VIEW,
         )
+
+    def test_hidden_compact_subscription_lists_disable_trackpad_back(self):
+        # Detail selection must never switch the ViewBuilder branch wrapping
+        # either list: doing so destroys the native scroll view and its offset.
+        stable_list_with_gated_trackpad = re.compile(
+            r"\.anywhereSwipeBack\(\s*"
+            r"enabled: isPhoneStyleLayout,\s*"
+            r"trackpadEnabled: appState\.selectedArticle == nil\s*"
+            r"&& appState\.selectedRedditPost == nil,"
+        )
+        self.assertEqual(len(stable_list_with_gated_trackpad.findall(CONTENT_VIEW)), 2)
+        self.assertIn(
+            "TrackpadScrollGestureOverlay(isEnabled: trackpadEnabled, onSwipeRight: action)",
+            CONTENT_VIEW,
+        )
+        self.assertIn("uiView.isBackSwipeEnabled = isEnabled", CONTENT_VIEW)
+        # Reject at gesture start, not just in the callback: closing the detail
+        # must not let that same swipe also exit the subscription list.
+        should_begin = CONTENT_VIEW.split("func gestureRecognizerShouldBegin(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("return isBackSwipeEnabled", should_begin)
 
     def test_open_global_summary_remains_a_stable_refresh_snapshot(self):
         self.assertIn("Treat the open summary as a stable reading snapshot", CONTENT_VIEW)
