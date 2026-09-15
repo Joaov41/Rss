@@ -2,6 +2,70 @@ import XCTest
 @testable import RSSReaderApp
 
 final class BatchPodcastTests: XCTestCase {
+    func testPodcastShowNotesRemoveDocumentHTMLAndPreserveReadableBreaks() {
+        let html = "<html><head></head><body><p>First &amp; second.</p><p>Next paragraph.</p><ul><li>One</li><li>Two</li></ul></body></html>"
+        let result = PodcastShowNotesFormatter.plainText(from: html)
+
+        XCTAssertFalse(result.contains("<html>"))
+        XCTAssertFalse(result.contains("<body>"))
+        XCTAssertTrue(result.contains("First & second."))
+        XCTAssertTrue(result.contains("Next paragraph."))
+        XCTAssertTrue(result.contains("• One"))
+        XCTAssertTrue(result.contains("\n"))
+    }
+
+    func testPodcastTranscriptAvailabilityDistinguishesPublisherAndGeneratedSources() throws {
+        let audioURL = try XCTUnwrap(URL(string: "https://example.com/episode.mp3"))
+        let publisherURL = try XCTUnwrap(URL(string: "https://example.com/transcript.vtt"))
+        let segment = PodcastTranscriptSegment(start: 0, end: 1, text: "Hello")
+
+        XCTAssertEqual(
+            PodcastTranscriptAvailability.readyState(
+                for: PodcastEpisodeTranscript(episodeID: "1", sourceURL: publisherURL, languageCode: "en", segments: [segment]),
+                audioURL: audioURL
+            ),
+            .publisherAvailable
+        )
+        XCTAssertEqual(
+            PodcastTranscriptAvailability.readyState(
+                for: PodcastEpisodeTranscript(episodeID: "1", sourceURL: audioURL, languageCode: "en", segments: [segment]),
+                audioURL: audioURL
+            ),
+            .generatedAvailable
+        )
+    }
+
+    func testPodcastBackgroundSessionWaitsForEveryAttachedOperation() {
+        var lifecycle = PodcastBackgroundSessionLifecycle()
+
+        XCTAssertFalse(lifecycle.recordRootCompletion(success: true, hasDependents: true))
+        XCTAssertTrue(lifecycle.rootFinished)
+        XCTAssertFalse(lifecycle.recordDependentCompletion(success: true, hasRemainingDependents: true))
+        XCTAssertTrue(lifecycle.recordDependentCompletion(success: true, hasRemainingDependents: false))
+        XCTAssertTrue(lifecycle.succeeded)
+    }
+
+    func testPodcastBackgroundSessionAggregatesFailureRegardlessOfCompletionOrder() {
+        var lifecycle = PodcastBackgroundSessionLifecycle()
+
+        XCTAssertFalse(lifecycle.recordDependentCompletion(success: false, hasRemainingDependents: false))
+        XCTAssertTrue(lifecycle.recordRootCompletion(success: true, hasDependents: false))
+        XCTAssertFalse(lifecycle.succeeded)
+    }
+
+    func testUntypedDynamicEnclosurePreservesLegacyArtworkButBecomesPodcastAudioWithMetadata() throws {
+        let dynamicURL = try XCTUnwrap(URL(string: "https://example.com/media.php?id=42"))
+
+        XCTAssertEqual(
+            FeedEnclosureClassifier.classify(url: dynamicURL, mimeType: nil, hasPodcastMetadata: false),
+            FeedEnclosureClassification(isPodcastAudio: false, shouldUseAsArtwork: true)
+        )
+        XCTAssertEqual(
+            FeedEnclosureClassifier.classify(url: dynamicURL, mimeType: nil, hasPodcastMetadata: true),
+            FeedEnclosureClassification(isPodcastAudio: true, shouldUseAsArtwork: false)
+        )
+    }
+
     func testRedditContextIncludesEverySavedCommentAndSummary() throws {
         let post = makePost(id: "post-1", title: "Saved post", content: "Post body", summary: "Saved post summary")
         let result = GlobalSummaryResult(

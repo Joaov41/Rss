@@ -8,10 +8,14 @@
 		<string>com.joaovalente.rssreader.geminiProcessing</string>
 		<string>com.joaovalente.rssreader.summarization</string>
 		<string>com.joaovalente.rssreader.geminiRefresh</string>
+		<string>com.joaovalente.rssreader.podcastTask</string>
+		<string>com.joaovalente.rssreader.podcastProcessing</string>
 		<string>com.joaovalente.RSSReaderApp.geminiTask</string>
 		<string>com.joaovalente.RSSReaderApp.geminiProcessing</string>
 		<string>com.joaovalente.RSSReaderApp.summarization</string>
 		<string>com.joaovalente.RSSReaderApp.geminiRefresh</string>
+		<string>com.joaovalente.RSSReaderApp.podcastTask</string>
+		<string>com.joaovalente.RSSReaderApp.podcastProcessing</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -40,6 +44,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>RSSReaderApp connects to the Summarize bridge or Apple PCC Gateway running on your Mac for local AI summaries.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>RSS Reader uses on-device speech recognition to create transcripts for podcast episodes when publishers do not provide one.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

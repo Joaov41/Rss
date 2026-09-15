@@ -13,6 +13,7 @@ struct RSSReaderApp: App {
         // Initialize background task manager for long-running Gemini operations
         // This enables summaries and Q&A to complete even when device is locked
         GeminiBackgroundTaskManager.shared.prepareForLaunch()
+        PodcastBackgroundTaskManager.shared.prepareForLaunch()
         print("✅ RSSReaderApp: Background task manager initialized (supports locked device execution)")
         #endif
     }

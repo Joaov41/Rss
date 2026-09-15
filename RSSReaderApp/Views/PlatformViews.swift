@@ -27,6 +27,24 @@ struct iPhoneContentView: View {
         #if os(iOS)
         .navigationViewStyle(StackNavigationViewStyle())
         #endif
+        // A physical iPhone needs the mini-player on the outer navigation
+        // container so it remains inside the visible phone viewport.
+        .overlay(alignment: .bottom) {
+            if let activeEpisodeID = appState.podcastEpisodePlayer.activeEpisodeID,
+               appState.selectedArticle?.id != activeEpisodeID,
+               appState.podcastEpisodePlayer.isPlaying {
+                PodcastEpisodeMiniPlayer(
+                    player: appState.podcastEpisodePlayer,
+                    onOpenEpisode: appState.openActivePodcastEpisode
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 18)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(2_000)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: appState.podcastEpisodePlayer.activeEpisodeID)
+        .animation(.easeInOut(duration: 0.2), value: appState.selectedArticle?.id)
     }
 }
 

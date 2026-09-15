@@ -115,6 +115,16 @@
 		READABILITY0001000102 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
 		SUMM0001000100010001 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
 		SUMM0001000100010002 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
+		YT0000000000000000000001 /* YouTubeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000011 /* YouTubeService.swift */; };
+		YT0000000000000000000002 /* YouTubeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000011 /* YouTubeService.swift */; };
+		YT0000000000000000000003 /* YouTubePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000012 /* YouTubePlayerView.swift */; };
+		YT0000000000000000000004 /* YouTubeSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = YT0000000000000000000013 /* YouTubeSupportTests.swift */; };
+		PCE000000000000000000001 /* PodcastEpisodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE000000000000000000011 /* PodcastEpisodeService.swift */; };
+		PCE000000000000000000002 /* PodcastEpisodePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCE000000000000000000012 /* PodcastEpisodePlayerView.swift */; };
+		PDS000000000000000000001 /* PodcastDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PDS000000000000000000011 /* PodcastDiscoveryService.swift */; };
+		PDS000000000000000000002 /* PodcastSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PDS000000000000000000012 /* PodcastSearchView.swift */; };
+		PCB000000000000000000001 /* PodcastBackgroundTaskManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCB000000000000000000011 /* PodcastBackgroundTaskManager.swift */; };
+		PCG000000000000000000001 /* PodcastGeminiTextService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PCG000000000000000000011 /* PodcastGeminiTextService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -203,6 +213,15 @@
 		LLM0001000100010006 /* LocalLLMCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMCompatibility.swift; sourceTree = "<group>"; };
 		READABILITY0001000100 /* Readability.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Readability.js; sourceTree = "<group>"; };
 		SUMM0001000100010003 /* SummarizeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummarizeBridge.swift; sourceTree = "<group>"; };
+		YT0000000000000000000011 /* YouTubeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeService.swift; sourceTree = "<group>"; };
+		YT0000000000000000000012 /* YouTubePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubePlayerView.swift; sourceTree = "<group>"; };
+		YT0000000000000000000013 /* YouTubeSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YouTubeSupportTests.swift; sourceTree = "<group>"; };
+		PCE000000000000000000011 /* PodcastEpisodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastEpisodeService.swift; sourceTree = "<group>"; };
+		PCE000000000000000000012 /* PodcastEpisodePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastEpisodePlayerView.swift; sourceTree = "<group>"; };
+		PDS000000000000000000011 /* PodcastDiscoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastDiscoveryService.swift; sourceTree = "<group>"; };
+		PDS000000000000000000012 /* PodcastSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastSearchView.swift; sourceTree = "<group>"; };
+		PCB000000000000000000011 /* PodcastBackgroundTaskManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastBackgroundTaskManager.swift; sourceTree = "<group>"; };
+		PCG000000000000000000011 /* PodcastGeminiTextService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodcastGeminiTextService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -332,6 +351,9 @@
 				A1B2C3D4E5F6A7B8C9D0E21E /* CommentViews.swift */,
 				MLX0001000100010008 /* InfographicView.swift */,
 				ASKAI0001000100010003 /* AskAIUtilities.swift */,
+				YT0000000000000000000012 /* YouTubePlayerView.swift */,
+				PCE000000000000000000012 /* PodcastEpisodePlayerView.swift */,
+				PDS000000000000000000012 /* PodcastSearchView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -362,6 +384,11 @@
 					MLX0001000100010005 /* MLXJSONRepairUtils.swift */,
 				SUMM0001000100010003 /* SummarizeBridge.swift */,
 				F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */,
+				YT0000000000000000000011 /* YouTubeService.swift */,
+				PCE000000000000000000011 /* PodcastEpisodeService.swift */,
+				PDS000000000000000000011 /* PodcastDiscoveryService.swift */,
+				PCB000000000000000000011 /* PodcastBackgroundTaskManager.swift */,
+				PCG000000000000000000011 /* PodcastGeminiTextService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -418,6 +445,7 @@
 			isa = PBXGroup;
 			children = (
 				E00000000000000000000041 /* BatchPodcastTests.swift */,
+				YT0000000000000000000013 /* YouTubeSupportTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -631,6 +659,14 @@
 				E00000000000000000000024 /* BatchPodcastSession.swift in Sources */,
 				E00000000000000000000025 /* MLXPodcastPlaybackController.swift in Sources */,
 				E00000000000000000000026 /* BatchPodcastView.swift in Sources */,
+				YT0000000000000000000001 /* YouTubeService.swift in Sources */,
+				YT0000000000000000000003 /* YouTubePlayerView.swift in Sources */,
+				PCE000000000000000000001 /* PodcastEpisodeService.swift in Sources */,
+				PCE000000000000000000002 /* PodcastEpisodePlayerView.swift in Sources */,
+				PDS000000000000000000001 /* PodcastDiscoveryService.swift in Sources */,
+				PDS000000000000000000002 /* PodcastSearchView.swift in Sources */,
+				PCB000000000000000000001 /* PodcastBackgroundTaskManager.swift in Sources */,
+				PCG000000000000000000001 /* PodcastGeminiTextService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -669,6 +705,7 @@
 				SUMM0001000100010002 /* SummarizeBridge.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D3 /* KokoroTTSService.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D4 /* KokoroPlayback.swift in Sources */,
+				YT0000000000000000000002 /* YouTubeService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -686,6 +723,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E0000000000000000000004D /* BatchPodcastTests.swift in Sources */,
+				YT0000000000000000000004 /* YouTubeSupportTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

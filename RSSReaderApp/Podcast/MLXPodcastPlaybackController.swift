@@ -51,9 +51,9 @@ enum MLXPodcastPlaybackPlan {
     }
 }
 
-/// Keeps one bounded WAV file per synthesized podcast chunk. The cache is
-/// episode/voice/speed-specific so Save Podcast can reuse audio already made
-/// for playback without retaining the complete episode in memory.
+/// Keeps one bounded WAV file per synthesized podcast chunk plus the completed
+/// episode WAV. The cache is episode/voice/speed-specific so Save Podcast can
+/// export the exact audio already prepared for playback.
 private final class PodcastAudioCache {
     let cacheKey: String
     private let directory: URL
@@ -95,6 +95,53 @@ private final class PodcastAudioCache {
         try? data.write(to: url, options: .atomic)
     }
 
+    func prepareCompleteEpisode(from plan: [MLXPodcastPlaybackChunk]) throws -> URL {
+        let finalURL = directory.appendingPathComponent("prepared-episode.wav")
+        if Self.isUsableWAV(at: finalURL) { return finalURL }
+
+        let temporaryURL = directory.appendingPathComponent(".\(UUID().uuidString).partial.wav")
+        var writer: BatchPodcastWAVWriter? = try BatchPodcastWAVWriter(url: temporaryURL)
+        do {
+            for chunk in plan {
+                guard let data = read(chunkID: chunk.id) else {
+                    throw BatchPodcastError.audioExportFailed("Prepared podcast audio is incomplete. Please tap Play again.")
+                }
+                try writer?.append(wavData: data)
+            }
+            try writer?.finish()
+            writer = nil
+            if FileManager.default.fileExists(atPath: finalURL.path) {
+                try FileManager.default.removeItem(at: temporaryURL)
+            } else {
+                try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
+            }
+            return finalURL
+        } catch {
+            try? writer?.finish()
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+        }
+    }
+
+    func copyPreparedEpisode(to destinationURL: URL) throws -> Bool {
+        let sourceURL = directory.appendingPathComponent("prepared-episode.wav")
+        guard Self.isUsableWAV(at: sourceURL) else { return false }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        return true
+    }
+
+    func storePreparedEpisode(from sourceURL: URL) throws {
+        let finalURL = directory.appendingPathComponent("prepared-episode.wav")
+        guard !Self.isUsableWAV(at: finalURL) else { return }
+        let temporaryURL = directory.appendingPathComponent(".\(UUID().uuidString).copy.wav")
+        try FileManager.default.copyItem(at: sourceURL, to: temporaryURL)
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            try? FileManager.default.removeItem(at: temporaryURL)
+        } else {
+            try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
+        }
+    }
+
     func remove() {
         try? FileManager.default.removeItem(at: directory)
         let root = directory.deletingLastPathComponent()
@@ -107,6 +154,12 @@ private final class PodcastAudioCache {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         let safe = chunkID.unicodeScalars.map { allowed.contains($0) ? String($0) : "_" }.joined()
         return "\(safe).wav"
+    }
+
+    private static func isUsableWAV(at url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize else { return false }
+        return size > 44
     }
 }
 
@@ -142,6 +195,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var activeLatches: [ObjectIdentifier: AudioCompletionLatch] = [:]
     private var activeAudioCache: PodcastAudioCache?
+    private var idleTimerSettingBeforePreparation: Bool?
     private let activityGate = PodcastApplicationActivityGate(
         isActive: UIApplication.shared.applicationState == .active
     )
@@ -211,7 +265,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
 
         logger.info("Podcast playback started: chunks=\(plan.count, privacy: .public), hostA=\(hostAVoice.rawValue, privacy: .public), hostB=\(hostBVoice.rawValue, privacy: .public), speed=\(speed, privacy: .public)")
 
-        configureAudioSession()
         let token = KokoroTTSService.shared.newPlaybackToken()
         let operation = UUID()
         let clampedSpeed = min(max(speed, 0.5), 2.0)
@@ -230,15 +283,26 @@ final class MLXPodcastPlaybackController: ObservableObject {
         errorMessage = nil
         statusMessage = "Preparing episode…"
         state = .preparing
+        beginPreparationIdleTimerProtection()
 
         playbackTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.runPlayback(
+                guard let audioCache else {
+                    throw BatchPodcastError.audioExportFailed("The podcast audio cache could not be created.")
+                }
+                try await self.preparePlaybackAudio(
                     plan: plan,
                     hostAVoice: hostAVoice,
                     hostBVoice: hostBVoice,
                     speed: Float(clampedSpeed),
+                    token: token,
+                    operation: operation,
+                    audioCache: audioCache
+                )
+                self.endPreparationIdleTimerProtection()
+                try await self.runPlayback(
+                    plan: plan,
                     token: token,
                     operation: operation,
                     audioCache: audioCache
@@ -250,12 +314,14 @@ final class MLXPodcastPlaybackController: ObservableObject {
                 self.statusMessage = "Episode finished"
             } catch is CancellationError {
                 guard self.operationID == operation else { return }
+                self.endPreparationIdleTimerProtection()
                 self.playbackTask = nil
                 self.operationID = nil
                 self.state = .idle
                 self.statusMessage = ""
             } catch {
                 guard self.operationID == operation else { return }
+                self.endPreparationIdleTimerProtection()
                 self.playbackTask = nil
                 self.operationID = nil
                 self.logger.error("Podcast playback failed: \(error.localizedDescription, privacy: .public); type=\(String(reflecting: type(of: error)), privacy: .public); turn=\(self.currentTurnIndex ?? -1, privacy: .public); speaker=\(self.currentSpeaker?.rawValue ?? "none", privacy: .public); engineRunning=\(self.engine.isRunning, privacy: .public)")
@@ -265,7 +331,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
     }
 
     func pause() {
-        guard state == .playing || state == .preparing else { return }
+        guard state == .playing else { return }
         pauseRequested = true
         playerNode.pause()
         state = .paused
@@ -289,6 +355,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
         playerNode.stop()
         engine.stop()
         completeAllLatches(with: CancellationError())
+        endPreparationIdleTimerProtection()
         state = .idle
         progress = 0
         currentTurnIndex = nil
@@ -321,8 +388,6 @@ final class MLXPodcastPlaybackController: ObservableObject {
             .appendingPathExtension("wav")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        configureAudioSession()
-        let token = KokoroTTSService.shared.newPlaybackToken()
         let cache = makeAudioCache(
             episode: episode,
             plan: plan,
@@ -330,6 +395,13 @@ final class MLXPodcastPlaybackController: ObservableObject {
             hostBVoice: hostBVoice,
             speed: Float(min(max(speed, 0.5), 2.0))
         )
+        if try cache?.copyPreparedEpisode(to: url) == true {
+            progressHandler?(plan.count, plan.count)
+            return url
+        }
+
+        configureAudioSession()
+        let token = KokoroTTSService.shared.newPlaybackToken()
         var writer: BatchPodcastWAVWriter?
         do {
             for (index, chunk) in plan.enumerated() {
@@ -348,6 +420,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
             }
             try writer?.finish()
             writer = nil
+            try cache?.storePreparedEpisode(from: url)
             return url
         } catch {
             try? writer?.finish()
@@ -357,25 +430,48 @@ final class MLXPodcastPlaybackController: ObservableObject {
         }
     }
 
-    private func runPlayback(
+    private func preparePlaybackAudio(
         plan: [MLXPodcastPlaybackChunk],
         hostAVoice: KokoroVoice,
         hostBVoice: KokoroVoice,
         speed: Float,
         token: UUID,
         operation: UUID,
-        audioCache: PodcastAudioCache?
+        audioCache: PodcastAudioCache
+    ) async throws {
+        statusMessage = "Preparing episode audio…"
+        progress = 0
+        for (index, chunk) in plan.enumerated() {
+            try Task.checkCancellation()
+            guard operationID == operation,
+                  KokoroTTSService.shared.isPlaybackTokenCurrent(token) else { throw CancellationError() }
+            statusMessage = "Preparing audio \(index + 1) of \(plan.count)…"
+            _ = try await synthesize(
+                chunk: chunk,
+                hostAVoice: hostAVoice,
+                hostBVoice: hostBVoice,
+                speed: speed,
+                token: token,
+                audioCache: audioCache
+            )
+            progress = Double(index + 1) / Double(plan.count)
+        }
+        statusMessage = "Finalizing episode audio…"
+        _ = try audioCache.prepareCompleteEpisode(from: plan)
+        progress = 0
+        statusMessage = "Audio ready"
+    }
+
+    private func runPlayback(
+        plan: [MLXPodcastPlaybackChunk],
+        token: UUID,
+        operation: UUID,
+        audioCache: PodcastAudioCache
     ) async throws {
         var index = 0
-        let firstData = try await synthesize(
-            chunk: plan[0],
-            hostAVoice: hostAVoice,
-            hostBVoice: hostBVoice,
-            speed: speed,
-            token: token,
-            audioCache: audioCache
-        )
+        let firstData = try preparedData(for: plan[0], audioCache: audioCache)
         var currentBuffer = try makeBuffer(from: firstData)
+        configureAudioSession()
         try ensureEngine(format: currentBuffer.format)
         try await waitIfPaused()
 
@@ -386,27 +482,14 @@ final class MLXPodcastPlaybackController: ObservableObject {
         currentSpeaker = plan[0].speaker
         statusMessage = "Playing \(plan[0].speaker.displayName)"
 
-        var nextTask: Task<Data, Error>? = plan.count > 1
-            ? makeSynthesisTask(
-                chunk: plan[1],
-                hostAVoice: hostAVoice,
-                hostBVoice: hostBVoice,
-                speed: speed,
-                token: token,
-                audioCache: audioCache
-            )
-            : nil
-        defer { nextTask?.cancel() }
-
         while true {
             try Task.checkCancellation()
             guard operationID == operation,
                   KokoroTTSService.shared.isPlaybackTokenCurrent(token) else { throw CancellationError() }
 
             var nextScheduled: (buffer: AVAudioPCMBuffer, latch: AudioCompletionLatch)?
-            if let nextTask {
-                state = .playing
-                let nextData = try await nextTask.value
+            if plan.indices.contains(index + 1) {
+                let nextData = try preparedData(for: plan[index + 1], audioCache: audioCache)
                 let buffer = try makeBuffer(from: nextData)
                 if plan.indices.contains(index + 1), plan[index + 1].isSpeakerChange,
                    let silence = makeSilenceBuffer(format: currentBuffer.format, duration: 0.12) {
@@ -425,43 +508,17 @@ final class MLXPodcastPlaybackController: ObservableObject {
             currentTurnIndex = plan[index].turnIndex
             currentSpeaker = plan[index].speaker
             statusMessage = "Playing \(plan[index].speaker.displayName)"
-
-            let followingIndex = index + 1
-            nextTask = plan.indices.contains(followingIndex)
-                ? makeSynthesisTask(
-                    chunk: plan[followingIndex],
-                    hostAVoice: hostAVoice,
-                    hostBVoice: hostBVoice,
-                    speed: speed,
-                    token: token,
-                    audioCache: audioCache
-                )
-                : nil
             try await waitIfPaused()
         }
 
         progress = 1
     }
 
-    private func makeSynthesisTask(
-        chunk: MLXPodcastPlaybackChunk,
-        hostAVoice: KokoroVoice,
-        hostBVoice: KokoroVoice,
-        speed: Float,
-        token: UUID,
-        audioCache: PodcastAudioCache?
-    ) -> Task<Data, Error> {
-        Task { [weak self] in
-            guard let self else { throw CancellationError() }
-            return try await self.synthesize(
-                chunk: chunk,
-                hostAVoice: hostAVoice,
-                hostBVoice: hostBVoice,
-                speed: speed,
-                token: token,
-                audioCache: audioCache
-            )
+    private func preparedData(for chunk: MLXPodcastPlaybackChunk, audioCache: PodcastAudioCache) throws -> Data {
+        guard let data = audioCache.read(chunkID: chunk.id) else {
+            throw BatchPodcastError.audioExportFailed("Prepared podcast audio is missing. Please tap Play again.")
         }
+        return data
     }
 
     private func synthesize(
@@ -474,6 +531,8 @@ final class MLXPodcastPlaybackController: ObservableObject {
     ) async throws -> Data {
         try Task.checkCancellation()
         guard KokoroTTSService.shared.isPlaybackTokenCurrent(token) else { throw CancellationError() }
+        // MLX uses Metal, so all synthesis must finish while the app is active.
+        // Background/locked playback reads only the completed cached WAV chunks.
         await activityGate.waitUntilActive()
         try Task.checkCancellation()
         if let cached = audioCache?.read(chunkID: chunk.id) {
@@ -529,6 +588,18 @@ final class MLXPodcastPlaybackController: ObservableObject {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .allowAirPlay])
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
+    private func beginPreparationIdleTimerProtection() {
+        guard idleTimerSettingBeforePreparation == nil else { return }
+        idleTimerSettingBeforePreparation = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    private func endPreparationIdleTimerProtection() {
+        guard let previous = idleTimerSettingBeforePreparation else { return }
+        UIApplication.shared.isIdleTimerDisabled = previous
+        idleTimerSettingBeforePreparation = nil
     }
 
     private func ensureEngine(format: AVAudioFormat) throws {
@@ -591,7 +662,7 @@ final class MLXPodcastPlaybackController: ObservableObject {
     }
 
     private func pauseForInterruption() {
-        guard state == .playing || state == .preparing else { return }
+        guard state == .playing else { return }
         pauseRequested = true
         playerNode.pause()
         state = .paused

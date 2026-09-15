@@ -40,6 +40,8 @@ final class PersistenceManager {
     // Keys for UserDefaults
     private enum Keys {
         static let subscriptions = "subscriptions"
+        static let savedPodcastSubscriptions = "RSSReaderApp.SavedPodcastSubscriptions.v1"
+        static let podcastSubscriptionCanonicalKeys = "RSSReaderApp.PodcastSubscriptionCanonicalKeys.v1"
         static let readArticles = "readArticles"
         static let favoriteArticles = "favoriteArticles"
         static let readRedditPosts = "readRedditPosts"
@@ -146,19 +148,26 @@ final class PersistenceManager {
 
 		// Subscriptions: secondary devices should pull from cloud; primary ignores cloud.
 		let localSubs = loadSubscriptionsFromLocal()
-		let cloudSubs = cloudSync.getCloudSubscriptions()
-		let previousSubscriptions = cachedSubscriptions ?? localSubs
-		if cloudSync.isThisDevicePrimary {
-			cachedSubscriptions = localSubs
-		} else if cloudSync.hasCloudSubscriptionsValue() {
-			if !subscriptionsEqual(previousSubscriptions, cloudSubs) {
-				saveSubscriptionsToLocal(cloudSubs)
-				didChangeSubscriptions = true
-			}
-			cachedSubscriptions = cloudSubs
-		} else {
-			// No cloud value: keep local as a fallback.
-			cachedSubscriptions = localSubs
+			let cloudSubs = cloudSync.getCloudSubscriptions()
+			let previousSubscriptions = cachedSubscriptions ?? localSubs
+			acknowledgeSyncedPodcastSubscriptions()
+			if cloudSync.isThisDevicePrimary {
+				cachedSubscriptions = subscriptionsPreservingSavedPodcasts(
+                    cloudSync.reconcilePodcastSubscriptions(in: localSubs)
+                )
+			} else if cloudSync.hasCloudSubscriptionsValue() {
+                let effectiveSubscriptions = subscriptionsPreservingSavedPodcasts(cloudSubs)
+				if !subscriptionsEqual(previousSubscriptions, effectiveSubscriptions) {
+					saveSubscriptionsToLocal(effectiveSubscriptions)
+					didChangeSubscriptions = true
+				}
+				cachedSubscriptions = effectiveSubscriptions
+			} else {
+				// The base blob has not hydrated. Apply only per-podcast records
+                // to the local list so RSS/Reddit/YouTube subscriptions survive.
+				cachedSubscriptions = subscriptionsPreservingSavedPodcasts(
+                    cloudSync.reconcilePodcastSubscriptions(in: localSubs)
+                )
 		}
 
 		return didChangeSubscriptions
@@ -215,10 +224,16 @@ final class PersistenceManager {
         // Sync subscriptions based on primary device model
         let localSubs = loadSubscriptionsFromLocal()
         let cloudSubs = cloudSync.getCloudSubscriptions()
+        acknowledgeSyncedPodcastSubscriptions()
 
         if cloudSync.isThisDevicePrimary {
             // This device is primary: merge and push to cloud
-            let mergedSubs = mergeSubscriptions(local: localSubs, cloud: cloudSubs)
+            let mergedSubs = subscriptionsPreservingSavedPodcasts(
+                mergeSubscriptions(
+                    local: cloudSync.reconcilePodcastSubscriptions(in: localSubs),
+                    cloud: cloudSubs
+                )
+            )
             saveSubscriptionsToLocal(mergedSubs)
             cloudSync.syncSubscriptions(mergedSubs)
             cachedSubscriptions = mergedSubs
@@ -226,20 +241,27 @@ final class PersistenceManager {
         } else if cloudSync.hasPrimaryDevice {
             // Another device is primary: use cloud subscriptions as source of truth
             if cloudSync.hasCloudSubscriptionsValue() {
-                saveSubscriptionsToLocal(cloudSubs)
-                cachedSubscriptions = cloudSubs
+                let effectiveSubscriptions = subscriptionsPreservingSavedPodcasts(cloudSubs)
+                saveSubscriptionsToLocal(effectiveSubscriptions)
+                cachedSubscriptions = effectiveSubscriptions
                 print("☁️ PersistenceManager: Secondary device - using cloud subscriptions from primary")
             } else {
                 // Cloud is empty but primary exists - keep local for now
-                cachedSubscriptions = localSubs
+                cachedSubscriptions = subscriptionsPreservingSavedPodcasts(
+                    cloudSync.reconcilePodcastSubscriptions(in: localSubs)
+                )
                 print("☁️ PersistenceManager: Secondary device - cloud empty, keeping local")
             }
         } else {
             // No primary device set yet: just use local, don't push to cloud
             // User needs to designate a primary device in Settings
-            cachedSubscriptions = localSubs
+            cachedSubscriptions = subscriptionsPreservingSavedPodcasts(
+                cloudSync.reconcilePodcastSubscriptions(in: localSubs)
+            )
             print("☁️ PersistenceManager: No primary device set - using local subscriptions only")
         }
+
+        syncPendingPodcastSubscriptionsToCloud()
 
         print("☁️ PersistenceManager: Initial cloud merge complete")
         print("   Local articles: \(localReadArticles.count), Cloud: \(cloudReadArticles.count), Active: \(effectiveReadArticles.count)")
@@ -300,10 +322,36 @@ final class PersistenceManager {
 
     @discardableResult
     func handleRemoteSubscriptionsChange(_ subscriptions: [Subscription], allowEmptyCloudValue: Bool = false) -> Bool {
-        // Only accept remote subscription changes if we're not the primary device
+        acknowledgeSyncedPodcastSubscriptions()
+
+        // The primary remains authoritative for the normal subscription list,
+        // while per-podcast records reconcile additions and deletions made elsewhere.
         if cloudSync.isThisDevicePrimary {
-            print("☁️ PersistenceManager: Ignoring remote subscription change - this device is primary")
-            return false
+            let current = cachedSubscriptions ?? loadSubscriptionsFromLocal()
+            let merged = subscriptionsPreservingSavedPodcasts(
+                cloudSync.reconcilePodcastSubscriptions(in: current)
+            )
+            guard !subscriptionsEqual(current, merged) else { return false }
+            saveSubscriptionsToLocal(merged)
+            cachedSubscriptions = merged
+            cloudSync.syncSubscriptions(merged)
+            print("☁️ PersistenceManager: Primary device accepted remote podcast additions")
+            return true
+        }
+
+        // Podcast record keys can hydrate before the independent base
+        // subscription blob. Reconcile those records against the current local
+        // list instead of treating a partial cloud view as authoritative.
+        if !cloudSync.hasCloudSubscriptionsValue() {
+            let current = cachedSubscriptions ?? loadSubscriptionsFromLocal()
+            let reconciled = subscriptionsPreservingSavedPodcasts(
+                cloudSync.reconcilePodcastSubscriptions(in: current)
+            )
+            guard !subscriptionsEqual(current, reconciled) else { return false }
+            saveSubscriptionsToLocal(reconciled)
+            cachedSubscriptions = reconciled
+            print("☁️ PersistenceManager: Applied podcast records while base subscriptions hydrate")
+            return true
         }
 
         // Secondary device: accept cloud subscriptions as source of truth.
@@ -312,10 +360,11 @@ final class PersistenceManager {
             return false
         }
 
+        let effectiveSubscriptions = subscriptionsPreservingSavedPodcasts(subscriptions)
         let current = cachedSubscriptions ?? loadSubscriptionsFromLocal()
-        guard !subscriptionsEqual(current, subscriptions) else { return false }
-        saveSubscriptionsToLocal(subscriptions)
-        cachedSubscriptions = subscriptions
+        guard !subscriptionsEqual(current, effectiveSubscriptions) else { return false }
+        saveSubscriptionsToLocal(effectiveSubscriptions)
+        cachedSubscriptions = effectiveSubscriptions
         print("☁️ PersistenceManager: Updated local subscriptions from primary device")
         return true
     }
@@ -418,10 +467,43 @@ final class PersistenceManager {
 
     /// Load subscriptions (from cache or local storage)
     func loadSubscriptions() -> [Subscription] {
-        if let cached = cachedSubscriptions {
-            return cached
+        let loaded = cachedSubscriptions ?? loadSubscriptionsFromLocal()
+        let effectiveSubscriptions = subscriptionsPreservingSavedPodcasts(loaded)
+        if !subscriptionsEqual(loaded, effectiveSubscriptions) {
+            saveSubscriptionsToLocal(effectiveSubscriptions)
+            cachedSubscriptions = effectiveSubscriptions
         }
-        return loadSubscriptionsFromLocal()
+        return effectiveSubscriptions
+    }
+
+    /// Podcast discovery is an explicit local save. Keep the complete feed
+    /// record so an older primary-device iCloud snapshot cannot erase it on the
+    /// next launch. The ordinary subscription array remains backwards compatible.
+    func savePodcastSubscription(_ subscription: Subscription) {
+        guard subscription.isPodcast else { return }
+        var saved = loadSavedPodcastSubscriptions()
+
+        if cloudSync.isPodcastSubscriptionSynced(subscription) {
+            if saved.removeValue(forKey: subscription.canonicalKey) != nil {
+                persistSavedPodcastSubscriptions(saved)
+            }
+            return
+        }
+
+        if saved[subscription.canonicalKey] != subscription {
+            saved[subscription.canonicalKey] = subscription
+            persistSavedPodcastSubscriptions(saved)
+        }
+
+        cloudSync.syncPodcastSubscription(subscription)
+    }
+
+    func removeSavedPodcastSubscription(_ subscription: Subscription) {
+        var saved = loadSavedPodcastSubscriptions()
+        if saved.removeValue(forKey: subscription.canonicalKey) != nil {
+            persistSavedPodcastSubscriptions(saved)
+        }
+        cloudSync.removePodcastSubscription(subscription)
     }
 
     /// Save subscriptions to local storage only (no cloud sync)
@@ -438,6 +520,131 @@ final class PersistenceManager {
             return getDefaultSubscriptions()
         }
         return subscriptions
+    }
+
+    private func loadSavedPodcastSubscriptions() -> [String: Subscription] {
+        var saved: [String: Subscription] = [:]
+        if let data = userDefaults.data(forKey: Keys.savedPodcastSubscriptions),
+           let subscriptions = try? JSONDecoder().decode([Subscription].self, from: data) {
+            saved = Dictionary(
+                subscriptions.map { ($0.canonicalKey, $0) },
+                uniquingKeysWith: { _, newest in newest }
+            )
+        }
+
+        // Migration for the first podcast build: it persisted only canonical
+        // classification keys. Reconstruct those feeds so a cloud overwrite
+        // does not force the user to search and subscribe again.
+        var didMigrate = false
+        let localSubscriptions = Dictionary(
+            loadSubscriptionsFromLocal().map { ($0.canonicalKey, $0) },
+            uniquingKeysWith: { existing, _ in existing }
+        )
+        for canonicalKey in userDefaults.stringArray(forKey: Keys.podcastSubscriptionCanonicalKeys) ?? [] {
+            guard canonicalKey.hasPrefix("rss|") else { continue }
+            let feedURL = String(canonicalKey.dropFirst(4))
+            let placeholder = Subscription(title: "Podcast", url: feedURL, type: .rss)
+            let existing = localSubscriptions[placeholder.canonicalKey]
+            let migrated = Subscription(
+                id: existing?.id ?? UUID(),
+                title: existing?.title ?? "Podcast",
+                url: feedURL,
+                type: .rss,
+                contentKind: .podcast
+            )
+            if saved[migrated.canonicalKey] == nil {
+                saved[migrated.canonicalKey] = migrated
+                didMigrate = true
+            }
+        }
+        if didMigrate {
+            persistSavedPodcastSubscriptions(saved)
+        }
+        return saved
+    }
+
+    private func persistSavedPodcastSubscriptions(_ subscriptions: [String: Subscription]) {
+        let sorted = subscriptions.values.sorted {
+            if $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedSame {
+                return $0.canonicalKey < $1.canonicalKey
+            }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+        guard let encoded = try? JSONEncoder().encode(sorted) else { return }
+        userDefaults.set(encoded, forKey: Keys.savedPodcastSubscriptions)
+    }
+
+    private func subscriptionsPreservingSavedPodcasts(_ subscriptions: [Subscription]) -> [Subscription] {
+        let saved = loadSavedPodcastSubscriptions()
+        guard !saved.isEmpty else { return subscriptions }
+
+        var upgradedKeys = Set<String>()
+        var merged = subscriptions.map { subscription in
+            guard let savedPodcast = saved[subscription.canonicalKey] else {
+                return subscription
+            }
+            upgradedKeys.insert(subscription.canonicalKey)
+            let title = subscription.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? savedPodcast.title
+                : subscription.title
+            return Subscription(
+                id: subscription.id,
+                title: title,
+                url: subscription.url,
+                type: subscription.type,
+                contentKind: .podcast
+            )
+        }
+        let missing = saved.values
+            .filter { !upgradedKeys.contains($0.canonicalKey) }
+            .sorted {
+                if $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedSame {
+                    return $0.canonicalKey < $1.canonicalKey
+                }
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        merged.append(contentsOf: missing)
+        return merged
+    }
+
+    private func syncPendingPodcastSubscriptionsToCloud() {
+        let saved = loadSavedPodcastSubscriptions()
+        guard !saved.isEmpty else { return }
+        let currentByKey = Dictionary(
+            (cachedSubscriptions ?? loadSubscriptionsFromLocal()).map { ($0.canonicalKey, $0) },
+            uniquingKeysWith: { existing, _ in existing }
+        )
+        for (key, savedPodcast) in saved {
+            let current = currentByKey[key] ?? savedPodcast
+            let tagged = Subscription(
+                id: current.id,
+                title: current.title,
+                url: current.url,
+                type: current.type,
+                contentKind: .podcast
+            )
+            cloudSync.syncPodcastSubscription(tagged)
+        }
+    }
+
+    private func acknowledgeSyncedPodcastSubscriptions() {
+        let syncedKeys = cloudSync.cloudPodcastRecordCanonicalKeys()
+        guard !syncedKeys.isEmpty else { return }
+
+        var saved = loadSavedPodcastSubscriptions()
+        let previousCount = saved.count
+        for key in syncedKeys {
+            saved.removeValue(forKey: key)
+        }
+        if saved.count != previousCount {
+            persistSavedPodcastSubscriptions(saved)
+        }
+
+        let legacyMarkers = Set(userDefaults.stringArray(forKey: Keys.podcastSubscriptionCanonicalKeys) ?? [])
+        let remainingMarkers = legacyMarkers.subtracting(syncedKeys)
+        if remainingMarkers != legacyMarkers {
+            userDefaults.set(remainingMarkers.sorted(), forKey: Keys.podcastSubscriptionCanonicalKeys)
+        }
     }
 
     /// Set this device as primary and push current subscriptions to cloud
@@ -473,6 +680,18 @@ final class PersistenceManager {
 	    func markArticleAsRead(_ article: Article) {
 	        markArticleAsRead(tokens: articleReadTokens(for: article), diagnosticID: article.id)
 	    }
+
+    /// Persists a bulk read operation with one local write and one cloud-sync pass.
+    /// Single-item callers continue to use `markArticleAsRead(_:)` unchanged.
+    func markArticlesAsRead(_ articles: [Article]) {
+        guard !articles.isEmpty else { return }
+
+        var tokens: Set<String> = []
+        for article in articles {
+            tokens.formUnion(articleReadTokens(for: article))
+        }
+        markArticleAsRead(tokens: tokens, diagnosticID: "batch:\(articles.count)")
+    }
 
 	    func markArticleAsRead(_ articleId: String) {
 	        markArticleAsRead(tokens: articleReadTokens(articleId: articleId, articleURL: nil), diagnosticID: articleId)
@@ -531,6 +750,18 @@ final class PersistenceManager {
 	    func markRedditPostAsRead(_ post: RedditPost) {
 	        markRedditPostAsRead(tokens: redditReadTokens(for: post), diagnosticID: post.id)
 	    }
+
+    /// Persists a bulk read operation with one local write and one cloud-sync pass.
+    /// Single-item callers continue to use `markRedditPostAsRead(_:)` unchanged.
+    func markRedditPostsAsRead(_ posts: [RedditPost]) {
+        guard !posts.isEmpty else { return }
+
+        var tokens: Set<String> = []
+        for post in posts {
+            tokens.formUnion(redditReadTokens(for: post))
+        }
+        markRedditPostAsRead(tokens: tokens, diagnosticID: "batch:\(posts.count)")
+    }
 
 	    func markRedditPostAsRead(_ postId: String) {
 	        markRedditPostAsRead(tokens: redditReadTokens(postId: postId, subreddit: nil), diagnosticID: postId)
@@ -711,10 +942,14 @@ final class PersistenceManager {
 
         // Prefer local metadata when present, otherwise use cloud
         for sub in cloud {
-            mergedByURL[sub.url] = sub
+            mergedByURL[sub.canonicalKey] = sub
         }
         for sub in local {
-            mergedByURL[sub.url] = sub
+            let key = sub.canonicalKey
+            if mergedByURL[key]?.isPodcast == true && !sub.isPodcast {
+                continue
+            }
+            mergedByURL[key] = sub
         }
 
         // Return sorted for stable ordering
@@ -722,8 +957,8 @@ final class PersistenceManager {
     }
 
     private func subscriptionsEqual(_ lhs: [Subscription], _ rhs: [Subscription]) -> Bool {
-        let lhsSet = Set(lhs.map { "\($0.url)|\($0.type.rawValue)" })
-        let rhsSet = Set(rhs.map { "\($0.url)|\($0.type.rawValue)" })
+        let lhsSet = Set(lhs.map { "\($0.canonicalKey)|\($0.contentKind?.rawValue ?? "feed")|\($0.title)" })
+        let rhsSet = Set(rhs.map { "\($0.canonicalKey)|\($0.contentKind?.rawValue ?? "feed")|\($0.title)" })
         return lhsSet == rhsSet
     }
 

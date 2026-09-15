@@ -57,23 +57,75 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIsNotNone(method)
         self.assertIn("performExplicitWebAIQuestion", method.group(0))
 
-    def test_web_qa_prompts_use_summary_style_context(self):
+    def test_article_summary_context_policy_preserves_full_remote_and_limited_local_paths(self):
         source = read("RSSReaderApp/Controllers/AppState.swift")
-        article_prompt = re.search(
+        summary_prompts = re.search(
+            r"func articleSummaryPrompt\([\s\S]*?\n    func redditPostSummaryPrompt",
+            source,
+        )
+        self.assertIsNotNone(summary_prompts)
+        block = summary_prompts.group(0)
+        full_prompt, local_and_gemini = block.split("private func localArticleSummaryPrompt", 1)
+        local_prompt, gemini_prompt = local_and_gemini.split("func geminiArticleSummaryPrompt", 1)
+        self.assertNotIn("maxCharacters:", full_prompt)
+        self.assertIn("maxCharacters: 12_000", local_prompt)
+        self.assertNotIn("maxCharacters:", gemini_prompt)
+        self.assertIn('summaryService.summarizeText("", customPrompt: articlePrompt)', source)
+
+        request_summary = re.search(
+            r"func requestSummary\([\s\S]*?\n    // MARK: - Today Summary",
+            source,
+        )
+        self.assertIsNotNone(request_summary)
+        self.assertEqual(request_summary.group(0).count("article.map(localArticleSummaryPrompt(for:))"), 2)
+        self.assertGreaterEqual(request_summary.group(0).count("article.map(articleSummaryPrompt(for:))"), 2)
+
+    def test_article_qa_context_policy_preserves_full_remote_and_limited_local_paths(self):
+        source = read("RSSReaderApp/Controllers/AppState.swift")
+        prompts = re.search(
             r"func articleQAPrompt\([\s\S]*?\n    func redditQAPrompt",
             source,
         )
-        reddit_prompt = re.search(
-            r"func redditQAPrompt\([\s\S]*?\n    func commentSummaryPrompt",
+        self.assertIsNotNone(prompts)
+        block = prompts.group(0)
+        full_prompt, local_and_builder = block.split("private func localArticleQAPrompt", 1)
+        local_prompt, _ = local_and_builder.split("private func makeArticleQAPrompt", 1)
+        self.assertIn("maxCharacters: nil", full_prompt)
+        self.assertIn("maxCharacters: 12_000", local_prompt)
+
+        qa_method = re.search(
+            r"func askQuestionAboutArticle\([\s\S]*?\n    func askQuestionAboutRedditPost",
             source,
         )
-        self.assertIsNotNone(article_prompt)
-        self.assertIsNotNone(reddit_prompt)
-        self.assertIn("strictQAPrompt", source)
-        self.assertIn("normalizedSummarySourceText(content, maxCharacters: 12_000)", article_prompt.group(0))
-        self.assertIn("redditSummarySourceText(post: post, comments: comments, maxComments: maxComments)", reddit_prompt.group(0))
-        self.assertNotIn("\\(content)", article_prompt.group(0))
-        self.assertNotIn("extractAllCommentTexts", reddit_prompt.group(0))
+        self.assertIsNotNone(qa_method)
+        self.assertGreaterEqual(qa_method.group(0).count("articleQAPrompt(article: article"), 4)
+        self.assertEqual(qa_method.group(0).count("localArticleQAPrompt("), 2)
+
+    def test_reddit_model_context_has_no_hidden_character_or_comment_caps(self):
+        source = read("RSSReaderApp/Controllers/AppState.swift")
+        reddit_view = read("RSSReaderApp/Views/RedditDetailView.swift")
+
+        helper = re.search(
+            r"private func redditSummarySourceText\([\s\S]*?\n    private func normalizedSummarySourceText",
+            source,
+        )
+        self.assertIsNotNone(helper)
+        self.assertNotIn("maxCharacters:", helper.group(0))
+        self.assertNotIn("maxComments", helper.group(0))
+
+        reddit_qa = re.search(
+            r"func redditQAPrompt\([\s\S]*?\n    func articleSelectionSourceContext",
+            source,
+        )
+        self.assertIsNotNone(reddit_qa)
+        self.assertIn("redditSummarySourceText(post: post, comments: comments)", reddit_qa.group(0))
+        self.assertNotIn("maxComments", reddit_qa.group(0))
+
+        self.assertNotIn("maxComments: 800", source)
+        self.assertNotIn("geminiCommentPromptLimit", reddit_view)
+        self.assertNotIn("postText: Self.firstNChars(triple.post.content", source)
+        self.assertNotIn("let limitedPost", source)
+        self.assertNotIn("let limitedComments", source)
 
     def test_ask_ai_web_selection_prompt_is_bounded(self):
         source = read("RSSReaderApp/Views/AskAIUtilities.swift")
@@ -319,19 +371,27 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("function findChatGPTSendButton(input)", source)
         self.assertIn("function looksLikeChatGPTSendButton(node)", source)
         self.assertIn("function activateAction(node, callNativeClick = true)", source)
-        self.assertIn("#if os(macOS)", source)
-        self.assertIn("let usesPrivateStore = provider == .chatgpt", source)
-        self.assertIn("let requiresFreshWebView = usesPrivateStore", source)
-        self.assertIn("let usesPrivateStore = false", source)
-        self.assertIn("let requiresFreshWebView = false", source)
-        self.assertNotIn(".id(request.id)", source)
+        self.assertIn("activateAction(sendButton, true)", source)
+        self.assertIn("__codexWebAIPreparedPrompt", source)
+        self.assertIn("__codexWebAISubmissionPending", source)
+        self.assertIn("assistantTurnCount() > startingTurns", source)
+        self.assertIn("private let websiteDataStore = WKWebsiteDataStore.default()", source)
+        self.assertIn("forceFresh: Bool = false", source)
+        self.assertIn("let requiresFreshWebView = forceFresh", source)
+        self.assertIn("if !requiresFreshWebView, let existing = webViews[provider]", source)
+        self.assertIn("configuration.websiteDataStore = websiteDataStore", source)
+        self.assertNotIn("WKWebsiteDataStore.nonPersistent()", source)
+        self.assertNotIn(".nonPersistent()", source)
+        self.assertIn(".id(request.id)", source)
+        self.assertIn("forceFresh: request.shouldAutoCapture", source)
         self.assertIn("loadProviderHome(provider, in: webView)", source)
         self.assertIn("func hasWebView(for provider: WebAIProvider) -> Bool", source)
         self.assertIn("forceReload: true", source)
-        self.assertNotIn("scheduleReadyWorkForReusablePage(in: webView)", source)
-        self.assertIn("function recoverProviderLoadFailure()", source)
-        self.assertIn('provider !== "chatgpt" && provider !== "gemini"', source)
-        self.assertIn('bodyText.includes("content failed to load")', source)
+        self.assertNotIn("coordinator.prepareReusablePage(in: webView)", source)
+        self.assertNotIn("func prepareReusablePage(in webView: WKWebView)", source)
+        self.assertNotIn("function recoverProviderLoadFailure()", source)
+        self.assertNotIn("function findNewChatButton()", source)
+        self.assertNotIn("__codexWebAINewChatState", source)
         self.assertIn("private let promptStagingThreshold = 1800", source)
         self.assertIn("stagePromptIfNeeded(in: webView)", source)
         self.assertIn('? "(window.__codexPendingPromptText || \\"\\")"', source)
@@ -343,18 +403,39 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("webView.customUserAgent = nil", source)
         self.assertNotIn("desktopSafariUserAgent", source)
         self.assertNotIn("preferredContentMode = .desktop", source)
-        self.assertIn("removeCachedWebsiteData", source)
+        self.assertNotIn("removeCachedWebsiteData", source)
+        self.assertNotIn("WKWebsiteDataTypeServiceWorkerRegistrations", source)
+        self.assertNotIn("WKWebsiteDataTypeFetchCache", source)
+        self.assertNotIn("startProviderContentFailureMonitorIfNeeded(in: webView)", source)
+        self.assertNotIn("private var isRecoveringProviderContentFailure = false", source)
+        self.assertIn("private let composerWaitTimeout: TimeInterval = 30", source)
+        self.assertIn("private var pendingInjectionWorkItem: DispatchWorkItem?", source)
+        self.assertIn("private func scheduleInjection(in webView: WKWebView, after delay: TimeInterval)", source)
+        self.assertNotIn("maxAutomaticRequestRetryAttempts", source)
+        self.assertNotIn("retryAutomaticRequestAfterProviderFailure", source)
+        recovery = re.search(
+            r"private func recoverProviderContentFailureIfNeeded[\s\S]*?private static func providerContentFailureDetectionScript",
+            source,
+        )
+        self.assertIsNotNone(recovery)
+        self.assertNotIn("removeAllWebsiteData", recovery.group(0))
+        self.assertNotIn("removeCachedWebsiteData", recovery.group(0))
+        self.assertIn("completion(.navigationStarted)", recovery.group(0))
+        self.assertIn("removeAllWebsiteData(for: provider, from: websiteDataStore)", source)
         self.assertIn("recoverProviderContentFailureIfNeeded(in: webView)", source)
         self.assertIn("providerContentFailureDetectionScript", source)
         self.assertIn("providerRetryButtonClickScript", source)
         self.assertIn("failed to load. Retrying...", source)
-        self.assertIn("reloadFromOrigin()", source)
+        self.assertNotIn("reloadFromOrigin()", source)
         self.assertIn("cachePolicy: .reloadIgnoringLocalAndRemoteCacheData", source)
-        self.assertIn("sendButton.click();", source)
+        self.assertIn("function isUsableComposer(node)", source)
+        self.assertIn("function firstUsableComposer(selectors)", source)
+        self.assertNotIn("clickProviderRetryButton", source)
         self.assertIn("function findGeminiSendButton(input)", source)
         self.assertIn("function looksLikeGeminiSendButton(node, input)", source)
-        self.assertIn("activateAction(sendButton, false)", source)
-        self.assertIn("__codexGeminiSubmissionPending", source)
+        self.assertIn("activateAction(sendButton, true)", source)
+        self.assertIn("__codexWebAISubmissionPending", source)
+        self.assertNotIn("__codexGeminiSubmissionPending", source)
         self.assertIn('text.includes("something went wrong") && text.includes("1096")', source)
         self.assertNotIn('return provider === "chatgpt" ? "waiting" : "success";', source)
         self.assertNotIn('status == "chatgptVerify"', source)
@@ -364,6 +445,16 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("stripPromptEcho(candidate.text))", source)
         app_state = read("RSSReaderApp/Controllers/AppState.swift")
         self.assertRegex(app_state, r"func performWebAIRequest\([\s\S]*enqueueWebAIRequest")
+        self.assertIn("var automaticRetryCount: Int", app_state)
+        self.assertIn("retryWebAIRequestIfPossible", app_state)
+        self.assertIn("isRecoverableWebAIRequestFailure", app_state)
+        self.assertNotIn("Auto-clearing caches (10-minute interval)", app_state)
+        clear_caches = re.search(
+            r"func clearAllCaches[\s\S]*?\n    func clearFailedModelDownloads",
+            app_state,
+        )
+        self.assertIsNotNone(clear_caches)
+        self.assertNotIn("WKWebsiteDataStore", clear_caches.group(0))
 
     def test_interactive_summarize_request_has_cancelling_transport_timeout(self):
         app_state = read("RSSReaderApp/Controllers/AppState.swift")
@@ -419,6 +510,8 @@ class AskAIRegressionTests(unittest.TestCase):
         self.assertIn("deliverCaptureFailure", process_termination.group(0))
         self.assertIn("deliverCaptureFailure", navigation_failure.group(0))
         self.assertIn("deliverCaptureFailure", manual_fallback.group(0))
+        self.assertNotIn("copyToPasteboard", manual_fallback.group(0))
+        self.assertNotIn("clipboard", manual_fallback.group(0).lower())
         self.assertIn("if timedOut", source)
         self.assertIn("Automatic response capture timed out", source)
         self.assertIn("bootstrapError == nil", source)

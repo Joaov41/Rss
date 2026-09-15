@@ -5,8 +5,199 @@ import UIKit
 import WebKit
 #endif
 
+private let conversationalMarkdownParagraphMarker = "\u{E000}"
+private let conversationalMarkdownParagraphSeparator = "\n\n\(conversationalMarkdownParagraphMarker)\n\n"
+
+/// Makes provider responses with single soft line breaks render as distinct
+/// paragraphs without changing Markdown block syntax. `AttributedString`'s
+/// full Markdown parser treats a single newline inside a paragraph as a soft
+/// break, which makes otherwise paragraph-separated AI replies appear as one
+/// continuous block.
+func normalizeAIReplyMarkdown(_ input: String) -> String {
+    let normalizedNewlines = input
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+    let lines = normalizedNewlines.components(separatedBy: "\n")
+    guard lines.count > 1 else { return normalizedNewlines }
+
+    func isFence(_ line: String) -> Bool {
+        line.range(of: #"^\s{0,3}(?:```|~~~)"#, options: .regularExpression) != nil
+    }
+
+    func isListItem(_ line: String) -> Bool {
+        line.range(of: #"^\s*(?:[-+*]|\d+[.)])\s+"#, options: .regularExpression) != nil
+    }
+
+    func isBlockQuote(_ line: String) -> Bool {
+        line.range(of: #"^\s*>"#, options: .regularExpression) != nil
+    }
+
+    func isHeading(_ line: String) -> Bool {
+        line.range(of: #"^\s{0,3}#{1,6}(?:\s|$)"#, options: .regularExpression) != nil
+    }
+
+    func isThematicBreak(_ line: String) -> Bool {
+        line.range(of: #"^\s{0,3}(?:\*\s*){3,}$|^\s{0,3}(?:-\s*){3,}$|^\s{0,3}(?:_\s*){3,}$"#, options: .regularExpression) != nil
+    }
+
+    // Be conservative around tables. A pipe can be ordinary prose, but when
+    // it appears on either side of a table separator we must preserve rows.
+    func looksLikeTableRow(at index: Int) -> Bool {
+        guard lines[index].contains("|") else { return false }
+        let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+        if trimmed.range(of: #"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$"#, options: .regularExpression) != nil {
+            return true
+        }
+        let previous = index > 0 ? lines[index - 1].trimmingCharacters(in: .whitespaces) : ""
+        let next = index + 1 < lines.count ? lines[index + 1].trimmingCharacters(in: .whitespaces) : ""
+        return previous.contains("|") && next.contains("|")
+    }
+
+    func isBlockSyntax(at index: Int) -> Bool {
+        let line = lines[index]
+        return isListItem(line)
+            || isBlockQuote(line)
+            || isHeading(line)
+            || isThematicBreak(line)
+            || looksLikeTableRow(at: index)
+    }
+
+    var result: [String] = []
+    result.reserveCapacity(lines.count * 2)
+    var insideFence = false
+
+    for index in lines.indices {
+        let line = lines[index]
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        if isFence(line) {
+            result.append(line)
+            insideFence.toggle()
+            continue
+        }
+
+        if insideFence || trimmed.isEmpty || result.last?.isEmpty == true {
+            result.append(line)
+            continue
+        }
+
+        guard index > lines.startIndex else {
+            result.append(line)
+            continue
+        }
+
+        let previousIndex = index - 1
+        let canSeparateProse = !isBlockSyntax(at: previousIndex) && !isBlockSyntax(at: index)
+        let hasExplicitHardBreak = lines[previousIndex].hasSuffix("\\")
+            || lines[previousIndex].hasSuffix("  ")
+
+        if canSeparateProse && !hasExplicitHardBreak {
+            result.append("")
+        }
+        result.append(line)
+    }
+
+    return result.joined(separator: "\n")
+}
+
+/// Adds readable paragraph spacing to long conversational answers that arrive
+/// as a single line. Existing Markdown blocks and provider-supplied line breaks
+/// are left to the general Markdown normalizer above.
+func normalizeConversationalAIReplyMarkdown(_ input: String) -> String {
+    let normalized = normalizeAIReplyMarkdown(input)
+    let value = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return normalized }
+
+    // `normalizeAIReplyMarkdown` deliberately turns provider-supplied soft
+    // prose line breaks into blank-line paragraph boundaries. Foundation's
+    // full Markdown parser removes those boundaries when it flattens the
+    // result into one AttributedString (and can even join `17.` + `The` as
+    // `17.The`). Convert prose-only boundaries to explicit Markdown hard
+    // breaks so the Q&A UITextView retains the visible paragraph spacing.
+    if value.contains("\n") {
+        let collapsedParagraphBoundaries = value.replacingOccurrences(
+            of: #"\n[ \t]*\n+"#,
+            with: "\n\n",
+            options: .regularExpression
+        )
+        return collapsedParagraphBoundaries.replacingOccurrences(
+            of: "\n\n",
+            with: conversationalMarkdownParagraphSeparator
+        )
+    }
+
+    // A single-line response that declares structural Markdown cannot be
+    // safely reflowed without potentially changing its structure.
+    let beginsWithBlockSyntax = value.range(
+        of: #"^(?:\s{0,3}#{1,6}(?:\s|$)|\s*(?:[-+*]|\d+[.)])\s+|\s*>|\s*\|)"#,
+        options: .regularExpression
+    ) != nil
+    guard !beginsWithBlockSyntax,
+          !value.contains("`"),
+          !value.contains("~~~"),
+          !value.contains("|") else {
+        return normalized
+    }
+
+    // Some conversational providers collapse their original line breaks
+    // without preserving the separating space (for example, "answer.Next").
+    // Recover only an obvious prose sentence boundary. Requiring an uppercase
+    // letter followed by a lowercase letter avoids changing decimal numbers,
+    // URLs, model versions, and most identifier-like text.
+    let recoveredValue = value.replacingOccurrences(
+        of: #"([.!?])([\"'”’]?[A-Z][a-z])"#,
+        with: "$1 $2",
+        options: .regularExpression
+    )
+    let recoveredOutput = recoveredValue == value ? normalized : recoveredValue
+
+    var sentences: [String] = []
+    recoveredValue.enumerateSubstrings(
+        in: recoveredValue.startIndex..<recoveredValue.endIndex,
+        options: .bySentences
+    ) { substring, _, _, _ in
+        guard let sentence = substring?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sentence.isEmpty else { return }
+        sentences.append(sentence)
+    }
+
+    guard sentences.count > 1 else { return recoveredOutput }
+
+    // Keep genuinely short answers compact. A long two-sentence response can
+    // still benefit from a single paragraph break.
+    if sentences.count == 2, recoveredValue.count < 600 {
+        return recoveredOutput
+    }
+    if sentences.count >= 3, recoveredValue.count < 260 {
+        return recoveredOutput
+    }
+
+    let desiredParagraphs = max(2, Int(ceil(Double(recoveredValue.count) / 420.0)))
+    let maximumParagraphs = max(2, sentences.count / 2)
+    let paragraphCount = min(desiredParagraphs, min(maximumParagraphs, sentences.count))
+    guard paragraphCount > 1 else { return recoveredOutput }
+
+    var paragraphs: [String] = []
+    paragraphs.reserveCapacity(paragraphCount)
+    var sentenceIndex = 0
+
+    for paragraphIndex in 0..<paragraphCount {
+        let remainingSentences = sentences.count - sentenceIndex
+        let remainingParagraphs = paragraphCount - paragraphIndex
+        let sentencesInParagraph = Int(ceil(Double(remainingSentences) / Double(remainingParagraphs)))
+        let endIndex = min(sentenceIndex + sentencesInParagraph, sentences.count)
+        paragraphs.append(sentences[sentenceIndex..<endIndex].joined(separator: " "))
+        sentenceIndex = endIndex
+    }
+
+    // Foundation's full Markdown parser drops blank lines between block
+    // paragraphs when flattening them into one AttributedString. Explicit
+    // Markdown hard breaks retain the two visible line breaks in UITextView.
+    return paragraphs.joined(separator: conversationalMarkdownParagraphSeparator)
+}
+
 func cleanMarkdownArtifactsForDisplay(_ input: String) -> String {
-    var value = input
+    var value = normalizeAIReplyMarkdown(input)
     value = value.replacingOccurrences(of: "\r\n", with: "\n")
     value = value.replacingOccurrences(of: "\r", with: "\n")
     value = value.replacingOccurrences(of: "(?s)```[a-zA-Z0-9_-]*\\s*(.*?)\\s*```", with: "$1", options: .regularExpression)
@@ -54,30 +245,13 @@ func cleanAndFormatCommentSummaryForDisplay(_ input: String) -> String {
 }
 
 func formatAskAIResponseForDisplay(_ input: String) -> String {
-    var value = cleanMarkdownArtifactsForDisplay(input)
+    let conversationalMarkdown = normalizeConversationalAIReplyMarkdown(input)
+    let plainTextParagraphs = conversationalMarkdown.replacingOccurrences(
+        of: conversationalMarkdownParagraphSeparator,
+        with: "\n\n"
+    )
+    var value = cleanMarkdownArtifactsForDisplay(plainTextParagraphs)
     guard !value.isEmpty else { return value }
-
-    if !value.contains("\n\n") && !value.contains("\n") && value.count > 180 {
-        let normalized = value
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let marked = normalized.replacingOccurrences(
-            of: "([a-z0-9][\\.\\!\\?])\\s+(?=[A-Z0-9])",
-            with: "$1|||",
-            options: .regularExpression
-        )
-        let sentences = marked
-            .components(separatedBy: "|||")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        if sentences.count >= 2 {
-            value = sentences.joined(separator: "\n\n")
-        } else {
-            value = normalized
-        }
-    }
 
     value = value.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
     return value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -130,6 +304,113 @@ func attributedAskAIResponseForDisplay(_ input: String) -> AttributedString {
         markdown: markdown as String,
         options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
     )) ?? AttributedString(value)
+}
+
+/// Carries the bounded source that grounded an answer into a later selection
+/// follow-up. The source and the original Q&A are kept separate so a reply
+/// selection can add its current displayed answer without losing the source.
+struct AskAISelectionOrigin {
+    let sourceLabel: String
+    let sourceText: String
+    let originalQuestion: String?
+    let originalAnswer: String?
+
+    init(
+        sourceLabel: String,
+        sourceText: String,
+        originalQuestion: String? = nil,
+        originalAnswer: String? = nil
+    ) {
+        self.sourceLabel = sourceLabel
+        self.sourceText = sourceText
+        self.originalQuestion = originalQuestion
+        self.originalAnswer = originalAnswer
+    }
+
+    var promptSourceLabel: String {
+        let hasQA = !(originalQuestion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(originalAnswer?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        return hasQA ? "Original source and Q&A context" : sourceLabel
+    }
+
+    func boundedSource(additionalAnswer: String? = nil, maxCharacters: Int = 40_000) -> String {
+        func normalized(_ value: String?) -> String {
+            guard let value else { return "" }
+            return value
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+                .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let source = normalized(sourceText)
+        let question = normalized(originalQuestion)
+        let answer = normalized(originalAnswer)
+        let currentAnswer = normalized(additionalAnswer)
+        var qaSections: [(label: String, body: String)] = []
+        if !question.isEmpty {
+            qaSections.append(("Original Q&A question", question))
+        }
+        if !answer.isEmpty {
+            qaSections.append(("Complete Q&A answer", answer))
+        }
+        if !currentAnswer.isEmpty, currentAnswer != answer {
+            qaSections.append(("Current displayed Ask AI answer", currentAnswer))
+        }
+        let sourceLabel = sourceLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Original source"
+            : sourceLabel
+        let sectionCount = (source.isEmpty ? 0 : 1) + qaSections.count
+        let separatorBudget = max(0, sectionCount - 1) * 2
+        let sourceHeaderBudget = source.isEmpty ? 0 : sourceLabel.count + 2
+        let qaHeaderBudget = qaSections.reduce(0) { $0 + $1.label.count + 2 }
+        let availableBodyBudget = max(0, maxCharacters - separatorBudget - sourceHeaderBudget - qaHeaderBudget)
+        let qaBodyCount = qaSections.reduce(0) { $0 + $1.body.count }
+
+        // Keep at least a quarter of the available body budget for the source
+        // when both the source and Q&A are oversized. This prevents a long
+        // answer from silently replacing the article or Reddit grounding.
+        let sourceMinimumBudget = source.isEmpty ? 0 : min(source.count, max(1, availableBodyBudget / 4))
+        let sourceBudget: Int
+        if source.isEmpty {
+            sourceBudget = 0
+        } else if source.count + qaBodyCount <= availableBodyBudget {
+            sourceBudget = source.count
+        } else {
+            let qaReservation = min(qaBodyCount, max(0, availableBodyBudget - sourceMinimumBudget))
+            sourceBudget = min(source.count, max(sourceMinimumBudget, availableBodyBudget - qaReservation))
+        }
+
+        let qaBudget = max(0, availableBodyBudget - sourceBudget)
+        var qaBodyBudgets = Array(repeating: 0, count: qaSections.count)
+        var remainingQABudget = qaBudget
+        for index in qaSections.indices where remainingQABudget > 0 {
+            qaBodyBudgets[index] = min(1, qaSections[index].body.count)
+            remainingQABudget -= qaBodyBudgets[index]
+        }
+        while remainingQABudget > 0 {
+            var madeProgress = false
+            for index in qaSections.indices where remainingQABudget > 0 {
+                guard qaBodyBudgets[index] < qaSections[index].body.count else { continue }
+                qaBodyBudgets[index] += 1
+                remainingQABudget -= 1
+                madeProgress = true
+            }
+            if !madeProgress { break }
+        }
+
+        var sections: [String] = []
+        if sourceBudget > 0 {
+            sections.append("\(sourceLabel):\n\(source.prefix(sourceBudget))")
+        }
+        for (index, section) in qaSections.enumerated() where qaBodyBudgets[index] > 0 {
+            sections.append("\(section.label):\n\(section.body.prefix(qaBodyBudgets[index]))")
+        }
+
+        let composed = sections.joined(separator: "\n\n")
+        return composed.count > maxCharacters ? String(composed.prefix(maxCharacters)) : composed
+    }
+
 }
 
 func buildAskAISelectionPrompt(selectedText: String, extractedContext: String) -> String {
@@ -241,6 +522,7 @@ enum AskAISelectionAction {
 
 struct AskAIWebView: View {
     let content: String
+    var markdownContent: String? = nil
     var onAskAISelection: ((String, String) -> Void)? = nil
     var onAskAIWebSelection: ((String, String) -> Void)? = nil
 
@@ -249,6 +531,7 @@ struct AskAIWebView: View {
             #if os(iOS)
             SelectableText(
                 text: formatAskAIResponseForDisplay(content),
+                markdownText: markdownContent.map(normalizeConversationalAIReplyMarkdown),
                 onAskAI: onAskAISelection,
                 onAskAIWeb: onAskAIWebSelection,
                 textIsPrecleaned: true
@@ -388,6 +671,8 @@ final class AskAISheetTransparencyView: UIView {
 struct AskAIResponseSheet: View {
     let question: String
     let answer: String
+    var markdownAnswer: String? = nil
+    var selectionOrigin: AskAISelectionOrigin? = nil
     var onCopy: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -396,6 +681,7 @@ struct AskAIResponseSheet: View {
     @State private var isAskingFollowUp = false
     @State private var followUpPrompt = ""
     @State private var followUpAnswer = ""
+    @State private var followUpMarkdownAnswer: String?
     @State private var showFollowUpSheet = false
     #endif
 
@@ -403,6 +689,7 @@ struct AskAIResponseSheet: View {
         NavigationStack {
             AskAIWebView(
                 content: answer.isEmpty ? "No answer available." : answer,
+                markdownContent: markdownAnswer,
                 onAskAISelection: {
                     #if os(iOS)
                     askFollowUp(selectedText: $0, context: $1, useWebAI: false)
@@ -446,6 +733,8 @@ struct AskAIResponseSheet: View {
             AskAIResponseSheet(
                 question: followUpPrompt,
                 answer: followUpAnswer,
+                markdownAnswer: followUpMarkdownAnswer,
+                selectionOrigin: selectionOrigin,
                 onCopy: {
                     UIPasteboard.general.string = followUpAnswer
                 }
@@ -464,17 +753,22 @@ struct AskAIResponseSheet: View {
         let prompt = buildAskAISelectionPrompt(
             selectedText: selectedText,
             extractedContext: context,
-            sourceContext: answer,
-            sourceLabel: "Current Ask AI Answer"
+            sourceContext: (selectionOrigin ?? AskAISelectionOrigin(
+                sourceLabel: "Current Ask AI answer",
+                sourceText: answer
+            )).boundedSource(additionalAnswer: answer),
+            sourceLabel: (selectionOrigin?.promptSourceLabel ?? "Current Ask AI answer")
         )
         guard !prompt.isEmpty else { return }
 
         followUpPrompt = prompt
         followUpAnswer = ""
+        followUpMarkdownAnswer = nil
         isAskingFollowUp = true
 
         let completion: (String) -> Void = { response in
             DispatchQueue.main.async {
+                self.followUpMarkdownAnswer = response
                 self.followUpAnswer = formatAskAIResponseForDisplay(response)
                 self.isAskingFollowUp = false
                 self.showFollowUpSheet = true
@@ -556,10 +850,12 @@ private func configureSelectableTextView(
 
 struct SelectableText: UIViewRepresentable {
     let text: String
+    var markdownText: String? = nil
     var onAskAI: ((String, String) -> Void)? = nil
     var onAskAIWeb: ((String, String) -> Void)? = nil
     var summaryReferenceCount: Int = 0
     var onSummaryReferenceTap: ((Int) -> Void)? = nil
+    var onPodcastTimestampTap: ((TimeInterval) -> Void)? = nil
     var textIsPrecleaned: Bool = false
 
     func makeUIView(context: Context) -> AskAITextView {
@@ -571,7 +867,8 @@ struct SelectableText: UIViewRepresentable {
             supportsWebAskAI: onAskAIWeb != nil
         )
         textView.onSummaryReferenceTap = onSummaryReferenceTap
-        applyText(resolvedText, on: textView)
+        textView.onPodcastTimestampTap = onPodcastTimestampTap
+        applyText(resolvedText, markdown: markdownText, on: textView)
         return textView
     }
 
@@ -580,7 +877,8 @@ struct SelectableText: UIViewRepresentable {
         uiView.supportsStandardAskAI = onAskAI != nil
         uiView.supportsWebAskAI = onAskAIWeb != nil
         uiView.onSummaryReferenceTap = onSummaryReferenceTap
-        applyText(resolvedText, on: uiView)
+        uiView.onPodcastTimestampTap = onPodcastTimestampTap
+        applyText(resolvedText, markdown: markdownText, on: uiView)
     }
 
     @available(iOS 16.0, *)
@@ -607,11 +905,13 @@ struct SelectableText: UIViewRepresentable {
         }
     }
 
-    private func applyText(_ value: String, on textView: AskAITextView) {
+    private func applyText(_ value: String, markdown: String?, on textView: AskAITextView) {
         textView.prepareForDisplay(
             text: value,
+            markdownText: markdown,
             layoutWidth: textView.bounds.width,
-            summaryReferenceCount: summaryReferenceCount
+            summaryReferenceCount: summaryReferenceCount,
+            podcastTimestampsEnabled: onPodcastTimestampTap != nil
         )
     }
 }
@@ -701,10 +1001,14 @@ private final class TextSelectionIntentGestureRecognizer: UIGestureRecognizer {
 final class AskAITextView: UITextView, UITextViewDelegate {
     var onAskAISelection: ((AskAISelectionAction, String, String) -> Void)?
     var onSummaryReferenceTap: ((Int) -> Void)?
+    var onPodcastTimestampTap: ((TimeInterval) -> Void)?
     var supportsStandardAskAI = false
     var supportsWebAskAI = false
     private(set) var currentRenderedText: String = ""
+    private var currentRenderedMarkdownText: String?
+    private var isMarkdownRendered = false
     private var currentSummaryReferenceCount = 0
+    private var currentPodcastTimestampsEnabled = false
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredSize: CGSize = .zero
     private static weak var currentTextTouchView: AskAITextView?
@@ -736,26 +1040,60 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         installTextSelectionIntentObserver()
     }
 
-    func prepareForDisplay(text: String, layoutWidth: CGFloat, summaryReferenceCount: Int = 0) {
+    func prepareForDisplay(
+        text: String,
+        markdownText: String? = nil,
+        layoutWidth: CGFloat,
+        summaryReferenceCount: Int = 0,
+        podcastTimestampsEnabled: Bool = false
+    ) {
         let clampedWidth = max(1, layoutWidth)
+        let normalizedMarkdown = markdownText
+            .map(normalizeAIReplyMarkdown)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         let textChanged = currentRenderedText != text
+        let markdownChanged = currentRenderedMarkdownText != normalizedMarkdown
         let referenceConfigurationChanged = currentSummaryReferenceCount != summaryReferenceCount
+        let podcastTimestampConfigurationChanged = currentPodcastTimestampsEnabled != podcastTimestampsEnabled
         let widthChanged = abs(lastMeasuredWidth - clampedWidth) > 0.5
 
-        if textChanged {
-            self.text = text
-            currentRenderedText = text
+        if textChanged || markdownChanged {
+            if let normalizedMarkdown, !normalizedMarkdown.isEmpty,
+               let parsed = try? AttributedString(
+                   markdown: normalizedMarkdown,
+                   options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+               ) {
+                let rendered = NSMutableAttributedString(attributedString: NSAttributedString(parsed))
+                rendered.mutableString.replaceOccurrences(
+                    of: conversationalMarkdownParagraphMarker,
+                    with: "\n\n",
+                    range: NSRange(location: 0, length: rendered.length)
+                )
+                applyBaseAttributes(to: rendered)
+                attributedText = rendered
+                isMarkdownRendered = true
+                currentRenderedText = rendered.string
+            } else {
+                self.text = text
+                isMarkdownRendered = false
+                currentRenderedText = text
+            }
+            currentRenderedMarkdownText = normalizedMarkdown
         }
 
-        if textChanged || referenceConfigurationChanged {
+        if textChanged || markdownChanged || referenceConfigurationChanged || podcastTimestampConfigurationChanged {
             currentSummaryReferenceCount = summaryReferenceCount
+            currentPodcastTimestampsEnabled = podcastTimestampsEnabled
             applySummaryReferenceLinks(maximumReference: summaryReferenceCount)
+            if podcastTimestampsEnabled {
+                applyPodcastTimestampLinks()
+            }
         }
 
         installAskAIMenuItem()
         installTextSelectionIntentObserver()
 
-        guard textChanged || referenceConfigurationChanged || widthChanged else { return }
+        guard textChanged || markdownChanged || referenceConfigurationChanged || podcastTimestampConfigurationChanged || widthChanged else { return }
 
         bounds.size.width = clampedWidth
         setNeedsLayout()
@@ -820,8 +1158,10 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         }
         prepareForDisplay(
             text: currentRenderedText,
+            markdownText: currentRenderedMarkdownText,
             layoutWidth: clampedWidth,
-            summaryReferenceCount: currentSummaryReferenceCount
+            summaryReferenceCount: currentSummaryReferenceCount,
+            podcastTimestampsEnabled: currentPodcastTimestampsEnabled
         )
         return lastMeasuredSize == .zero ? super.sizeThatFits(CGSize(width: clampedWidth, height: .greatestFiniteMagnitude)) : lastMeasuredSize
     }
@@ -832,6 +1172,14 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         in characterRange: NSRange,
         interaction: UITextItemInteraction
     ) -> Bool {
+        if URL.scheme == "rssreader-podcast",
+           URL.host == "seek",
+           let value = URL.pathComponents.last,
+           let seconds = TimeInterval(value) {
+            onPodcastTimestampTap?(seconds)
+            return false
+        }
+
         guard URL.scheme == "rssreader-summary",
               let value = URL.pathComponents.last,
               let referenceNumber = Int(value) else {
@@ -842,57 +1190,151 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         return false
     }
 
-    private func applySummaryReferenceLinks(maximumReference: Int) {
-        let fullRange = NSRange(location: 0, length: textStorage.length)
-        if fullRange.length > 0 {
-            textStorage.setAttributes(
-                [
-                    .font: font ?? UIFont.preferredFont(forTextStyle: .body),
-                    .foregroundColor: textColor ?? UIColor.label
-                ],
-                range: fullRange
-            )
-        }
-        applyDetectedURLLinks()
-        guard maximumReference > 0, !currentRenderedText.isEmpty else { return }
-
-        let phrasePattern = #"\b(?:post|posts|article|articles|item|items)\s+\d+(?:\s*(?:,|\band\b|&)\s*(?:(?:post|posts|article|articles|item|items)\s+)?\d+)*"#
-        guard let phraseRegex = try? NSRegularExpression(pattern: phrasePattern, options: [.caseInsensitive]),
-              let numberRegex = try? NSRegularExpression(pattern: #"\d+"#) else {
+    private func applyPodcastTimestampLinks() {
+        guard !currentRenderedText.isEmpty,
+              let regex = try? NSRegularExpression(
+                  pattern: #"\[(\d{1,4}:\d{2}(?::\d{2})?)(?:\s*[-–—]\s*\d{1,4}:\d{2}(?::\d{2})?)?\]"#
+              ) else {
             return
         }
 
         let source = currentRenderedText as NSString
         let sourceRange = NSRange(location: 0, length: source.length)
-        for phraseMatch in phraseRegex.matches(in: currentRenderedText, range: sourceRange) {
-            let phraseRange = phraseMatch.range
-            for numberMatch in numberRegex.matches(in: currentRenderedText, range: phraseRange) {
-                let number = Int(source.substring(with: numberMatch.range)) ?? 0
-                guard (1...maximumReference).contains(number),
-                      let destination = URL(string: "rssreader-summary://item/\(number)") else {
-                    continue
-                }
-                let referenceFont = UIFont.systemFont(
-                    ofSize: (font ?? UIFont.preferredFont(forTextStyle: .body)).pointSize,
-                    weight: .bold
-                )
-                textStorage.addAttributes(
-                    [
-                        .link: destination,
-                        .foregroundColor: UIColor.systemBlue,
-                        .backgroundColor: UIColor.systemBlue.withAlphaComponent(0.16),
-                        .underlineStyle: NSUnderlineStyle.single.rawValue,
-                        .font: referenceFont
-                    ],
-                    range: numberMatch.range
-                )
+        for match in regex.matches(in: currentRenderedText, range: sourceRange) {
+            let startRange = match.range(at: 1)
+            guard startRange.location != NSNotFound,
+                  let seconds = Self.podcastTimeInterval(from: source.substring(with: startRange)),
+                  let destination = URL(string: "rssreader-podcast://seek/\(seconds)") else {
+                continue
             }
+
+            let timestampFont = UIFont.systemFont(
+                ofSize: (font ?? UIFont.preferredFont(forTextStyle: .body)).pointSize,
+                weight: .semibold
+            )
+            textStorage.addAttributes(
+                [
+                    .link: destination,
+                    .foregroundColor: UIColor.systemBlue,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .font: timestampFont
+                ],
+                range: match.range
+            )
         }
 
         linkTextAttributes = [
             .foregroundColor: UIColor.systemBlue,
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
+    }
+
+    private static func podcastTimeInterval(from timestamp: String) -> TimeInterval? {
+        let values = timestamp.split(separator: ":").compactMap { Int($0) }
+        guard values.count == 2 || values.count == 3,
+              values.count == timestamp.split(separator: ":").count,
+              let seconds = values.last,
+              (0..<60).contains(seconds) else {
+            return nil
+        }
+
+        if values.count == 2 {
+            return TimeInterval(values[0] * 60 + values[1])
+        }
+
+        guard (0..<60).contains(values[1]) else { return nil }
+        return TimeInterval(values[0] * 3_600 + values[1] * 60 + values[2])
+    }
+
+    private func applySummaryReferenceLinks(maximumReference: Int) {
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        if fullRange.length > 0 {
+            if isMarkdownRendered {
+                applyBaseAttributes(to: textStorage)
+            } else {
+                textStorage.setAttributes(
+                    [
+                        .font: font ?? UIFont.preferredFont(forTextStyle: .body),
+                        .foregroundColor: textColor ?? UIColor.label
+                    ],
+                    range: fullRange
+                )
+            }
+        }
+        applyDetectedURLLinks()
+        guard maximumReference > 0, !currentRenderedText.isEmpty else { return }
+
+        // Providers do not always use the exact same citation spelling. Accept
+        // "Article 2", "Article #2", "Article [2]", and compact bracketed
+        // citations such as "[2]" without turning ordinary prose numbers into
+        // links.
+        let referenceToken = #"(?:#\s*)?(?:\[\s*)?\d+(?:\s*\])?"#
+        let phrasePattern = #"\b(?:post|posts|article|articles|item|items)\s+\#(referenceToken)(?:\s*(?:,|\band\b|&)\s*(?:(?:post|posts|article|articles|item|items)\s+)?\#(referenceToken))*"#
+        guard let phraseRegex = try? NSRegularExpression(pattern: phrasePattern, options: [.caseInsensitive]),
+              let numberRegex = try? NSRegularExpression(pattern: #"\d+"#),
+              let bracketRegex = try? NSRegularExpression(pattern: #"[\[\(]\s*#?(\d+)\s*[\]\)]"#) else {
+            return
+        }
+
+        let source = currentRenderedText as NSString
+        let sourceRange = NSRange(location: 0, length: source.length)
+        func applyReferenceLink(numberRange: NSRange) {
+            let number = Int(source.substring(with: numberRange)) ?? 0
+            guard (1...maximumReference).contains(number),
+                  let destination = URL(string: "rssreader-summary://item/\(number)") else {
+                return
+            }
+            let referenceFont = UIFont.systemFont(
+                ofSize: (font ?? UIFont.preferredFont(forTextStyle: .body)).pointSize,
+                weight: .bold
+            )
+            textStorage.addAttributes(
+                [
+                    .link: destination,
+                    .foregroundColor: UIColor.systemBlue,
+                    .backgroundColor: UIColor.systemBlue.withAlphaComponent(0.16),
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .font: referenceFont
+                ],
+                range: numberRange
+            )
+        }
+
+        for phraseMatch in phraseRegex.matches(in: currentRenderedText, range: sourceRange) {
+            let phraseRange = phraseMatch.range
+            for numberMatch in numberRegex.matches(in: currentRenderedText, range: phraseRange) {
+                applyReferenceLink(numberRange: numberMatch.range)
+            }
+        }
+
+        for bracketMatch in bracketRegex.matches(in: currentRenderedText, range: sourceRange) {
+            let numberRange = bracketMatch.range(at: 1)
+            guard numberRange.location != NSNotFound else { continue }
+            applyReferenceLink(numberRange: numberRange)
+        }
+
+        linkTextAttributes = [
+            .foregroundColor: UIColor.systemBlue,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+    }
+
+    private func applyBaseAttributes(to attributedString: NSMutableAttributedString) {
+        let fullRange = NSRange(location: 0, length: attributedString.length)
+        guard fullRange.length > 0 else { return }
+
+        attributedString.enumerateAttributes(in: fullRange) { attributes, range, _ in
+            var additions: [NSAttributedString.Key: Any] = [:]
+            if attributes[.font] == nil {
+                additions[.font] = font ?? UIFont.preferredFont(forTextStyle: .body)
+            }
+            if attributes[.foregroundColor] == nil {
+                additions[.foregroundColor] = textColor ?? UIColor.label
+            }
+            if !additions.isEmpty {
+                attributedString.addAttributes(additions, range: range)
+            }
+        }
     }
 
     private func applyDetectedURLLinks() {
@@ -1143,8 +1585,10 @@ final class AskAIEnabledWKWebView: WKWebView {
 #else
 struct SelectableText: View {
     let text: String
+    var markdownText: String? = nil
     var onAskAI: ((String, String) -> Void)? = nil
     var onAskAIWeb: ((String, String) -> Void)? = nil
+    var onPodcastTimestampTap: ((TimeInterval) -> Void)? = nil
     var textIsPrecleaned: Bool = false
 
     var body: some View {

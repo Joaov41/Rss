@@ -27,3 +27,12 @@ _tmp/
 1/.xcode-home/
 rss mac/.xcode-derived-data/
 rss mac/Packages/mlx-audio-swift/build/
+.DS_Store
+__pycache__/
+*.pyc
+*.p8
+.codex-checkpoints/
+.playwright-cli/
+.asc/release/
+.asc/reports/
+tutorial-web/

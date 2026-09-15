@@ -109,6 +109,48 @@ extension String {
     }
 }
 
+struct FeedEnclosureClassification: Equatable {
+    let isPodcastAudio: Bool
+    let shouldUseAsArtwork: Bool
+}
+
+enum FeedEnclosureClassifier {
+    static func classify(url: URL?, mimeType: String?, hasPodcastMetadata: Bool) -> FeedEnclosureClassification {
+        let normalizedMIMEType = mimeType?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        let enclosureHasNoTypeHint = normalizedMIMEType.isEmpty
+        let enclosureHasGenericTypeHint = ["application/octet-stream", "binary/octet-stream"]
+            .contains(normalizedMIMEType)
+        let enclosureIsAudio = isAudio(url: url, mimeType: normalizedMIMEType)
+        let enclosureIsImage = isImage(url: url, mimeType: normalizedMIMEType)
+        let isPodcastAudio = enclosureIsAudio
+            || (hasPodcastMetadata
+                && !enclosureIsImage
+                && (enclosureHasNoTypeHint || enclosureHasGenericTypeHint))
+        let shouldUseAsArtwork = !isPodcastAudio
+            && (enclosureIsImage
+                || enclosureHasNoTypeHint
+                || (!hasPodcastMetadata && !enclosureIsAudio))
+        return FeedEnclosureClassification(
+            isPodcastAudio: isPodcastAudio,
+            shouldUseAsArtwork: shouldUseAsArtwork
+        )
+    }
+
+    static func isAudio(url: URL?, mimeType: String?) -> Bool {
+        if mimeType?.lowercased().hasPrefix("audio/") == true { return true }
+        guard let pathExtension = url?.pathExtension.lowercased(), !pathExtension.isEmpty else { return false }
+        return ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "aiff", "aif"].contains(pathExtension)
+    }
+
+    static func isImage(url: URL?, mimeType: String?) -> Bool {
+        if mimeType?.lowercased().hasPrefix("image/") == true { return true }
+        guard let pathExtension = url?.pathExtension.lowercased(), !pathExtension.isEmpty else { return false }
+        return ["jpg", "jpeg", "png", "gif", "webp", "heic", "avif"].contains(pathExtension)
+    }
+}
+
 // MARK: - FeedService Class
 class FeedService {
     private var cancellables = Set<AnyCancellable>()
@@ -193,14 +235,42 @@ class FeedService {
                 htmlContent = item.description ?? ""
             }
             
-            // Try to get standard image URLs first
-            var articleImageURL: URL? = nil
-            if let enclosureLink = item.enclosure?.attributes?.url, !enclosureLink.isEmpty {
-                articleImageURL = URL(string: enclosureLink)
-            } else if let mediaContents = item.media?.mediaContents,
+            let enclosureURL = self.resolvedFeedURL(
+                item.enclosure?.attributes?.url,
+                relativeTo: url
+            )
+            let enclosureMIMEType = item.enclosure?.attributes?.type
+            let hasPodcastMetadata = item.iTunes != nil || feed.iTunes != nil
+            let enclosureClassification = FeedEnclosureClassifier.classify(
+                url: enclosureURL,
+                mimeType: enclosureMIMEType,
+                hasPodcastMetadata: hasPodcastMetadata
+            )
+            let podcastAudioURL = enclosureClassification.isPodcastAudio ? enclosureURL : nil
+
+            // Try to get standard image URLs first. Audio enclosures belong to
+            // podcast playback and must never be displayed as article artwork.
+            var articleImageURL = podcastAudioURL.flatMap { _ in
+                self.resolvedFeedURL(
+                    item.iTunes?.iTunesImage?.attributes?.href
+                        ?? feed.iTunes?.iTunesImage?.attributes?.href
+                        ?? feed.image?.url,
+                    relativeTo: url
+                )
+            }
+            if articleImageURL == nil,
+               let enclosureURL,
+               podcastAudioURL == nil,
+               enclosureClassification.shouldUseAsArtwork {
+                articleImageURL = enclosureURL
+            } else if articleImageURL == nil,
+                      let mediaContents = item.media?.mediaContents,
                       let firstMedia = mediaContents.first,
                       let mediaURL = firstMedia.attributes?.url, !mediaURL.isEmpty {
-                articleImageURL = URL(string: mediaURL)
+                let resolvedMediaURL = self.resolvedFeedURL(mediaURL, relativeTo: url)
+                if !self.isAudioMediaURL(resolvedMediaURL, mimeType: firstMedia.attributes?.type) {
+                    articleImageURL = resolvedMediaURL
+                }
             }
 
             // --- Fallback: Extract first <img> from content if no standard URL found ---
@@ -244,6 +314,10 @@ class FeedService {
                 feedTitle: feed.title?.removingHTML() ?? "Unknown Feed",
                 feedURL: url,
                 imageURL: articleImageURL,
+                podcastAudioURL: podcastAudioURL,
+                podcastAudioMIMEType: podcastAudioURL == nil ? nil : enclosureMIMEType,
+                podcastDuration: podcastAudioURL == nil ? nil : item.iTunes?.iTunesDuration,
+                podcastLanguageCode: podcastAudioURL == nil ? nil : feed.language,
                 isRead: false,
                 isFavorite: false
             )
@@ -426,7 +500,9 @@ class FeedService {
     private func fetchFullArticlesIfNeeded(for feed: Feed) -> AnyPublisher<Feed, Never> {
         feed.articles.publisher
             .flatMap(maxPublishers: .max(maxConcurrentFullArticleFetches)) { article -> AnyPublisher<Article, Never> in
-            if self.isTruncated(article.content), let link = article.url {
+            if !article.isPodcastEpisode,
+               self.isTruncated(article.content),
+               let link = article.url {
                 return self.fetchFullArticle(for: article, from: link)
             } else {
                 return Just(article).eraseToAnyPublisher()
@@ -441,6 +517,24 @@ class FeedService {
                 return finalFeed
             }
             .eraseToAnyPublisher()
+    }
+
+    private func resolvedFeedURL(_ rawValue: String?, relativeTo feedURL: String) -> URL? {
+        guard let rawValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else { return nil }
+        if let absolute = URL(string: rawValue), absolute.scheme != nil {
+            return absolute
+        }
+        guard let baseURL = URL(string: feedURL) else { return URL(string: rawValue) }
+        return URL(string: rawValue, relativeTo: baseURL)?.absoluteURL
+    }
+
+    private func isAudioMediaURL(_ url: URL?, mimeType: String?) -> Bool {
+        FeedEnclosureClassifier.isAudio(url: url, mimeType: mimeType)
+    }
+
+    private func isImageMediaURL(_ url: URL?, mimeType: String?) -> Bool {
+        FeedEnclosureClassifier.isImage(url: url, mimeType: mimeType)
     }
 
     private func articleContentFingerprint(_ content: String) -> Int {

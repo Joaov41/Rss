@@ -23,6 +23,20 @@ private struct RedditUserAboutData: Decodable {
     }
 }
 
+private struct RedditSubredditAboutResponse: Decodable {
+    let data: RedditSubredditAboutData
+}
+
+private struct RedditSubredditAboutData: Decodable {
+    let communityIcon: String?
+    let iconImg: String?
+
+    enum CodingKeys: String, CodingKey {
+        case communityIcon = "community_icon"
+        case iconImg = "icon_img"
+    }
+}
+
 enum RedditServiceError: LocalizedError {
     case invalidResponse
     case httpError(statusCode: Int, bodyPreview: String, rateLimitReset: Double?, retryAfter: Double?)
@@ -117,6 +131,9 @@ class RedditService {
     private let maxCacheSize = 100 // Increased cache size to reduce API calls
     private var userAvatarCache: [String: URL] = [:]
     private var userAvatarMissingCache = Set<String>()
+    private var subredditIconCache: [String: URL] = [:]
+    private var subredditIconMissingCache = Set<String>()
+    private let subredditIconCacheLock = NSLock()
 
     // Rate limiting properties
     private var lastRequestTime = Date.distantPast
@@ -186,15 +203,16 @@ class RedditService {
 
     /// Ensures we don't exceed rate limits by waiting between requests
     private func waitForRateLimit() async {
-        rateLimitLock.lock()
-        defer { rateLimitLock.unlock() }
+        let waitTime = rateLimitLock.withLock { () -> TimeInterval in
+            let now = Date()
+            let scheduledTime = max(now, lastRequestTime.addingTimeInterval(minRequestInterval))
+            lastRequestTime = scheduledTime
+            return scheduledTime.timeIntervalSince(now)
+        }
 
-        let timeSinceLastRequest = Date().timeIntervalSince(lastRequestTime)
-        if timeSinceLastRequest < minRequestInterval {
-            let waitTime = minRequestInterval - timeSinceLastRequest
+        if waitTime > 0 {
             try? await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
         }
-        lastRequestTime = Date()
     }
 
     // MARK: - OAuth Headers
@@ -522,6 +540,80 @@ class RedditService {
         } catch {
             print("⚠️ RedditService: Failed to fetch avatar for u/\(normalizedAuthor): \(error.localizedDescription)")
             userAvatarMissingCache.insert(cacheKey)
+            return nil
+        }
+    }
+
+    func fetchSubredditIconURL(subreddit rawSubreddit: String) async -> URL? {
+        let subreddit = Subscription.canonicalURL(rawSubreddit, type: .reddit)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cacheKey = subreddit.lowercased()
+
+        guard !subreddit.isEmpty else { return nil }
+        let cachedState = subredditIconCacheLock.withLock {
+            (subredditIconCache[cacheKey], subredditIconMissingCache.contains(cacheKey))
+        }
+        if let cachedURL = cachedState.0 { return cachedURL }
+        if cachedState.1 { return nil }
+
+        await ensureValidTokenIfNeeded()
+        await waitForRateLimit()
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = isAuthenticated ? "oauth.reddit.com" : "www.reddit.com"
+        components.path = "/r/\(subreddit)/about" + (isAuthenticated ? "" : ".json")
+        if !isAuthenticated {
+            components.queryItems = [URLQueryItem(name: "raw_json", value: "1")]
+        }
+
+        guard let url = components.url else {
+            subredditIconCacheLock.withLock {
+                _ = subredditIconMissingCache.insert(cacheKey)
+            }
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        addAuthHeaders(to: &request)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                subredditIconCacheLock.withLock {
+                    _ = subredditIconMissingCache.insert(cacheKey)
+                }
+                return nil
+            }
+
+            let payload = try JSONDecoder().decode(RedditSubredditAboutResponse.self, from: data)
+            let rawIcon = [payload.data.communityIcon, payload.data.iconImg]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first(where: { !$0.isEmpty })
+            guard let iconURL = Self.cleanedAvatarURL(from: rawIcon) else {
+                subredditIconCacheLock.withLock {
+                    _ = subredditIconMissingCache.insert(cacheKey)
+                }
+                return nil
+            }
+
+            subredditIconCacheLock.withLock {
+                subredditIconCache[cacheKey] = iconURL
+            }
+            return iconURL
+        } catch {
+            print("⚠️ RedditService: Failed to fetch icon for r/\(subreddit): \(error.localizedDescription)")
+            if error is CancellationError ||
+                (error as NSError).domain == NSURLErrorDomain &&
+                (error as NSError).code == NSURLErrorCancelled {
+                return nil
+            }
+            subredditIconCacheLock.withLock {
+                _ = subredditIconMissingCache.insert(cacheKey)
+            }
             return nil
         }
     }
