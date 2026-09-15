@@ -172,27 +172,33 @@ func buildAskAISelectionPrompt(
 
     if !source.isEmpty {
         return """
-        Answer the question using only the selected text, nearby rendered context, and original source material.
+        Answer the question using only the source material.
 
         Rules:
+        - Use only facts present in the source.
+        - Do not simply repeat or paraphrase the selected passage; explain it using the details, background, and context the source provides around it.
+        - If the source does not add anything beyond the selected passage, say so briefly and state what the passage means.
         - Return plain text only.
         - Do not use Markdown symbols, headings, bullets, or code fences.
         - Use short paragraphs separated by a blank line when the answer has multiple ideas.
-        - Treat the selected text as the thing being asked about.
-        - Use the original source material to verify, explain, or add relevant detail.
-        - If the original source material does not answer it, say the information is not available in the source.
+
+        <source_label>\(label.isEmpty ? "Original source" : label)</source_label>
+        <source_text>
+        \(source)
+        </source_text>
+
+        <selected_passage>
+        \(selected)
+        </selected_passage>
+
+        <nearby_rendered_context>
+        \(context.isEmpty ? "(none captured)" : context)
+        </nearby_rendered_context>
 
         Question:
-        What is said about this selected text in the original source?
+        Using the full source, explain the selected passage: what it means, who or what it refers to, what led to it, and any specific details, numbers, or consequences the source gives about it.
 
-        Selected text:
-        \(selected)
-
-        Nearby rendered context:
-        \(context.isEmpty ? "(No nearby rendered context was captured.)" : context)
-
-        \(label.isEmpty ? "Original source" : label):
-        \(source)
+        Return only the answer.
         """
     }
 
@@ -204,10 +210,11 @@ func buildAskAISelectionPrompt(
         - Return plain text only.
         - Do not use Markdown symbols, headings, bullets, or code fences.
         - Use short paragraphs separated by a blank line when the answer has multiple ideas.
+        - Do not simply repeat or paraphrase the selected passage; explain what it means.
         - If the selected text does not answer it, say the information is not available in the selection.
 
         Question:
-        What is said about this selected text?
+        Explain the selected passage: what it means and any details the text gives about it.
 
         Selected text:
         \(selected)
@@ -221,10 +228,11 @@ func buildAskAISelectionPrompt(
     - Return plain text only.
     - Do not use Markdown symbols, headings, bullets, or code fences.
     - Use short paragraphs separated by a blank line when the answer has multiple ideas.
+    - Do not simply repeat or paraphrase the selected passage; explain it using the extracted context.
     - If the context does not answer it, say the information is not available in the context.
 
     Question:
-    What is said about this selected text in the context?
+    Explain the selected passage: what it means and any details the text gives about it.
 
     Selected text:
     \(selected)
@@ -668,15 +676,15 @@ struct SelectableTextPrewarm: UIViewRepresentable {
 }
 
 private final class TextSelectionIntentGestureRecognizer: UIGestureRecognizer {
-    var onTouchBegan: (() -> Void)?
+    var onTouchBegan: ((UITouch) -> Void)?
     var onTouchEnded: (() -> Void)?
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard touches.count == 1 else {
+        guard touches.count == 1, let touch = touches.first else {
             state = .failed
             return
         }
-        onTouchBegan?()
+        onTouchBegan?(touch)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -772,21 +780,36 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         recognizer.cancelsTouchesInView = false
         recognizer.delaysTouchesBegan = false
         recognizer.delaysTouchesEnded = false
-        recognizer.onTouchBegan = { [weak self] in
-            self?.beginTextTouch()
+        recognizer.onTouchBegan = { [weak self] touch in
+            self?.beginTextTouch(touch: touch)
         }
         recognizer.onTouchEnded = { [weak self] in
             self?.endTextTouch()
         }
+        var allowedTypes: [UITouch.TouchType] = [.direct, .indirect, .pencil]
+        if #available(iOS 13.4, *) {
+            allowedTypes.append(.indirectPointer)
+        }
+        recognizer.allowedTouchTypes = allowedTypes.map { NSNumber(value: $0.rawValue) }
         addGestureRecognizer(recognizer)
         textSelectionIntentRecognizer = recognizer
     }
 
-    private func beginTextTouch() {
+    private func beginTextTouch(touch: UITouch) {
         textSelectionGestureResetWorkItem?.cancel()
         textSelectionGestureResetWorkItem = nil
         isTrackingCurrentTextTouch = true
         didSelectionChangeDuringCurrentTouch = false
+        // A pointer click-drag over selectable text is always a selection
+        // gesture (trackpad two-finger swipe navigation is handled separately
+        // by TrackpadScrollGestureOverlay), and dragging the handles of an
+        // existing selection also counts even if UIKit has not yet published
+        // a new selectedRange.
+        var isSelectionTouch = selectedRange.length > 0
+        if #available(iOS 13.4, *), touch.type == .indirectPointer {
+            isSelectionTouch = true
+        }
+        didSelectionChangeDuringCurrentTouch = isSelectionTouch
         Self.currentTextTouchView = self
     }
 

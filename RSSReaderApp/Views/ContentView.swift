@@ -1628,11 +1628,20 @@ extension View {
 
                             if isRightSwipe && isHorizontalSwipe && (hasGoodVelocity || hasGoodDistance) && verticalNotTooLarge {
                                 #if os(iOS)
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                #endif
+                                // Wait one event cycle for UITextViewDelegate to publish
+                                // the selectedRange change caused by this same touch.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                                    guard !AskAITextView.didActiveTextTouchChangeSelection else { return }
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        action()
+                                    }
+                                }
+                                #else
                                 withAnimation(.easeOut(duration: 0.2)) {
                                     action()
                                 }
+                                #endif
                             }
                         }
                 )
