@@ -128,8 +128,11 @@ struct CommentView: View {
     }
 
     private var leadingIndent: CGFloat {
-        min(CGFloat(depth) * 26, 84)
+        // iPhone: shallower reply steps so deep threads keep a readable text column.
+        isPhoneDevice ? min(CGFloat(depth) * 14, 42) : min(CGFloat(depth) * 26, 84)
     }
+
+    private var avatarSide: CGFloat { isPhoneDevice ? 30 : 44 }
 
     private var accentColor: Color {
         Color(red: 0.53, green: 0.25, blue: 1.0)
@@ -237,7 +240,7 @@ struct CommentView: View {
             Circle()
                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.7), lineWidth: 1)
         }
-        .frame(width: 44, height: 44)
+        .frame(width: avatarSide, height: avatarSide)
         #if os(macOS)
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 6, x: 0, y: 3)
         #endif
@@ -253,9 +256,9 @@ struct CommentView: View {
                 .resizable()
                 .scaledToFit()
                 .foregroundColor(.white)
-                .frame(width: 24, height: 24)
+                .frame(width: isPhoneDevice ? 17 : 24, height: isPhoneDevice ? 17 : 24)
         }
-        .frame(width: 44, height: 44)
+        .frame(width: avatarSide, height: avatarSide)
     }
 
     @ViewBuilder
@@ -451,7 +454,7 @@ struct CommentView: View {
     }
 
     private var commentCard: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: isPhoneDevice ? 10 : 12) {
             avatarView
 
             VStack(alignment: .leading, spacing: 10) {
@@ -466,8 +469,8 @@ struct CommentView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
+        .padding(.horizontal, isPhoneDevice ? 10 : 14)
+        .padding(.vertical, isPhoneDevice ? 12 : 14)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(cardFill)
@@ -527,7 +530,7 @@ struct CommentView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .padding(.leading, leadingIndent + 44)
+                        .padding(.leading, leadingIndent + avatarSide)
                     }
                 }
             }

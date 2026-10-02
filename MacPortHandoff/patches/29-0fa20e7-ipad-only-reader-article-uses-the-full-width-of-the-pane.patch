@@ -1,0 +1,68 @@
+From 0fa20e7ce95826c9a27016a123d8085c23b58c19 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 23:58:06 +0100
+Subject: [PATCH] iPad only: reader article uses the full width of the pane
+
+---
+ RSSReaderApp/Views/ContentView.swift | 25 ++++++++++++++++++-------
+ 1 file changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 2bb4a0c..503ea26 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -212,17 +212,25 @@ private extension Notification.Name {
+ enum ReaderModeService {
+     /// JavaScript that loads Readability.js and extracts the article content.
+     /// Returns a clean HTML document with just the article content.
+-    static func toggleScript(useCompactTitle: Bool) -> String {
+-        useCompactTitle ? compactToggleScript : regularToggleScript
++    static func toggleScript(useCompactTitle: Bool, usesFullWidth: Bool = false) -> String {
++        if usesFullWidth {
++            return useCompactTitle ? compactFullWidthToggleScript : regularFullWidthToggleScript
++        }
++        return useCompactTitle ? compactToggleScript : regularToggleScript
+     }
+ 
+-    private static let compactToggleScript = makeToggleScript(useCompactTitle: true)
+-    private static let regularToggleScript = makeToggleScript(useCompactTitle: false)
++    private static let compactToggleScript = makeToggleScript(useCompactTitle: true, usesFullWidth: false)
++    private static let regularToggleScript = makeToggleScript(useCompactTitle: false, usesFullWidth: false)
++    private static let compactFullWidthToggleScript = makeToggleScript(useCompactTitle: true, usesFullWidth: true)
++    private static let regularFullWidthToggleScript = makeToggleScript(useCompactTitle: false, usesFullWidth: true)
+     private static let readabilitySource = loadReadabilitySource()
+ 
+-    private static func makeToggleScript(useCompactTitle: Bool) -> String {
++    private static func makeToggleScript(useCompactTitle: Bool, usesFullWidth: Bool) -> String {
+         let readability = readabilitySource
+         let titleFontSize = useCompactTitle ? 28 : 30
++        // iPad: let the article use the full width of the reader pane; iPhone keeps the 860px cap (narrower than the screen anyway).
++        let readerMaxWidth = usesFullWidth ? "none" : "860px"
++        let readerSidePadding = usesFullWidth ? 32 : 20
+         let antiBlockPhrasesJS = javaScriptArrayLiteral(articleAntiBlockPhrases)
+         let antiBlockSelectorsJS = javaScriptStringLiteral(articleAntiBlockAdSelectorString)
+         let readerScript = """
+@@ -598,7 +606,7 @@ enum ReaderModeService {
+               ':root { --bg-color: #f6f4ef; --text-color: #1e1e1e; --secondary-color: #6b6b6b; --link-color: #007AFF; }' +
+               '@media (prefers-color-scheme: dark) { :root { --bg-color: #101113; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
+               'body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; }' +
+-              '.reader-shell { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }' +
++              '.reader-shell { max-width: \(readerMaxWidth); margin: 0 auto; padding: 32px \(readerSidePadding)px 60px; }' +
+               '.reader-title { font-size: \(titleFontSize)px; line-height: 1.2; margin: 0 0 16px; font-weight: 700; }' +
+               '.reader-byline { font-size: 14px; color: var(--secondary-color); margin-bottom: 20px; }' +
+               '.reader-article { font-size: 18px; line-height: 1.7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; }' +
+@@ -15066,7 +15074,10 @@ struct ArticleReaderWebView: UIViewRepresentable {
+         }
+ 
+         private func evaluateReaderMode(on webView: WKWebView) {
+-            let script = ReaderModeService.toggleScript(useCompactTitle: parent.useCompactTitleSizing)
++            let script = ReaderModeService.toggleScript(
++                useCompactTitle: parent.useCompactTitleSizing,
++                usesFullWidth: UIDevice.current.userInterfaceIdiom == .pad
++            )
+             print("📖 ArticleReaderWebView: Applying Readability.js immediately (attempt \(readerModeAttempt), script length: \(script.count) chars)")
+ 
+             webView.evaluateJavaScript(script) { [weak self] result, error in
+-- 
+2.54.0 (Apple Git-157)
+

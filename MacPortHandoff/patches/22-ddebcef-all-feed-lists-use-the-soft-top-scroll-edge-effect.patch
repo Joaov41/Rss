@@ -1,0 +1,25 @@
+From ddebcef459d9db25ec650ac6f8cfa3475b877fd4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 20:54:16 +0100
+Subject: [PATCH] All feed lists use the soft top scroll edge effect
+
+---
+ RSSReaderApp/Views/ContentView.swift | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 85501c2..2f8d521 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -1842,6 +1842,8 @@ private extension View {
+     ) -> some View {
+         #if os(iOS)
+         return self
++            // Same gradual blur under the floating toolbar in every feed list (default is a hard-edged band).
++            .scrollEdgeEffectStyle(.soft, for: .top)
+             .scrollContentBackground(.hidden)
+             .background {
+                 AppColors.feedListBackground(for: colorScheme, scrollOffset: scrollOffset)
+-- 
+2.54.0 (Apple Git-157)
+

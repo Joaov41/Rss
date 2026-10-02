@@ -1,0 +1,28 @@
+From 8ee17c0cf30ac686eecb6b050dbaf693aae18b5a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 23:11:14 +0100
+Subject: [PATCH] Summary card keeps the exact default padding on iPad
+
+---
+ RSSReaderApp/Views/ContentView.swift | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 7331e75..2bb4a0c 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -15922,8 +15922,9 @@ struct ArticleGlassyBackgroundModifier: ViewModifier {
+     func body(content: Content) -> some View {
+         content
+             // iPhone: no extra side padding; the content already carries its own text inset.
+-            .padding(.vertical, isPhoneDevice ? 10 : 16)
+-            .padding(.horizontal, isPhoneDevice ? 0 : 16)
++            // nil keeps the system default padding, exactly as before, on iPad and Mac.
++            .padding(.vertical, isPhoneDevice ? 10 : nil)
++            .padding(.horizontal, isPhoneDevice ? 0 : nil)
+             .background(
+                 RoundedRectangle(cornerRadius: 16)
+                     .fill(backgroundFillColor)
+-- 
+2.54.0 (Apple Git-157)
+

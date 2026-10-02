@@ -19,8 +19,8 @@ struct MLXJSONRepairUtils {
         summaryProvider: AppSettings.SummaryProvider,
         performGeminiFallback: @escaping (String) async throws -> String
     ) async throws -> Data {
-        guard summaryProvider == .mlxLocal else {
-            throw NSError(domain: "MLXRepair", code: 2, userInfo: [NSLocalizedDescriptionKey: "MLX repair is only available when MLX Local is selected."])
+        guard summaryProvider == .coreAIMLXLocal else {
+            throw NSError(domain: "MLXRepair", code: 2, userInfo: [NSLocalizedDescriptionKey: "MLX repair is only available when CoreAI MLX Local is selected."])
         }
 
         let clipped = String(rawOutput.prefix(12_000))

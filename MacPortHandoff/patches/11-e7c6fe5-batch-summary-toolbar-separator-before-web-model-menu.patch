@@ -1,0 +1,26 @@
+From e7c6fe59a9f7f5a74cc4ded1fc6b2595f95adecb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:23:24 +0100
+Subject: [PATCH] Batch summary toolbar: separator before web-model menu
+
+---
+ RSSReaderApp/Views/ContentView.swift | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index b524381..d68606c 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -6074,6 +6074,9 @@ struct DraggableGlobalSummaryView: View {
+                 .help("Create a whiteboard, infographic or podcast")
+ 
+                 if shouldShowExplicitWebAIControls {
++                    // Separates the Settings-model actions from the web-model menu.
++                    SummaryToolbarSeparator()
++
+                     Menu {
+                         Button("Generate Overall Summary with \(appState.settings.selectedWebAIProvider.displayName)") {
+                             requestAggregateSummary {
+-- 
+2.54.0 (Apple Git-157)
+

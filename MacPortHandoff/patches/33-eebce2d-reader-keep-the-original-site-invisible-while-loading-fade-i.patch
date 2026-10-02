@@ -1,0 +1,30 @@
+From eebce2d5bc47a6116daf246bb0053b53a5fc62e9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 00:21:51 +0100
+Subject: [PATCH] Reader: keep the original site invisible while loading; fade
+ in the reader page
+
+---
+ RSSReaderApp/Views/ContentView.swift | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 322d310..e3b4072 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -14860,9 +14860,11 @@ struct ArticleReaderWebView: UIViewRepresentable {
+     let topContentInset: CGFloat
+     let onScrollActivity: (Bool) -> Void
+ 
++    /// Keeps the original site invisible while it loads (it still loads, so it can be extracted);
++    /// only the finished reader page fades in. Avoids a flash of the site's own layout.
+     private static func conceal(_ webView: WKWebView) {
+         webView.isHidden = false
+-        webView.alpha = 1
++        webView.alpha = 0
+     }
+ 
+     private static func reveal(_ webView: WKWebView) {
+-- 
+2.54.0 (Apple Git-157)
+

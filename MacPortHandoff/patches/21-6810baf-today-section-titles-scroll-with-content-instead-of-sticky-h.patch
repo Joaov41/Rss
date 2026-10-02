@@ -1,0 +1,92 @@
+From 6810baf03de30bd2287b56d33513be769169785e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 20:52:01 +0100
+Subject: [PATCH] Today: section titles scroll with content instead of sticky
+ header band
+
+---
+ RSSReaderApp/Views/ContentView.swift | 36 ++++++++++++++++++++++++----
+ 1 file changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index b025308..85501c2 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -4598,7 +4598,8 @@ struct ContentView: View {
+                 let todayRedditPosts = filteredTodayRedditPosts
+                 
+                 if appState.isGeneratingTodaySummary {
+-                    Section(header: Text("Today's Topics Overview")) {
++                    Section {
++                        TodayListSectionTitle("Today's Topics Overview")
+                         VStack(alignment: .leading, spacing: 6) {
+                             HStack(spacing: 8) {
+                                 ProgressView()
+@@ -4615,7 +4616,8 @@ struct ContentView: View {
+                         .padding(.vertical, 4)
+                     }
+                 } else if let summary = appState.todaySummaryResult {
+-                    Section(header: Text("Today's Topics Overview")) {
++                    Section {
++                        TodayListSectionTitle("Today's Topics Overview")
+                         VStack(alignment: .leading, spacing: 12) {
+                             ArticleGlassySummary(
+                                 summary: summary,
+@@ -4633,7 +4635,8 @@ struct ContentView: View {
+                         .padding(.vertical, 4)
+                     }
+                 } else if let error = appState.todaySummaryError {
+-                    Section(header: Text("Today's Topics Overview")) {
++                    Section {
++                        TodayListSectionTitle("Today's Topics Overview")
+                         VStack(alignment: .leading, spacing: 8) {
+                             Text(error)
+                                 .font(.body)
+@@ -4654,7 +4657,8 @@ struct ContentView: View {
+ 
+                 // Today's RSS articles
+                 if !todayArticles.isEmpty {
+-                    Section(header: Text("RSS Articles")) {
++                    Section {
++                        TodayListSectionTitle("RSS Articles")
+                         ForEach(todayArticles) { article in
+                             Button(action: {
+                                 // Record that we're in the Today category before navigating
+@@ -4682,7 +4686,8 @@ struct ContentView: View {
+                 
+                 // Today's Reddit posts
+                 if !todayRedditPosts.isEmpty {
+-                    Section(header: Text("Reddit Posts")) {
++                    Section {
++                        TodayListSectionTitle("Reddit Posts")
+                         ForEach(todayRedditPosts) { post in
+                             Button(action: {
+                                 // Record that we're in the Today category before navigating
+@@ -17065,3 +17070,24 @@ struct NavigationButtonGlassModifier: ViewModifier {
+         }
+     }
+ }
++
++/// Section title rendered as an ordinary list row so it scrolls with the content instead of
++/// pinning to the top with the plain list's tinted sticky-header band and divider line.
++private struct TodayListSectionTitle: View {
++    let title: String
++
++    init(_ title: String) {
++        self.title = title
++    }
++
++    var body: some View {
++        Text(title)
++            .font(.headline)
++            .foregroundStyle(.secondary)
++            .frame(maxWidth: .infinity, alignment: .leading)
++            .padding(.top, 6)
++            .listRowBackground(Color.clear)
++            .listRowSeparator(.hidden)
++            .accessibilityAddTraits(.isHeader)
++    }
++}
+-- 
+2.54.0 (Apple Git-157)
+

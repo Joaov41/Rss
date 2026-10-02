@@ -1,0 +1,92 @@
+From 8c35762fe682df454f0dc87d96a07b3597138ba8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 15:58:40 +0100
+Subject: [PATCH] Comments bar: Deep Analysis as its own button; menu holds
+ only web-model actions
+
+---
+ RSSReaderApp/Views/RedditDetailView.swift | 56 ++++++++++++-----------
+ 1 file changed, 30 insertions(+), 26 deletions(-)
+
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index d7c8a55..721d8b7 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -1823,8 +1823,8 @@ struct RedditDetailView: View {
+             .disabled(isLoadingComments)
+             .accessibilityLabel("Comment sort")
+ 
+-            // Summarize and Ask stay visible with labels; less frequent actions
+-            // (deep analysis, web AI) live in the "…" menu.
++            // Summarize and Ask have labels, Deep Analysis is an icon, and the web-model
++            // actions are grouped in one menu.
+             RedditCommentsActionCapsule {
+                 Button(action: {
+                     print("📱 Summarize button pressed - clearing summary and calling summarizeComments")
+@@ -1846,35 +1846,39 @@ struct RedditDetailView: View {
+                 .disabled(isLoadingComments)
+                 .buttonStyle(RedditCommentsChromeLabeledButtonStyle())
+ 
+-                Menu {
+-                    Button {
+-                        analyticsProviderOverride = nil
+-                        isShowingAnalytics = true
+-                    } label: {
+-                        Label("Deep Analysis", systemImage: "chart.pie.fill")
+-                    }
++                Button {
++                    analyticsProviderOverride = nil
++                    isShowingAnalytics = true
++                } label: {
++                    Image(systemName: "chart.pie.fill")
++                }
++                .accessibilityLabel("Deep Analysis")
++                .help("Deep Analysis")
++                .disabled(isLoadingComments)
++                .buttonStyle(RedditCommentsChromeIconButtonStyle())
+ 
+-                    if shouldShowExplicitWebAIControls {
+-                        Section("Send to \(appState.settings.selectedWebAIProvider.displayName)") {
+-                            Button {
+-                                requestWebCommentSummary(for: post)
+-                            } label: {
+-                                Label("Comment Summary", systemImage: "quote.bubble")
+-                            }
++                // Only the web-model versions live in this menu.
++                if shouldShowExplicitWebAIControls {
++                    Menu {
++                        Button {
++                            requestWebCommentSummary(for: post)
++                        } label: {
++                            Label("Comment Summary", systemImage: "quote.bubble")
++                        }
+ 
+-                            Button {
+-                                analyticsProviderOverride = .webAI
+-                                isShowingAnalytics = true
+-                            } label: {
+-                                Label("Deep Analysis", systemImage: "quote.bubble")
+-                            }
++                        Button {
++                            analyticsProviderOverride = .webAI
++                            isShowingAnalytics = true
++                        } label: {
++                            Label("Deep Analysis", systemImage: "chart.pie")
+                         }
++                    } label: {
++                        Image(systemName: "quote.bubble")
+                     }
+-                } label: {
+-                    Image(systemName: "ellipsis.circle")
++                    .accessibilityLabel("Send to \(appState.settings.selectedWebAIProvider.displayName)")
++                    .help("Send to \(appState.settings.selectedWebAIProvider.displayName)")
++                    .buttonStyle(RedditCommentsChromeIconButtonStyle())
+                 }
+-                .accessibilityLabel("More comment actions")
+-                .buttonStyle(RedditCommentsChromeIconButtonStyle())
+             }
+         }
+     }
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,229 @@
+From d4f5c4e42b6a2138f81549e42b3f192794ca433e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 00:09:14 +0100
+Subject: [PATCH] Reader: extract the article as soon as the page HTML is
+ parsed, and cache extracted pages
+
+---
+ RSSReaderApp/Views/ContentView.swift | 121 ++++++++++++++++++++++++++-
+ 1 file changed, 118 insertions(+), 3 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 800e33b..018e568 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -14846,6 +14846,17 @@ struct ArticleReaderWebView: NSViewRepresentable {
+     }
+ }
+ #else
++/// Forwards the reader page's "DOM ready" message without WKUserContentController retaining the coordinator.
++final class ReaderDOMReadyMessageProxy: NSObject, WKScriptMessageHandler {
++    static let name = "rssumReaderDOMReady"
++    weak var target: ArticleReaderWebView.Coordinator?
++
++    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
++        guard message.frameInfo.isMainFrame else { return }
++        target?.handleDOMReady()
++    }
++}
++
+ struct ArticleReaderWebView: UIViewRepresentable {
+     let articleURL: URL
+     @Binding var isLoading: Bool
+@@ -14899,9 +14910,34 @@ struct ArticleReaderWebView: UIViewRepresentable {
+         }
+     }
+ 
++    /// Extracted reader pages, so reopening an article shows it immediately.
++    private static let readerPageCache: NSCache<NSString, NSString> = {
++        let cache = NSCache<NSString, NSString>()
++        cache.countLimit = 40
++        return cache
++    }()
++
++    fileprivate static func readerCacheKey(url: URL, compactTitle: Bool, fullWidth: Bool) -> NSString {
++        "\(url.absoluteString)|\(compactTitle)|\(fullWidth)" as NSString
++    }
++
++    private static var usesFullWidthReader: Bool {
++        UIDevice.current.userInterfaceIdiom == .pad
++    }
++
+     func makeUIView(context: Context) -> WKWebView {
+         let config = WKWebViewConfiguration()
+         config.defaultWebpagePreferences.allowsContentJavaScript = true
++        // Tell the app as soon as the page's HTML is parsed, so the article can be extracted
++        // without waiting for every image, ad and embed to finish loading.
++        let domReadyProxy = ReaderDOMReadyMessageProxy()
++        domReadyProxy.target = context.coordinator
++        config.userContentController.add(domReadyProxy, name: ReaderDOMReadyMessageProxy.name)
++        config.userContentController.addUserScript(WKUserScript(
++            source: "window.webkit.messageHandlers.\(ReaderDOMReadyMessageProxy.name).postMessage(location.href);",
++            injectionTime: .atDocumentEnd,
++            forMainFrameOnly: true
++        ))
+ 
+         let webView = WKWebView(frame: .zero, configuration: config)
+         webView.navigationDelegate = context.coordinator
+@@ -14944,6 +14980,16 @@ struct ArticleReaderWebView: UIViewRepresentable {
+ 
+             Self.conceal(uiView)
+             Self.applyTopContentInset(topContentInset, to: uiView, preserveTopPosition: true)
++
++            let cacheKey = Self.readerCacheKey(url: articleURL, compactTitle: useCompactTitleSizing, fullWidth: Self.usesFullWidthReader)
++            if let cachedPage = Self.readerPageCache.object(forKey: cacheKey) {
++                print("📖 ArticleReaderWebView: Showing cached reader page for \(articleURL)")
++                context.coordinator.loadedFromCache = true
++                context.coordinator.hasAppliedReaderMode = true
++                uiView.loadHTMLString(cachedPage as String, baseURL: articleURL)
++                return
++            }
++
+             var request = URLRequest(url: articleURL)
+             request.cachePolicy = .returnCacheDataElseLoad
+             print("📖 ArticleReaderWebView: Loading URL \(articleURL)")
+@@ -14970,6 +15016,10 @@ struct ArticleReaderWebView: UIViewRepresentable {
+         var pageLoaded: Bool = false
+         var readerModeAttempt: Int = 0
+         var pendingReaderModeRetry: DispatchWorkItem?
++        var loadedFromCache = false
++        private var isEvaluatingReader = false
++        private var currentAttemptIsEarly = false
++        private var navigationFailed = false
+         var currentScrollToTopTrigger: Int = 0
+         private weak var webView: WKWebView?
+         private var scrollToTopObserver: NSObjectProtocol?
+@@ -15004,6 +15054,17 @@ struct ArticleReaderWebView: UIViewRepresentable {
+             hasAppliedReaderMode = false
+             pageLoaded = false
+             readerModeAttempt = 0
++            loadedFromCache = false
++            isEvaluatingReader = false
++            currentAttemptIsEarly = false
++            navigationFailed = false
++        }
++
++        /// The page's HTML is parsed: try extracting now instead of waiting for the full load.
++        func handleDOMReady() {
++            guard !hasAppliedReaderMode, !isEvaluatingReader, !loadedFromCache, let webView else { return }
++            print("📖 ArticleReaderWebView: DOM ready, extracting article early")
++            applyReaderMode(on: webView, early: true)
+         }
+ 
+         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+@@ -15034,6 +15095,14 @@ struct ArticleReaderWebView: UIViewRepresentable {
+             print("📖 ArticleReaderWebView: Page finished loading")
+             pageLoaded = true
+ 
++            if loadedFromCache {
++                finishReaderModeSuccess(on: webView)
++                return
++            }
++
++            // An early extraction is still running; its result decides what happens next.
++            if isEvaluatingReader { return }
++
+             // Don't apply reader mode if we've already done it (prevents loops)
+             guard !hasAppliedReaderMode else {
+                 print("📖 ArticleReaderWebView: Reader mode already applied, skipping")
+@@ -15048,6 +15117,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
+ 
+         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+             print("📖 ArticleReaderWebView: Navigation failed: \(error.localizedDescription)")
++            if ignoreNavigationFailure() { return }
+             DispatchQueue.main.async {
+                 self.pendingReaderModeRetry?.cancel()
+                 self.pendingReaderModeRetry = nil
+@@ -15057,6 +15127,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
+ 
+         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+             print("📖 ArticleReaderWebView: Provisional navigation failed: \(error.localizedDescription)")
++            if ignoreNavigationFailure() { return }
+             DispatchQueue.main.async {
+                 self.pendingReaderModeRetry?.cancel()
+                 self.pendingReaderModeRetry = nil
+@@ -15064,12 +15135,28 @@ struct ArticleReaderWebView: UIViewRepresentable {
+             }
+         }
+ 
+-        private func applyReaderMode(on webView: WKWebView) {
++        /// Replacing the page with the reader interrupts the original load, which WebKit reports
++        /// as a failure. Only treat it as a real failure when no extraction is under way or done.
++        private func ignoreNavigationFailure() -> Bool {
++            if hasAppliedReaderMode {
++                DispatchQueue.main.async { self.parent.isLoading = false }
++                return true
++            }
++            if isEvaluatingReader {
++                navigationFailed = true
++                return true
++            }
++            return false
++        }
++
++        private func applyReaderMode(on webView: WKWebView, early: Bool = false) {
+             guard !hasAppliedReaderMode else { return }
+ 
+             pendingReaderModeRetry?.cancel()
+             pendingReaderModeRetry = nil
+-            readerModeAttempt += 1
++            currentAttemptIsEarly = early
++            isEvaluatingReader = true
++            if !early { readerModeAttempt += 1 }
+ 
+             guard is9to5MacArticleURL(parent.articleURL) else {
+                 evaluateReaderMode(on: webView)
+@@ -15087,7 +15174,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
+         private func evaluateReaderMode(on webView: WKWebView) {
+             let script = ReaderModeService.toggleScript(
+                 useCompactTitle: parent.useCompactTitleSizing,
+-                usesFullWidth: UIDevice.current.userInterfaceIdiom == .pad
++                usesFullWidth: ArticleReaderWebView.usesFullWidthReader
+             )
+             print("📖 ArticleReaderWebView: Applying Readability.js immediately (attempt \(readerModeAttempt), script length: \(script.count) chars)")
+ 
+@@ -15099,6 +15186,22 @@ struct ArticleReaderWebView: UIViewRepresentable {
+         }
+ 
+         private func handleReaderModeEvaluation(result: Any?, error: Error?, webView: WKWebView) {
++            isEvaluatingReader = false
++
++            // An early attempt that finds no article (e.g. text still being built by the page's
++            // scripts) is not a failure: fall back to the normal path after the full load.
++            if currentAttemptIsEarly && (result as? Bool) != true {
++                currentAttemptIsEarly = false
++                print("📖 ArticleReaderWebView: Early extraction found no article; waiting for full load")
++                if navigationFailed {
++                    fallbackToRSS(on: webView, reason: "navigation failed")
++                } else if pageLoaded {
++                    applyReaderMode(on: webView)
++                }
++                return
++            }
++            currentAttemptIsEarly = false
++
+             if let error {
+                 print("📖 ArticleReaderWebView: JavaScript error on attempt \(readerModeAttempt): \(error.localizedDescription)")
+                 if scheduleReaderModeRetry(on: webView) { return }
+@@ -15142,6 +15245,18 @@ struct ArticleReaderWebView: UIViewRepresentable {
+         }
+ 
+         private func finishReaderModeSuccess(on webView: WKWebView) {
++            if !loadedFromCache, let url = currentURL {
++                let key = ArticleReaderWebView.readerCacheKey(
++                    url: url,
++                    compactTitle: parent.useCompactTitleSizing,
++                    fullWidth: ArticleReaderWebView.usesFullWidthReader
++                )
++                webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
++                    if let html = result as? String, html.count > 200 {
++                        ArticleReaderWebView.readerPageCache.setObject("<!doctype html>" + html as NSString, forKey: key)
++                    }
++                }
++            }
+             hasAppliedReaderMode = true
+             parent.isLoading = false
+             parent.readerModeAvailable = true
+-- 
+2.54.0 (Apple Git-157)
+

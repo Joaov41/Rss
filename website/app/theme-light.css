@@ -1,0 +1,104 @@
+/* Local redesign theme: warm paper, black ink, serif headlines. Loaded after every other stylesheet. */
+:root {
+  color-scheme: light;
+  --bg: #faf7f2;
+  --bg-raised: #f2ede4;
+  --panel: #ebe5da;
+  --ink: #1b1a17;
+  --muted: #5c5850;
+  --faint: #7a756c;
+  --line: #1b1a171a;
+  --line-strong: #1b1a1740;
+  --accent: #1b1a17;
+  --accent-ink: #ffffff;
+  --display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --glass: rgba(255, 255, 255, .62);
+  --glass-line: rgba(27, 26, 23, .1);
+  --glass-shadow: 0 8px 30px #1b1a1714, inset 0 1px 0 #ffffffcc;
+  --on-ink: #ffffff;
+  --ink-strong: #000000;
+  --surface: #ffffff;
+  --hover: #1b1a170d;
+}
+/* Dark mode follows the device setting: warm charcoal instead of paper, same layout and type. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #161513;
+    --bg-raised: #1d1b18;
+    --panel: #292622;
+    --ink: #ede8df;
+    --muted: #b1aa9e;
+    --faint: #8e887d;
+    --line: #ede8df1f;
+    --line-strong: #ede8df4d;
+    --accent: #ede8df;
+    --glass: rgba(33, 31, 28, .66);
+    --glass-line: rgba(237, 232, 223, .14);
+    --glass-shadow: 0 10px 30px #0006, inset 0 1px 0 #ffffff14;
+    --on-ink: #161513;
+    --ink-strong: #ffffff;
+    --surface: #211f1c;
+    --hover: #ede8df12;
+  }
+  .device-frame { background: #000; box-shadow: 0 0 0 1px #ede8df1a, 0 18px 50px #0008; }
+  dialog::backdrop { background: #000000c4; }
+}
+body { background: var(--bg); color: var(--ink); }
+h1, h2 { font-family: var(--display); font-weight: 500; letter-spacing: -0.015em; }
+::selection { color: var(--on-ink); background: var(--ink); }
+
+/* Glass nav, light edition */
+.site-header, .site-header[data-side-nav] .header-glass { background: var(--glass); border-color: var(--glass-line); box-shadow: var(--glass-shadow); }
+@media (min-width: 1024px) { .site-header[data-side-nav] { background: none; border-color: transparent; box-shadow: none; } }
+.brand { color: var(--ink); }
+.site-nav a { color: var(--muted); }
+.site-nav a:hover { background: var(--hover); box-shadow: none; color: var(--ink); }
+.site-nav a[aria-current] { background: none; box-shadow: none; color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 7px; }
+.header-cta { background: transparent; color: var(--ink); border: 1px solid var(--ink); box-shadow: none; }
+.header-cta:hover { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
+
+/* Lighter horizontal bar: shorter, less rounded, smaller controls. The docked side pill keeps its shape. */
+.site-header:not([data-docked]), .site-header[data-side-nav]:not([data-docked]) { min-height: 56px; padding-block: 5px; border-radius: 18px; }
+.site-header[data-compact]:not([data-docked]) { min-height: 52px; }
+@media (min-width: 761px) {
+  .site-header:not([data-docked]) .site-nav a { min-height: 40px; padding-inline: 14px; }
+}
+.site-header:not([data-docked]) .header-cta { min-height: 40px; padding-inline: 18px; border-radius: 12px; }
+.site-header:not([data-docked]) .brand img, .site-header[data-side-nav]:not([data-docked]) .brand img { width: 30px; height: 30px; border-radius: 7px; }
+.site-header[data-docked] .site-nav a[aria-current] { text-decoration: none; background: var(--hover); }
+@media (max-width: 760px) { .site-nav { background: var(--surface); } }
+
+/* Buttons and labels */
+.arrow-button { background: var(--ink); color: var(--on-ink); border-radius: 999px; box-shadow: none; }
+.arrow-button:hover { background: var(--ink-strong); color: var(--on-ink); }
+.secondary-button { border-color: var(--line-strong); color: var(--ink); border-radius: 999px; }
+.secondary-button:hover { background: var(--surface); }
+.text-link { text-decoration-color: var(--line-strong); }
+.text-link:hover { color: var(--ink); text-decoration-color: currentColor; }
+.page-label { color: var(--faint); font-weight: 550; letter-spacing: .02em; }
+
+/* Frames, dialogs, footer */
+.device-frame { background: #1b1a17; border: 0; border-radius: 14px; padding: 5px; box-shadow: 0 1px 2px #1b1a1714, 0 18px 50px #1b1a171f; }
+.device-frame img { border-radius: 10px; }
+.gallery-item:hover { outline: 2px solid var(--accent); outline-offset: 3px; }
+dialog { background: var(--surface); border-color: var(--line); box-shadow: 0 30px 90px #1b1a1733; }
+dialog::backdrop { background: #1b1a17b3; }
+.lightbox-toolbar .icon-button:hover, .icon-button:hover { background: var(--panel); border-color: var(--line); }
+.site-footer { background: var(--bg-raised); }
+.faq-list summary i, .resource-list article > a { color: var(--accent); }
+.inner-page .page-intro h1 { font-size: clamp(40px, 5vw, 64px); }
+.closing-video video { border-color: var(--line); background: #1b1a17; }
+
+/* Source tabs and screenshot view switcher, recoloured for a light page */
+.story-tabs { border-color: var(--line); }
+.story-tabs button { color: var(--muted); }
+.story-tabs button:hover { color: var(--ink); background: var(--hover); }
+.story-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.story-tabs button[aria-selected="true"] svg { color: var(--ink); }
+.story-copy h3 { font-family: var(--display); font-weight: 500; }
+.story-copy .page-label { color: var(--faint); }
+.story-modes { border-color: var(--line); background: var(--surface); box-shadow: 0 1px 2px #1b1a1712; }
+.story-modes button { color: var(--muted); }
+.story-modes button[aria-checked="true"] { color: var(--on-ink); background: var(--ink); border-color: var(--ink); box-shadow: none; }
+.story-figure .device-frame { border: 0; }

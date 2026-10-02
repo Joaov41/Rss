@@ -22,7 +22,7 @@ struct PodcastSearchView: View {
     var body: some View {
         Group {
             TextField("Search podcasts or creators", text: $query)
-                .textFieldStyle(.roundedBorder)
+                .settingsTextField()
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled(false)
                 .submitLabel(.search)
@@ -153,8 +153,7 @@ private struct PodcastSearchResultRow: View {
                 }
             }
             .font(.subheadline.weight(.semibold))
-            .buttonStyle(.borderedProminent)
-            .tint(isSubscribed ? Color.secondary : Color.accentColor)
+            .buttonStyle(SettingsCapsuleButtonStyle(prominent: !isSubscribed))
             .disabled(isSubscribed)
             .accessibilityLabel(isSubscribed ? "Subscribed to \(podcast.title)" : "Subscribe to \(podcast.title)")
         }

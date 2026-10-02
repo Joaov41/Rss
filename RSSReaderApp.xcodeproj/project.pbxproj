@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CHGP00000000000000000001 /* ChatGPTPlanService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000003 /* ChatGPTPlanService.swift */; };
+		CHGP00000000000000000002 /* ChatGPTPlanService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000003 /* ChatGPTPlanService.swift */; };
+		CHGP00000000000000000011 /* AppState+ChatGPTPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */; };
+		CHGP00000000000000000012 /* AppState+ChatGPTPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */; };
+		CHGP00000000000000000021 /* ChatGPTPlanSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */; };
+		CHGP00000000000000000022 /* ChatGPTPlanSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* RSSReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F4 /* RSSReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */; };
@@ -103,14 +109,10 @@
 		MLX0001000100010006 /* MLXJSONRepairUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010005 /* MLXJSONRepairUtils.swift */; };
 		MLX0001000100010007 /* InfographicView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010008 /* InfographicView.swift */; };
 		MLX0001000100010009 /* InfographicView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MLX0001000100010008 /* InfographicView.swift */; };
-		LLM0001000100010001 /* LiteRTLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010004 /* LiteRTLocalService.swift */; };
 		LLM0001000100010002 /* CoreAIMLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010005 /* CoreAIMLXLocalService.swift */; };
 		LLM0001000100010003 /* LocalLLMCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010006 /* LocalLLMCompatibility.swift */; };
-		LLM0001000100010007 /* LiteRTLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010004 /* LiteRTLocalService.swift */; };
 		LLM0001000100010008 /* CoreAIMLXLocalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010005 /* CoreAIMLXLocalService.swift */; };
 		LLM0001000100010009 /* LocalLLMCompatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = LLM0001000100010006 /* LocalLLMCompatibility.swift */; };
-		LLM0001000100010010 /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = LLM0001000100010012 /* LiteRTFoundation */; };
-		LLM0001000100010011 /* LiteRTFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = LLM0001000100010012 /* LiteRTFoundation */; };
 		READABILITY0001000101 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
 		READABILITY0001000102 /* Readability.js in Resources */ = {isa = PBXBuildFile; fileRef = READABILITY0001000100 /* Readability.js */; };
 		SUMM0001000100010001 /* SummarizeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SUMM0001000100010003 /* SummarizeBridge.swift */; };
@@ -159,6 +161,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CHGP00000000000000000003 /* ChatGPTPlanService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTPlanService.swift"; sourceTree = "<group>"; };
+		CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+ChatGPTPlan.swift"; sourceTree = "<group>"; };
+		CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTPlanSettingsView.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSReaderApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -208,7 +213,6 @@
 		MLX0001000100010002 /* MLXLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXLocalService.swift; sourceTree = "<group>"; };
 		MLX0001000100010005 /* MLXJSONRepairUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXJSONRepairUtils.swift; sourceTree = "<group>"; };
 		MLX0001000100010008 /* InfographicView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfographicView.swift; sourceTree = "<group>"; };
-		LLM0001000100010004 /* LiteRTLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteRTLocalService.swift; sourceTree = "<group>"; };
 		LLM0001000100010005 /* CoreAIMLXLocalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAIMLXLocalService.swift; sourceTree = "<group>"; };
 		LLM0001000100010006 /* LocalLLMCompatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMCompatibility.swift; sourceTree = "<group>"; };
 		READABILITY0001000100 /* Readability.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Readability.js; sourceTree = "<group>"; };
@@ -235,7 +239,6 @@
 				D1A100012F40000100AAA001 /* MLXAudioCore in Frameworks */,
 				D1A100022F40000100AAA001 /* MLXAudioTTS in Frameworks */,
 				C1E3EDB92EF2114E00AF5F7D /* MLXLMCommon in Frameworks */,
-				LLM0001000100010010 /* LiteRTFoundation in Frameworks */,
 				C1E3EDBA2EF2114E00AF5F7D /* MLXVLM in Frameworks */,
 				C1E3EDB52EF2114E00AF5F7D /* MLXEmbedders in Frameworks */,
 				C1E3EDB22EF2103E00AF5F7D /* MLXNN in Frameworks */,
@@ -257,7 +260,6 @@
 				MACD0001000100010004 /* MLXAudioCore in Frameworks */,
 				MACD0001000100010005 /* MLXAudioTTS in Frameworks */,
 				MACD0001000100010006 /* MLXLMCommon in Frameworks */,
-				LLM0001000100010011 /* LiteRTFoundation in Frameworks */,
 				MACD0001000100010007 /* MLXVLM in Frameworks */,
 				MACD0001000100010008 /* MLXEmbedders in Frameworks */,
 				MACD0001000100010009 /* MLXNN in Frameworks */,
@@ -342,6 +344,7 @@
 			isa = PBXGroup;
 			children = (
 				C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */,
+				CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */,
 				C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */,
 				C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */,
@@ -362,6 +365,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F6A7B8C9D0E206 /* AppState.swift */,
+				CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -378,11 +382,11 @@
 				A1B2C3D4E5F6A7B8C9D0E215 /* PersistenceManager.swift */,
 				A1B2C3D4E5F6A7B8C9D0E290 /* CloudSyncManager.swift */,
 					MLX0001000100010002 /* MLXLocalService.swift */,
-					LLM0001000100010004 /* LiteRTLocalService.swift */,
 					LLM0001000100010005 /* CoreAIMLXLocalService.swift */,
 					LLM0001000100010006 /* LocalLLMCompatibility.swift */,
 					MLX0001000100010005 /* MLXJSONRepairUtils.swift */,
 				SUMM0001000100010003 /* SummarizeBridge.swift */,
+				CHGP00000000000000000003 /* ChatGPTPlanService.swift */,
 				F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */,
 				YT0000000000000000000011 /* YouTubeService.swift */,
 				PCE000000000000000000011 /* PodcastEpisodeService.swift */,
@@ -566,7 +570,6 @@
 					C1E3EDB32EF2114E00AF5F7D /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 					D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */,
 					D1A100062F40000100AAA001 /* XCLocalSwiftPackageReference "EventSource" */,
-					LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */,
 				);
 			productRefGroup = A1B2C3D4E5F6A7B8C9D0E229 /* Products */;
 			projectDirPath = "";
@@ -644,13 +647,15 @@
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* RSSReaderApp.swift in Sources */,
 				WEBAI0001000100010001 /* WebAIHandoffView.swift in Sources */,
 				MLX0001000100010001 /* MLXLocalService.swift in Sources */,
-				LLM0001000100010001 /* LiteRTLocalService.swift in Sources */,
 				LLM0001000100010002 /* CoreAIMLXLocalService.swift in Sources */,
 				LLM0001000100010003 /* LocalLLMCompatibility.swift in Sources */,
 				MLX0001000100010004 /* MLXJSONRepairUtils.swift in Sources */,
 				MLX0001000100010007 /* InfographicView.swift in Sources */,
 				ASKAI0001000100010001 /* AskAIUtilities.swift in Sources */,
 				SUMM0001000100010001 /* SummarizeBridge.swift in Sources */,
+				CHGP00000000000000000001 /* ChatGPTPlanService.swift in Sources */,
+				CHGP00000000000000000011 /* AppState+ChatGPTPlan.swift in Sources */,
+				CHGP00000000000000000021 /* ChatGPTPlanSettingsView.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D1 /* KokoroTTSService.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D2 /* KokoroPlayback.swift in Sources */,
 				E00000000000000000000021 /* BatchPodcastModels.swift in Sources */,
@@ -696,13 +701,15 @@
 				A1B2C3D4E5F6A7B8C9D0E1F4 /* RSSReaderApp.swift in Sources */,
 				WEBAI0001000100010002 /* WebAIHandoffView.swift in Sources */,
 				MLX0001000100010003 /* MLXLocalService.swift in Sources */,
-				LLM0001000100010007 /* LiteRTLocalService.swift in Sources */,
 				LLM0001000100010008 /* CoreAIMLXLocalService.swift in Sources */,
 				LLM0001000100010009 /* LocalLLMCompatibility.swift in Sources */,
 				MLX0001000100010006 /* MLXJSONRepairUtils.swift in Sources */,
 				MLX0001000100010009 /* InfographicView.swift in Sources */,
 				ASKAI0001000100010002 /* AskAIUtilities.swift in Sources */,
 				SUMM0001000100010002 /* SummarizeBridge.swift in Sources */,
+				CHGP00000000000000000002 /* ChatGPTPlanService.swift in Sources */,
+				CHGP00000000000000000012 /* AppState+ChatGPTPlan.swift in Sources */,
+				CHGP00000000000000000022 /* ChatGPTPlanSettingsView.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D3 /* KokoroTTSService.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D4 /* KokoroPlayback.swift in Sources */,
 				YT0000000000000000000002 /* YouTubeService.swift in Sources */,
@@ -1198,10 +1205,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "rss mac/Packages/EventSource";
 		};
-		LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "swift-litert-lm local gemma fast us ethi sone";
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1279,11 +1282,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1A100052F40000100AAA001 /* XCLocalSwiftPackageReference "mlx-audio-swift" */;
 			productName = MLXAudioTTS;
-		};
-		LLM0001000100010012 /* LiteRTFoundation */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = LLM0001000100010013 /* XCLocalSwiftPackageReference "swift-litert-lm local gemma fast us ethi sone" */;
-			productName = LiteRTFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

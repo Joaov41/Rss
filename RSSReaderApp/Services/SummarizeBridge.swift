@@ -381,7 +381,7 @@ final class RSSSummarizeDaemonHTTPClient: @unchecked Sendable {
             if httpResponse.statusCode == 401 || body.contains("\"unauthorized\"") {
                 throw RSSSummarizeProviderError.badStatus(
                     httpResponse.statusCode,
-                    "Summarize daemon rejected the token. RSSReaderApp will use the token from ~/.summarize/daemon.json on Mac; restart the app or clear the saved daemon token if this persists."
+                    "Summarize daemon rejected the token. RSSum will use the token from ~/.summarize/daemon.json on Mac; restart the app or clear the saved daemon token if this persists."
                 )
             }
             throw RSSSummarizeProviderError.badStatus(httpResponse.statusCode, body)

@@ -1,0 +1,287 @@
+From fb4623be3f72edf708ab9edf4d962f88d111ebe2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 12:42:20 +0100
+Subject: [PATCH] Replace TTS glass capsule with quiet icon buttons
+
+---
+ RSSReaderApp/Views/ContentView.swift      | 194 ++++++++--------------
+ RSSReaderApp/Views/RedditDetailView.swift |   8 +-
+ 2 files changed, 72 insertions(+), 130 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 568b40e..65ac01a 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -15724,86 +15724,73 @@ struct SummaryTTSMiniPlayer: View {
+             : Color(red: 0.28, green: 0.43, blue: 0.61).opacity(0.42)
+     }
+ 
+-    private var neutralIconColor: Color {
+-        colorScheme == .dark ? Color.white.opacity(0.88) : Color.black.opacity(0.72)
++    private var isSpeaking: Bool {
++        !stopDisabled
+     }
+ 
++    // `usesGlass` is kept for existing call sites; the controls are now plain icons either way.
+     var body: some View {
+-        if usesGlass {
+-            styledControls
+-        } else {
+-            controls
++        HStack(spacing: 2) {
++            if isSpeaking {
++                // While audio is playing, the only useful action is stopping it.
++                SummaryQuietIconButton(
++                    systemName: "stop.fill",
++                    tint: localIsActive ? .green : playColor,
++                    helpText: "Stop reading",
++                    action: onStop
++                )
++            } else {
++                SummaryQuietIconButton(
++                    systemName: "play.fill",
++                    isDisabled: playDisabled,
++                    helpText: playHelp,
++                    action: onPlay
++                )
++                SummaryQuietIconButton(
++                    systemName: "speaker.wave.2",
++                    isDisabled: localDisabled,
++                    helpText: localHelp,
++                    action: onLocal
++                )
++            }
+         }
++        .animation(.easeInOut(duration: 0.15), value: isSpeaking)
++        .accessibilityElement(children: .contain)
++        .accessibilityLabel("Summary audio controls")
+     }
++}
+ 
+-    private var controls: some View {
+-        HStack(spacing: 0) {
+-            Button(action: onPlay) {
+-                Image(systemName: "play.fill")
+-                    .font(.system(size: 16, weight: .bold))
+-                    .foregroundStyle(.white)
+-                    .frame(width: 36, height: 36)
+-                    .background(Circle().fill(playColor))
+-            }
+-            .buttonStyle(.plain)
+-            .disabled(playDisabled)
+-            .opacity(playDisabled ? 0.45 : 1)
+-            .help(playHelp)
+-
+-            Rectangle()
+-                .fill(Color.white.opacity(0.20))
+-                .frame(width: 1, height: 24)
+-                .padding(.horizontal, 8)
+-
+-            Button(action: onStop) {
+-                Image(systemName: "stop.fill")
+-                    .font(.system(size: 14, weight: .bold))
+-                    .foregroundStyle(stopDisabled ? neutralIconColor.opacity(0.38) : neutralIconColor)
+-                    .frame(width: 58, height: 36)
+-            }
+-            .buttonStyle(.plain)
+-            .disabled(stopDisabled)
+-            .help("Stop speech")
+-
+-            Rectangle()
+-                .fill(Color.white.opacity(0.20))
+-                .frame(width: 1, height: 24)
+-                .padding(.horizontal, 8)
++/// Small, plain icon button used for the summary card's read-aloud and copy actions.
++struct SummaryQuietIconButton: View {
++    let systemName: String
++    var tint: Color? = nil
++    var isDisabled: Bool = false
++    let helpText: String
++    let action: () -> Void
+ 
+-            Button(action: onLocal) {
+-                Image(systemName: "speaker.wave.2.circle")
+-                    .font(.system(size: 17, weight: .medium))
+-                    .foregroundStyle(localIsActive ? Color.green : neutralIconColor)
+-                    .frame(width: 58, height: 36)
+-            }
+-            .buttonStyle(.plain)
+-            .disabled(localDisabled)
+-            .opacity(localDisabled ? 0.45 : 1)
+-            .help(localHelp)
++    var body: some View {
++        Button(action: action) {
++            Image(systemName: systemName)
++                .font(.system(size: 15, weight: .medium))
++                .foregroundStyle(tint ?? Color.secondary)
++                .frame(width: 36, height: 36)
++                .contentShape(Circle())
+         }
++        .buttonStyle(SummaryQuietIconButtonStyle())
++        .disabled(isDisabled)
++        .opacity(isDisabled ? 0.4 : 1)
++        .help(helpText)
++        .accessibilityLabel(helpText)
+     }
++}
+ 
+-    private var styledControls: some View {
+-        controls
+-            .padding(6)
+-            .modifier(SummaryTTSMiniPlayerGlassModifier(tint: glassTint))
+-            .overlay {
+-                Capsule(style: .continuous)
+-                    .stroke(
+-                        LinearGradient(
+-                            colors: [
+-                                Color.white.opacity(0.34),
+-                                Color.white.opacity(0.10),
+-                                Color.black.opacity(0.12)
+-                            ],
+-                            startPoint: .topLeading,
+-                            endPoint: .bottomTrailing
+-                        ),
+-                        lineWidth: 0.8
+-                    )
+-            }
+-            .accessibilityElement(children: .contain)
+-            .accessibilityLabel("Summary audio controls")
++private struct SummaryQuietIconButtonStyle: ButtonStyle {
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label
++            .background(
++                Circle().fill(Color.primary.opacity(configuration.isPressed ? 0.12 : 0))
++            )
++            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+     }
+ }
+ 
+@@ -15833,50 +15820,14 @@ struct SummaryGlassActionButton: View {
+         self.usesGlass = usesGlass
+     }
+ 
++    // `tint` and `usesGlass` are kept for existing call sites; rendered as a quiet icon.
+     var body: some View {
+-        if usesGlass {
+-            styledButton
+-        } else {
+-            button
+-        }
+-    }
+-
+-    private var button: some View {
+-        Button(action: action) {
+-            Image(systemName: systemName)
+-                .font(.system(size: 17, weight: .medium))
+-                .foregroundStyle(
+-                    colorScheme == .dark
+-                        ? Color.white.opacity(0.88)
+-                        : Color.black.opacity(0.72)
+-                )
+-                .frame(width: 58, height: 36)
+-        }
+-        .buttonStyle(.plain)
+-        .disabled(isDisabled)
+-        .opacity(isDisabled ? 0.45 : 1)
+-        .help(helpText)
+-    }
+-
+-    private var styledButton: some View {
+-        button
+-        .padding(6)
+-        .modifier(SummaryTTSMiniPlayerGlassModifier(tint: tint))
+-        .overlay {
+-            Capsule(style: .continuous)
+-                .stroke(
+-                    LinearGradient(
+-                        colors: [
+-                            Color.white.opacity(0.34),
+-                            Color.white.opacity(0.10),
+-                            Color.black.opacity(0.12)
+-                        ],
+-                        startPoint: .topLeading,
+-                        endPoint: .bottomTrailing
+-                    ),
+-                    lineWidth: 0.8
+-                )
+-        }
++        SummaryQuietIconButton(
++            systemName: systemName,
++            isDisabled: isDisabled,
++            helpText: helpText,
++            action: action
++        )
+     }
+ }
+ 
+@@ -16492,21 +16443,16 @@ private struct ArticleGlassySummaryContent: View {
+                 }
+                 Spacer()
+                 if let onCopy {
+-                    Button {
++                    SummaryQuietIconButton(
++                        systemName: didCopy ? "checkmark" : "doc.on.doc",
++                        tint: didCopy ? .green : nil,
++                        isDisabled: summary.isEmpty,
++                        helpText: didCopy ? "Copied" : "Copy Summary"
++                    ) {
+                         onCopy()
+                         didCopy = true
+                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { didCopy = false }
+-                    } label: {
+-                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+-                            .font(.system(size: 16, weight: .semibold))
+-                            .frame(width: 40, height: 40)
+-                            .contentShape(Circle())
+                     }
+-                    .buttonStyle(.plain)
+-                    .foregroundStyle(didCopy ? Color.green : Color.primary)
+-                    .disabled(summary.isEmpty)
+-                    .accessibilityLabel(didCopy ? "Copied" : "Copy Summary")
+-                    .help("Copy Summary")
+                 }
+                 SummaryTTSMiniPlayer(
+                     isReddit: borderStyle == .reddit,
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index 36746e8..ef4dbe5 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -4092,8 +4092,7 @@ VStack(alignment: .leading, spacing: 14) {
+ 
+                 // Mac voice picker removed (avoids cross-scope state). TTS uses current system voice.
+                 // Copy sits in the same capsule as read-aloud, matching GlassySummary.
+-                RedditCommentsActionCapsule {
+-                    HStack(spacing: 0) {
++                HStack(spacing: 2) {
+                         SummaryTTSMiniPlayer(
+                             isReddit: true,
+                             playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+@@ -4123,7 +4122,6 @@ VStack(alignment: .leading, spacing: 14) {
+                             },
+                             usesGlass: false
+                         )
+-                    }
+                 }
+             }
+             .padding(.horizontal, 20)
+@@ -4676,8 +4674,7 @@ struct GlassySummary: View {
+ VStack(alignment: .leading) {
+             HStack(spacing: 12) {
+                 Spacer()
+-                RedditCommentsActionCapsule {
+-                    HStack(spacing: 0) {
++                HStack(spacing: 2) {
+                         SummaryTTSMiniPlayer(
+                             isReddit: true,
+                             playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+@@ -4700,7 +4697,6 @@ VStack(alignment: .leading) {
+                             action: { copyToClipboard(summary) },
+                             usesGlass: false
+                         )
+-                    }
+                 }
+             }
+             .padding(.horizontal, 20)
+-- 
+2.54.0 (Apple Git-157)
+

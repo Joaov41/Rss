@@ -1,0 +1,33 @@
+From eb512f3e32914edc719d2bd8e4ed485c9ea504ec Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 20:56:34 +0100
+Subject: [PATCH] Batch summary Ask: close button closes the Ask box
+
+---
+ RSSReaderApp/Views/ContentView.swift | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 2f8d521..209794c 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -6222,12 +6222,14 @@ struct DraggableGlobalSummaryView: View {
+                             }
+ 
+                             Button {
+-                                resetQAState(keepInterface: true)
++                                withAnimation(.easeInOut(duration: 0.2)) {
++                                    resetQAState()
++                                }
+                             } label: {
+                                 Image(systemName: "xmark.circle")
+                                     .font(.subheadline)
+                             }
+-                            .accessibilityLabel("Clear")
++                            .accessibilityLabel("Close")
+                             .buttonStyle(.plain)
+                             .frame(width: 38, height: 38)
+                             .contentShape(Circle())
+-- 
+2.54.0 (Apple Git-157)
+

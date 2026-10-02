@@ -142,7 +142,9 @@ func startKokoroPlayback(
         }
         defer {
             if !precacheEnabled {
-                KokoroTTSService.shared.unloadIfAllowed()
+                // Keep the model loaded for a while so the next Read Aloud starts quickly;
+                // it is freed after an idle period or on a memory warning.
+                KokoroTTSService.shared.scheduleIdleUnload()
             }
             Task { @MainActor in
                 if idleTimerProtectionActive {
@@ -164,7 +166,18 @@ func startKokoroPlayback(
             guard !trimmed.isEmpty else { return }
 
             func makeKokoroChunks(from input: String) -> [String] {
-                let firstSize = min(240, input.count)
+                // Short first chunk so speech starts quickly, ending on a sentence (or at least a
+                // word) boundary so the brief gap before the next chunk doesn't split a word.
+                var firstSize = min(240, input.count)
+                if firstSize < input.count {
+                    let window = input.prefix(firstSize)
+                    if let sentenceEnd = window.lastIndex(where: { ".!?".contains($0) }),
+                       window.distance(from: window.startIndex, to: sentenceEnd) >= 60 {
+                        firstSize = window.distance(from: window.startIndex, to: sentenceEnd) + 1
+                    } else if let space = window.lastIndex(of: " ") {
+                        firstSize = window.distance(from: window.startIndex, to: space)
+                    }
+                }
                 let firstChunk = String(input.prefix(firstSize))
                 let remaining = String(input.dropFirst(firstSize)).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !remaining.isEmpty else { return [firstChunk] }
@@ -192,8 +205,10 @@ func startKokoroPlayback(
                 case timeout
             }
 
-            func waitUntilApplicationIsActive() async throws {
-                while await MainActor.run(body: { UIApplication.shared.applicationState != .active }) {
+            // GPU work is allowed while the app is on screen, even when another window has
+            // focus (Stage Manager, Split View). Only a backgrounded app has to wait.
+            func waitUntilApplicationIsVisible() async throws {
+                while await MainActor.run(body: { UIApplication.shared.applicationState == .background }) {
                     try Task.checkCancellation()
                     try await Task.sleep(nanoseconds: 150_000_000)
                 }
@@ -226,69 +241,99 @@ func startKokoroPlayback(
                 let chunks = makeKokoroChunks(from: trimmed)
                 guard !chunks.isEmpty else { return }
                 let finalURL = try PreparedKokoroAudioCache.preparedURL(text: trimmed, voice: voice, speed: speed)
-                let preparedURL: URL
 
+                func play(url: URL? = nil, data: Data? = nil) async throws -> TimeInterval {
+                    try await MainActor.run { () throws -> TimeInterval in
+                        try configurePreparedKokoroAudioSession()
+                        let player: AVAudioPlayer
+                        if let url {
+                            player = try AVAudioPlayer(contentsOf: url)
+                        } else {
+                            player = try AVAudioPlayer(data: data ?? Data())
+                        }
+                        player.delegate = nil
+                        player.prepareToPlay()
+                        KokoroPlaybackRegistry.shared.setCurrent(player: player, token: playbackToken)
+                        setAudioPlayer(player)
+                        guard player.play() else {
+                            throw NSError(
+                                domain: "KokoroPlayback",
+                                code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "Failed to start audio playback."]
+                            )
+                        }
+                        return player.duration
+                    }
+                }
+
+                func markPlaybackStarted() async {
+                    await MainActor.run {
+                        UIApplication.shared.isIdleTimerDisabled = previousIdleTimerSetting
+                        onPlaybackStarted?()
+                    }
+                    idleTimerProtectionActive = false
+                }
+
+                // Already generated before: play the cached file in one go (works while locked).
                 if let cachedURL = PreparedKokoroAudioCache.existingURL(finalURL) {
-                    preparedURL = cachedURL
-                } else {
-                    let temporaryURL = PreparedKokoroAudioCache.temporaryURL(nextTo: finalURL)
-                    partialURL = temporaryURL
-                    var writer: BatchPodcastWAVWriter? = try BatchPodcastWAVWriter(url: temporaryURL)
+                    let duration = try await play(url: cachedURL)
+                    await markPlaybackStarted()
+                    try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                    return
+                }
+
+                // Otherwise start speaking as soon as the first chunk is ready. Later chunks are
+                // generated while earlier ones play, and everything is also written to the cache.
+                let temporaryURL = PreparedKokoroAudioCache.temporaryURL(nextTo: finalURL)
+                partialURL = temporaryURL
+                let (chunkStream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+                let producer = Task {
+                    var writer: BatchPodcastWAVWriter? = try? BatchPodcastWAVWriter(url: temporaryURL)
                     do {
                         for chunk in chunks {
                             try Task.checkCancellation()
                             guard KokoroTTSService.shared.isPlaybackTokenCurrent(playbackToken) else {
                                 throw CancellationError()
                             }
-                            try await waitUntilApplicationIsActive()
+                            try await waitUntilApplicationIsVisible()
                             let data = try await synthesizeWithTimeout(chunk)
                             try Task.checkCancellation()
                             guard KokoroTTSService.shared.isPlaybackTokenCurrent(playbackToken) else {
                                 throw CancellationError()
                             }
-                            try writer?.append(wavData: data)
+                            try? writer?.append(wavData: data)
+                            continuation.yield(data)
                         }
-                        try writer?.finish()
-                        writer = nil
-                        preparedURL = try PreparedKokoroAudioCache.publish(
-                            temporaryURL: temporaryURL,
-                            finalURL: finalURL
-                        )
-                        partialURL = nil
+                        if let finishedWriter = writer {
+                            try? finishedWriter.finish()
+                            writer = nil
+                            if (try? PreparedKokoroAudioCache.publish(temporaryURL: temporaryURL, finalURL: finalURL)) == nil {
+                                try? FileManager.default.removeItem(at: temporaryURL)
+                            }
+                        }
+                        continuation.finish()
                     } catch {
                         try? writer?.finish()
-                        writer = nil
-                        throw error
+                        try? FileManager.default.removeItem(at: temporaryURL)
+                        continuation.finish(throwing: error)
                     }
                 }
+                defer { producer.cancel() }
 
-                try Task.checkCancellation()
-                guard KokoroTTSService.shared.isPlaybackTokenCurrent(playbackToken) else {
-                    throw CancellationError()
-                }
-
-                await MainActor.run {
-                    UIApplication.shared.isIdleTimerDisabled = previousIdleTimerSetting
-                }
-                idleTimerProtectionActive = false
-                let duration = try await MainActor.run { () throws -> TimeInterval in
-                    try configurePreparedKokoroAudioSession()
-                    let player = try AVAudioPlayer(contentsOf: preparedURL)
-                    player.delegate = nil
-                    player.prepareToPlay()
-                    KokoroPlaybackRegistry.shared.setCurrent(player: player, token: playbackToken)
-                    setAudioPlayer(player)
-                    guard player.play() else {
-                        throw NSError(
-                            domain: "KokoroPlayback",
-                            code: -1,
-                            userInfo: [NSLocalizedDescriptionKey: "Failed to start audio playback."]
-                        )
+                var didStart = false
+                for try await data in chunkStream {
+                    try Task.checkCancellation()
+                    guard KokoroTTSService.shared.isPlaybackTokenCurrent(playbackToken) else {
+                        throw CancellationError()
                     }
-                    onPlaybackStarted?()
-                    return player.duration
+                    let duration = try await play(data: data)
+                    if !didStart {
+                        didStart = true
+                        await markPlaybackStarted()
+                    }
+                    try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
                 }
-                try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                partialURL = nil
             }, onCancel: {
                 KokoroPlaybackRegistry.shared.stopCurrent()
                 stopCurrentPlayback?()

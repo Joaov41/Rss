@@ -27,7 +27,6 @@ private final class GeminiAggregateBackgroundContext {
 
 struct LocalModelStorageItem: Identifiable, Hashable {
     enum Kind: String {
-        case liteRT = "LiteRT"
         case mlx = "MLX / Hugging Face"
     }
 
@@ -135,17 +134,17 @@ private func resolveOverallSummaryProvider(
             effectiveProvider: .summarizeDaemon,
             localFallbackProviderName: nil
         )
+    case .chatGPT:
+        return OverallSummaryProviderResolution(
+            selectedProvider: provider,
+            effectiveProvider: .chatGPT,
+            localFallbackProviderName: nil
+        )
     case .appleLocal:
         return OverallSummaryProviderResolution(
             selectedProvider: provider,
             effectiveProvider: .gemini,
             localFallbackProviderName: "Apple Local"
-        )
-    case .mlxLocal:
-        return OverallSummaryProviderResolution(
-            selectedProvider: provider,
-            effectiveProvider: .gemini,
-            localFallbackProviderName: "LiteRT Local"
         )
     case .coreAIMLXLocal:
         return OverallSummaryProviderResolution(
@@ -198,8 +197,7 @@ final class GlobalSummaryService {
 
     private func reportThroughput(_ metrics: MLXGenerationMetrics) {
         guard metrics.tokensPerSecond > 0 else { return }
-        let providerLabel = settingsProvider().selectedSummaryProvider == .coreAIMLXLocal ? "CoreAI MLX" : "LiteRT"
-        let label = String(format: "\(providerLabel) · %.1f tok/s · %d tokens", metrics.tokensPerSecond, metrics.tokenCount)
+        let label = String(format: "CoreAI MLX · %.1f tok/s · %d tokens", metrics.tokensPerSecond, metrics.tokenCount)
         throughputReporter?(label)
     }
 
@@ -884,7 +882,31 @@ final class GlobalSummaryService {
             }
             .eraseToAnyPublisher()
 
-        case .appleLocal, .mlxLocal, .coreAIMLXLocal:
+        case .chatGPT:
+            print("⚡ GlobalSummaryService: Using ChatGPT Plan for \(source) overall summary")
+            return Future<GlobalSummaryResult, Never> { promise in
+                Task(priority: .userInitiated) {
+                    do {
+                        let start = Date()
+                        let raw = try await ChatGPTPlanService.shared.generate(prompt: prompt, onPartial: nil)
+                        let elapsed = max(0.001, Date().timeIntervalSince(start))
+                        let estimatedTokens = max(1, Int(Double(raw.split(separator: " ").count) * 1.3))
+                        let tokPerSec = Double(estimatedTokens) / elapsed
+                        self.throughputReporter?(String(format: "ChatGPT Plan · ~%.1f tok/s · ~%d tokens", tokPerSec, estimatedTokens))
+
+                        let parsed = self.parseAppleCloudResponse(raw: raw, source: source, referenceIds: referenceIds)
+                        if parsed.summaries.count < expectedCount {
+                            print("⚠️ BATCH DEBUG: Missing \(expectedCount - parsed.summaries.count) summaries from ChatGPT Plan output.")
+                        }
+                        promise(.success(parsed))
+                    } catch {
+                        promise(.success(GlobalSummaryResult.errorResult(source: source, message: error.localizedDescription)))
+                    }
+                }
+            }
+            .eraseToAnyPublisher()
+
+        case .appleLocal, .coreAIMLXLocal:
             let message = "\(provider.displayName) cannot run this overall-summary batch directly. Choose a remote or cloud provider from the reroute menu."
             print("⚠️ GlobalSummaryService: \(message)")
             return Just(GlobalSummaryResult.errorResult(source: source, message: message))
@@ -1299,34 +1321,21 @@ final class GlobalSummaryService {
     
     // MARK: - MLX Constants & Helpers
 
-    private let mlxMaxOutputTokenHardCap    = 1_024
     private let coreAIMLXMaxOutputTokenHardCap = 512
-    private let mlxMaxContextTokenHardCap   = LiteRTLocalService.maxContextTokens
     private let coreAIMLXMaxContextTokenHardCap = CoreAIMLXLocalService.maxContextTokens
-    private let mlxAutoContextTokenFallback = LiteRTLocalService.defaultContextTokens
     private let mlxInputCharacterLimit      = 12_000
     private let mlxGenerationTimeoutSeconds: TimeInterval = 90
     private let mlxQueryTimeoutSeconds: TimeInterval      = 60
 
-    /// Cap output tokens at the provider-specific hard limit to prevent runaway generation.
+    /// Cap output tokens at the CoreAI MLX hard limit to prevent runaway generation.
     private func cappedMLXOutputTokens(_ configured: Int) -> Int {
-        let hardCap = settingsProvider().selectedSummaryProvider == .coreAIMLXLocal
-            ? coreAIMLXMaxOutputTokenHardCap
-            : mlxMaxOutputTokenHardCap
-        return min(max(1, configured), hardCap)
+        min(max(1, configured), coreAIMLXMaxOutputTokenHardCap)
     }
 
-    /// Resolve context token count: 0 → fallback, then hard-cap at 8192.
+    /// Resolve context token count: 0 → fallback, then hard-cap at the CoreAI MLX maximum.
     private func cappedMLXContextTokens(_ configured: Int) -> Int {
-        let selectedProvider = settingsProvider().selectedSummaryProvider
-        let fallback = selectedProvider == .coreAIMLXLocal
-            ? CoreAIMLXLocalService.defaultContextTokens
-            : mlxAutoContextTokenFallback
-        let hardCap = selectedProvider == .coreAIMLXLocal
-            ? coreAIMLXMaxContextTokenHardCap
-            : mlxMaxContextTokenHardCap
-        let resolved = configured > 0 ? configured : fallback
-        return min(max(512, resolved), hardCap)
+        let resolved = configured > 0 ? configured : CoreAIMLXLocalService.defaultContextTokens
+        return min(max(512, resolved), coreAIMLXMaxContextTokenHardCap)
     }
 
     /// Keep local-model prompts unchanged so context-fit routing sees the same prompt the model receives.
@@ -1379,13 +1388,10 @@ final class GlobalSummaryService {
         items: [(id: String, title: String, excerpt: String)]
     ) -> AnyPublisher<GlobalSummaryResult, Never> {
         let settings = settingsProvider()
-        let useCoreAIMLX = settings.selectedSummaryProvider == .coreAIMLXLocal
-        let modelID = useCoreAIMLX
-            ? settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-            : settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let maxOutputTokens = cappedMLXOutputTokens(useCoreAIMLX ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(useCoreAIMLX ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
-        let providerLabel = useCoreAIMLX ? "CoreAI MLX" : "LiteRT"
+        let modelID = settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maxOutputTokens = cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
+        let providerLabel = "CoreAI MLX"
 
         guard !modelID.isEmpty else {
             return Just(GlobalSummaryResult.errorResult(source: "articles", message: "\(providerLabel) model id is missing. Set it in Settings -> Summary Provider."))
@@ -1414,26 +1420,14 @@ final class GlobalSummaryService {
 
                     do {
                         let metrics = try await self.withMLXTimeout(seconds: self.mlxGenerationTimeoutSeconds) {
-                            if useCoreAIMLX {
-                                return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
-                                    prompt: singlePrompt,
-                                    modelID: modelID,
-                                    maxOutputTokens: maxOutputTokens,
-                                    maxContextTokens: maxContextTokens
-                                )
-                            }
-                            return try await LiteRTLocalService.shared.generateTextWithMetrics(
+                            try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
                                 prompt: singlePrompt,
                                 modelID: modelID,
                                 maxOutputTokens: maxOutputTokens,
                                 maxContextTokens: maxContextTokens
                             )
                         }
-                        if useCoreAIMLX {
-                            await CoreAIMLXLocalService.shared.clearTransientCache()
-                        } else {
-                            await LiteRTLocalService.shared.clearTransientCache()
-                        }
+                        await CoreAIMLXLocalService.shared.clearTransientCache()
                         self.reportThroughput(metrics)
 
                         let (subject, summary) = self.parseMLXSingleResponse(raw: metrics.text, fallbackTitle: item.title)
@@ -1441,11 +1435,7 @@ final class GlobalSummaryService {
                         print("✅ MLX: Processed article \(index + 1)/\(items.count) (\(String(format: "%.1f", metrics.tokensPerSecond)) tok/s): \(item.title.prefix(30))...")
 
                     } catch {
-                        if useCoreAIMLX {
-                            await CoreAIMLXLocalService.shared.clearTransientCache()
-                        } else {
-                            await LiteRTLocalService.shared.clearTransientCache()
-                        }
+                        await CoreAIMLXLocalService.shared.clearTransientCache()
                         print("❌ MLX: Failed article \(index + 1): \(error.localizedDescription)")
                         summaries.append(GlobalSummaryItem(
                             subject: String(item.title.prefix(50)),
@@ -1468,13 +1458,10 @@ final class GlobalSummaryService {
         postIds: [String]
     ) -> AnyPublisher<GlobalSummaryResult, Never> {
         let settings = settingsProvider()
-        let useCoreAIMLX = settings.selectedSummaryProvider == .coreAIMLXLocal
-        let modelID = useCoreAIMLX
-            ? settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-            : settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let maxOutputTokens = cappedMLXOutputTokens(useCoreAIMLX ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(useCoreAIMLX ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
-        let providerLabel = useCoreAIMLX ? "CoreAI MLX" : "LiteRT"
+        let modelID = settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let maxOutputTokens = cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
+        let providerLabel = "CoreAI MLX"
 
         guard !modelID.isEmpty else {
             return Just(GlobalSummaryResult.errorResult(source: "reddit", message: "\(providerLabel) model id is missing. Set it in Settings -> Summary Provider."))
@@ -1506,26 +1493,14 @@ final class GlobalSummaryService {
 
                     do {
                         let metrics = try await self.withMLXTimeout(seconds: self.mlxGenerationTimeoutSeconds) {
-                            if useCoreAIMLX {
-                                return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
-                                    prompt: singlePrompt,
-                                    modelID: modelID,
-                                    maxOutputTokens: maxOutputTokens,
-                                    maxContextTokens: maxContextTokens
-                                )
-                            }
-                            return try await LiteRTLocalService.shared.generateTextWithMetrics(
+                            try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
                                 prompt: singlePrompt,
                                 modelID: modelID,
                                 maxOutputTokens: maxOutputTokens,
                                 maxContextTokens: maxContextTokens
                             )
                         }
-                        if useCoreAIMLX {
-                            await CoreAIMLXLocalService.shared.clearTransientCache()
-                        } else {
-                            await LiteRTLocalService.shared.clearTransientCache()
-                        }
+                        await CoreAIMLXLocalService.shared.clearTransientCache()
                         self.reportThroughput(metrics)
 
                         let (subject, summary) = self.parseMLXSingleResponse(raw: metrics.text, fallbackTitle: item.title)
@@ -1534,11 +1509,7 @@ final class GlobalSummaryService {
                         print("✅ MLX: Processed post \(index + 1)/\(items.count) (\(String(format: "%.1f", metrics.tokensPerSecond)) tok/s): \(item.title.prefix(30))...")
 
                     } catch {
-                        if useCoreAIMLX {
-                            await CoreAIMLXLocalService.shared.clearTransientCache()
-                        } else {
-                            await LiteRTLocalService.shared.clearTransientCache()
-                        }
+                        await CoreAIMLXLocalService.shared.clearTransientCache()
                         print("❌ MLX: Failed post \(index + 1): \(error.localizedDescription)")
                         let refId = index < postIds.count ? postIds[index] : nil
                         summaries.append(GlobalSummaryItem(
@@ -2355,6 +2326,8 @@ class AppState: ObservableObject {
             return try await performPCCGatewayRequestAsync(prompt: prompt, taskName: title)
         case .summarizeDaemon:
             return try await performSummarizeRequestAsync(prompt: prompt, taskName: title)
+        case .chatGPT:
+            return try await performChatGPTRequestAsync(prompt: prompt, taskName: title)
         case .appleLocal:
 #if os(iOS)
             guard #available(iOS 26.0, *), LocalSummaryService.isAvailable() else {
@@ -2364,13 +2337,9 @@ class AppState: ObservableObject {
 #else
             throw BatchPodcastError.providerFailure("Apple Local is only available on iOS for this feature.")
 #endif
-        case .mlxLocal, .coreAIMLXLocal:
-            let outputTokens = cappedMLXOutputTokens(
-                provider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens
-            )
-            let contextTokens = cappedMLXContextTokens(
-                provider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens
-            )
+        case .coreAIMLXLocal:
+            let outputTokens = cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+            let contextTokens = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
             let metrics = try await generateLocalTextWithMetrics(
                 prompt: optimizedPromptForMLX(prompt),
                 systemPrompt: "Use only the supplied saved evidence. Return the requested JSON and do not invent facts.",
@@ -2517,7 +2486,7 @@ class AppState: ObservableObject {
 
         // 2. Load settings from storage
         var loadedSettings = self.persistenceManager.loadSettings()
-        let normalizedMLXModelID = LiteRTLocalService.normalizedModelIdentifier(from: loadedSettings.mlxModelID)
+        let normalizedMLXModelID = MLXLocalService.normalizedModelIdentifier(from: loadedSettings.mlxModelID)
         if normalizedMLXModelID != loadedSettings.mlxModelID {
             loadedSettings.mlxModelID = normalizedMLXModelID
             self.persistenceManager.saveSettings(loadedSettings)
@@ -2562,7 +2531,7 @@ class AppState: ObservableObject {
             provider: { [weak self] in self?.settings.selectedSummaryProvider ?? .gemini },
             generator: { [weak self] prompt, title, provider, backgroundTaskHandle in
                 guard let self else {
-                    throw BatchPodcastError.providerFailure("The RSS Reader state is no longer available.")
+                    throw BatchPodcastError.providerFailure("The RSSum state is no longer available.")
                 }
                 return try await self.generateBatchPodcastText(
                     prompt: prompt,
@@ -5923,7 +5892,7 @@ class AppState: ObservableObject {
             }, onCancel: { [weak self] in
                 self?.finishSummary(article: article, redditPost: redditPost)
             })
-        } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
+        } else if settings.selectedSummaryProvider == .coreAIMLXLocal {
             // Use selected local model
             let textToSummarize = article.map(cleanedArticleContent)
                 ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
@@ -5943,6 +5912,23 @@ class AppState: ObservableObject {
             }, onCancel: { [weak self] in
                 self?.finishSummary(article: article, redditPost: redditPost)
             })
+        } else if settings.selectedSummaryProvider == .chatGPT {
+            let textToSummarize = article.map(cleanedArticleContent)
+                ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
+                ?? ""
+            let prompt = article.map(articleSummaryPrompt(for:))
+                ?? redditPost.map { redditPostSummaryPrompt(post: $0, comments: redditComments) }
+                ?? ""
+            let taskName = article != nil ? "Article Summary" : "Reddit Post Summary"
+            performChatGPTSummaryPublic(prompt: prompt, taskName: taskName) { [weak self] summary in
+                if let article = article {
+                    let constrained = self?.enforceArticleSummaryLength(summary, sourceText: textToSummarize) ?? summary
+                    self?.updateArticleSummaryFromCloud(article, summary: constrained)
+                } else if let post = redditPost {
+                    self?.updateRedditPostSummaryFromCloud(post, summary: summary)
+                }
+                self?.finishSummary(article: article, redditPost: redditPost)
+            }
         } else if settings.selectedSummaryProvider == .summarizeDaemon {
             let textToSummarize = article.map(cleanedArticleContent)
                 ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
@@ -6152,11 +6138,9 @@ class AppState: ObservableObject {
         switch settings.selectedSummaryProvider {
         case .appleLocal:
             return "Apple Local"
-        case .mlxLocal:
-            return "LiteRT Local"
         case .coreAIMLXLocal:
             return "CoreAI MLX Local"
-        case .gemini, .appleCloud, .applePCCGateway, .webAI, .summarizeDaemon:
+        case .gemini, .appleCloud, .applePCCGateway, .webAI, .summarizeDaemon, .chatGPT:
             return nil
         }
     }
@@ -7081,7 +7065,14 @@ class AppState: ObservableObject {
                         taskName: result.source == "reddit" ? "Combined Reddit Summary" : "Combined Article Summary"
                     )
 
-                case .appleLocal, .mlxLocal, .coreAIMLXLocal:
+                case .chatGPT:
+                    print("⚡ AppState.Aggregate: Using ChatGPT Plan for overall summary")
+                    summary = try await self.performChatGPTRequestAsync(
+                        prompt: prompt,
+                        taskName: result.source == "reddit" ? "Combined Reddit Summary" : "Combined Article Summary"
+                    )
+
+                case .appleLocal, .coreAIMLXLocal:
                     #if os(iOS)
                     let existingHandle: GeminiBackgroundTaskHandle? = aggregateContext.handle
                     #else
@@ -7333,7 +7324,7 @@ class AppState: ObservableObject {
         case .gemini:
             return summaryService.summarizeText("", customPrompt: prompt)
 
-        case .appleLocal, .mlxLocal, .coreAIMLXLocal:
+        case .appleLocal, .coreAIMLXLocal:
             // Overall summary combines many articles — too large for local models.
             // Immediately route to Gemini and surface an info banner.
             DispatchQueue.main.async { [weak self] in
@@ -7379,6 +7370,19 @@ class AppState: ObservableObject {
                         promise(.success(output))
                     } catch {
                         promise(.success("Codex / Summarize error: \(error.localizedDescription)"))
+                    }
+                }
+            }
+            .eraseToAnyPublisher()
+
+        case .chatGPT:
+            return Future<String, Never> { promise in
+                Task(priority: .userInitiated) {
+                    do {
+                        let output = try await self.performChatGPTRequestAsync(prompt: prompt, taskName: "Today Summary")
+                        promise(.success(output))
+                    } catch {
+                        promise(.success("ChatGPT Plan error: \(error.localizedDescription)"))
                     }
                 }
             }
@@ -8138,10 +8142,10 @@ class AppState: ObservableObject {
         normalized.pccGatewayPort = AppSettings.sanitizedSummarizePort(settings.pccGatewayPort, fallback: AppSettings.defaultPCCGatewayPort)
         normalized.pccGatewayToken = AppSettings.sanitizedSummarizeSecret(settings.pccGatewayToken)
         normalized.pccGatewayModel = AppSettings.normalizedPCCGatewayModel(settings.pccGatewayModel)
-        normalized.mlxMaxContextTokens = AppSettings.normalizedLiteRTContextTokens(settings.mlxMaxContextTokens)
-        normalized.mlxMaxOutputTokens = AppSettings.normalizedLiteRTOutputTokens(
+        normalized.mlxMaxContextTokens = AppSettings.normalizedMLXContextTokens(settings.mlxMaxContextTokens)
+        normalized.mlxMaxOutputTokens = AppSettings.normalizedMLXOutputTokens(
             settings.mlxMaxOutputTokens,
-            contextTokens: AppSettings.effectiveLiteRTContextTokens(normalized.mlxMaxContextTokens)
+            contextTokens: AppSettings.effectiveMLXContextTokens(normalized.mlxMaxContextTokens)
         )
         normalized.coreAIMLXMaxContextTokens = AppSettings.normalizedCoreAIMLXContextTokens(settings.coreAIMLXMaxContextTokens)
         normalized.coreAIMLXMaxOutputTokens = AppSettings.normalizedCoreAIMLXOutputTokens(
@@ -8153,7 +8157,7 @@ class AppState: ObservableObject {
 
     func updateSettings(_ newSettings: AppSettings) {
         var normalizedSettings = newSettings
-        normalizedSettings.mlxModelID = LiteRTLocalService.normalizedModelIdentifier(from: normalizedSettings.mlxModelID)
+        normalizedSettings.mlxModelID = MLXLocalService.normalizedModelIdentifier(from: normalizedSettings.mlxModelID)
         normalizedSettings.coreAIMLXModelID = CoreAIMLXLocalService.normalizedModelIdentifier(from: normalizedSettings.coreAIMLXModelID)
         normalizedSettings = Self.normalizedSummarizeSettings(normalizedSettings)
 
@@ -8381,7 +8385,6 @@ class AppState: ObservableObject {
 
     func deleteLocalModelStorageItem(_ item: LocalModelStorageItem, completion: @escaping (String) -> Void) {
         Task(priority: .utility) {
-            await LiteRTLocalService.shared.unloadAllModels()
             await CoreAIMLXLocalService.shared.unloadAllModels()
 
             let message: String
@@ -8412,7 +8415,6 @@ class AppState: ObservableObject {
         Task(priority: .utility) {
             let message: String
             if item.isModelStorage {
-                await LiteRTLocalService.shared.unloadAllModels()
                 await CoreAIMLXLocalService.shared.unloadAllModels()
 
                 let url = URL(fileURLWithPath: item.id)
@@ -8486,14 +8488,7 @@ class AppState: ObservableObject {
         }
 
         if let appSupportURL = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let liteRTModelsURL = appSupportURL.appendingPathComponent("LiteRTModels", isDirectory: true)
-            add(
-                "Application Support Data",
-                detail: "App support files excluding LiteRT models",
-                url: appSupportURL,
-                sizeOverride: directorySizeIncludingHidden(at: appSupportURL, excluding: [liteRTModelsURL])
-            )
-            add("LiteRT Models", detail: "Downloaded .litertlm files", url: liteRTModelsURL, isModelStorage: true)
+            add("Application Support Data", detail: appSupportURL.path, url: appSupportURL)
         }
 
         if let cachesURL = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
@@ -8546,29 +8541,6 @@ class AppState: ObservableObject {
     private func collectLocalModelStorageItems() -> [LocalModelStorageItem] {
         let fm = FileManager.default
         var items: [LocalModelStorageItem] = []
-
-        let currentLiteRTFileName = LiteRTLocalService.defaultModelFileName
-        if let appSupportURL = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let liteRTURL = appSupportURL.appendingPathComponent("LiteRTModels", isDirectory: true)
-            if let files = try? fm.contentsOfDirectory(
-                at: liteRTURL,
-                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) {
-                for file in files where file.pathExtension == "litertlm" {
-                    let size = directorySizeIncludingHidden(at: file)
-                    items.append(LocalModelStorageItem(
-                        id: file.path,
-                        name: file.lastPathComponent,
-                        detail: "LiteRT model file",
-                        kind: .liteRT,
-                        sizeBytes: size,
-                        url: file,
-                        isCurrentSelection: file.lastPathComponent == currentLiteRTFileName
-                    ))
-                }
-            }
-        }
 
         for root in modelCacheRoots() where fm.fileExists(atPath: root.path) {
             if let entries = try? fm.contentsOfDirectory(
@@ -8625,10 +8597,7 @@ class AppState: ObservableObject {
     private func removeFailedModelDownloadFiles() -> UInt64 {
         let fm = FileManager.default
         var freedBytes: UInt64 = 0
-        var roots = modelCacheRoots()
-        if let appSupportURL = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            roots.append(appSupportURL.appendingPathComponent("LiteRTModels", isDirectory: true))
-        }
+        let roots = modelCacheRoots()
 
         for root in roots where fm.fileExists(atPath: root.path) {
             guard let enumerator = fm.enumerator(
@@ -9044,8 +9013,7 @@ class AppState: ObservableObject {
     }
 
     private func isLocalProviderContextError(_ error: Error) -> Bool {
-        LiteRTLocalService.isContextTooLargeError(error)
-            || CoreAIMLXLocalService.isContextTooLargeError(error)
+        CoreAIMLXLocalService.isContextTooLargeError(error)
             || isContextError(error)
     }
 
@@ -9185,6 +9153,11 @@ class AppState: ObservableObject {
                 }
             }
 
+        case .chatGPT:
+            performChatGPTSummaryPublic(prompt: prompt, taskName: "Q&A", isQA: isQA) { answer in
+                completion(answer)
+            }
+
         case .appleCloud:
             isLoading = true
             launchCloudRequest(for: prompt, type: appleRequestType, completion: completion)
@@ -9204,7 +9177,7 @@ class AppState: ObservableObject {
                 }
             )
 
-        case .appleLocal, .mlxLocal, .coreAIMLXLocal:
+        case .appleLocal, .coreAIMLXLocal:
             completion("Choose a cloud or remote provider to reroute this request.")
         }
     }
@@ -9330,30 +9303,18 @@ class AppState: ObservableObject {
     /// Pre-load + prime Metal shader cache for the configured MLX model.
     /// Safe to call at any time; silently does nothing when MLX is not the active provider.
     func warmUpMLXIfNeeded() {
-        guard settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal else { return }
-        let useCoreAIMLX = settings.selectedSummaryProvider == .coreAIMLXLocal
-        let modelID = useCoreAIMLX
-            ? settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-            : settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard settings.selectedSummaryProvider == .coreAIMLXLocal else { return }
+        let modelID = settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !modelID.isEmpty else { return }
-        let maxCtx = useCoreAIMLX
-            ? (settings.coreAIMLXMaxContextTokens > 0 ? settings.coreAIMLXMaxContextTokens : CoreAIMLXLocalService.defaultContextTokens)
-            : (settings.mlxMaxContextTokens > 0 ? settings.mlxMaxContextTokens : LiteRTLocalService.defaultContextTokens)
-        Task.detached(priority: .utility) { [modelID, maxCtx, useCoreAIMLX] in
+        let maxCtx = settings.coreAIMLXMaxContextTokens > 0 ? settings.coreAIMLXMaxContextTokens : CoreAIMLXLocalService.defaultContextTokens
+        Task.detached(priority: .utility) { [modelID, maxCtx] in
             do {
-                if useCoreAIMLX {
-                    try await CoreAIMLXLocalService.shared.preloadConfiguredModel(modelID: modelID)
-                    try await CoreAIMLXLocalService.shared.warmUpConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
-                    await CoreAIMLXLocalService.shared.clearTransientCache()
-                    print("🔥 [CoreAI MLX] Warm-up complete for '\(modelID)'")
-                } else {
-                    try await LiteRTLocalService.shared.preloadConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
-                    try await LiteRTLocalService.shared.warmUpConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
-                    await LiteRTLocalService.shared.clearTransientCache()
-                    print("🔥 [LiteRT] Warm-up complete for '\(modelID)'")
-                }
+                try await CoreAIMLXLocalService.shared.preloadConfiguredModel(modelID: modelID)
+                try await CoreAIMLXLocalService.shared.warmUpConfiguredModel(modelID: modelID, maxContextTokens: maxCtx)
+                await CoreAIMLXLocalService.shared.clearTransientCache()
+                print("🔥 [CoreAI MLX] Warm-up complete for '\(modelID)'")
             } catch {
-                print("⚠️ [\(useCoreAIMLX ? "CoreAI MLX" : "LiteRT")] Warm-up failed: \(error.localizedDescription)")
+                print("⚠️ [CoreAI MLX] Warm-up failed: \(error.localizedDescription)")
             }
         }
     }
@@ -9361,14 +9322,11 @@ class AppState: ObservableObject {
     // MARK: - MLX Throughput helper
 
     private var selectedLocalModelLabel: String {
-        settings.selectedSummaryProvider == .coreAIMLXLocal ? "CoreAI MLX" : "LiteRT"
+        "CoreAI MLX"
     }
 
     private var selectedLocalModelID: String {
-        if settings.selectedSummaryProvider == .coreAIMLXLocal {
-            return settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return settings.mlxModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.coreAIMLXModelID.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func generateLocalTextWithMetrics(
@@ -9387,18 +9345,7 @@ class AppState: ObservableObject {
             )
         }
 
-        if settings.selectedSummaryProvider == .coreAIMLXLocal {
-            return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
-                prompt: prompt,
-                systemPrompt: systemPrompt,
-                modelID: modelID,
-                maxOutputTokens: maxOutputTokens,
-                maxContextTokens: maxContextTokens,
-                onToken: onToken
-            )
-        }
-
-        return try await LiteRTLocalService.shared.generateTextWithMetrics(
+        return try await CoreAIMLXLocalService.shared.generateTextWithMetrics(
             prompt: prompt,
             systemPrompt: systemPrompt,
             modelID: modelID,
@@ -9409,11 +9356,7 @@ class AppState: ObservableObject {
     }
 
     private func clearLocalModelTransientCache() async {
-        if settings.selectedSummaryProvider == .coreAIMLXLocal {
-            await CoreAIMLXLocalService.shared.clearTransientCache()
-        } else {
-            await LiteRTLocalService.shared.clearTransientCache()
-        }
+        await CoreAIMLXLocalService.shared.clearTransientCache()
     }
 
     /// Format and publish throughput after a successful MLX generation.
@@ -9564,31 +9507,19 @@ class AppState: ObservableObject {
     // These mirror the same helpers in GlobalSummaryService so both classes can use them
     // without cross-class private access.
 
-    private let appStateMLXMaxOutputHardCap    = 1_024
     private let appStateCoreAIMLXMaxOutputHardCap = 512
-    private let appStateMLXMaxContextHardCap   = LiteRTLocalService.maxContextTokens
     private let appStateCoreAIMLXMaxContextHardCap = CoreAIMLXLocalService.maxContextTokens
-    private let appStateMLXContextFallback     = LiteRTLocalService.defaultContextTokens
     private let appStateAppleLocalMaxTokens    = 4096
     private let appStateMLXGenTimeout: TimeInterval   = 90
     private let appStateMLXQueryTimeout: TimeInterval = 60
 
     private func cappedMLXOutputTokens(_ configured: Int) -> Int {
-        let hardCap = settings.selectedSummaryProvider == .coreAIMLXLocal
-            ? appStateCoreAIMLXMaxOutputHardCap
-            : appStateMLXMaxOutputHardCap
-        return min(max(1, configured), hardCap)
+        min(max(1, configured), appStateCoreAIMLXMaxOutputHardCap)
     }
 
     private func cappedMLXContextTokens(_ configured: Int) -> Int {
-        let fallback = settings.selectedSummaryProvider == .coreAIMLXLocal
-            ? CoreAIMLXLocalService.defaultContextTokens
-            : appStateMLXContextFallback
-        let hardCap = settings.selectedSummaryProvider == .coreAIMLXLocal
-            ? appStateCoreAIMLXMaxContextHardCap
-            : appStateMLXMaxContextHardCap
-        let resolved = configured > 0 ? configured : fallback
-        return min(max(512, resolved), hardCap)
+        let resolved = configured > 0 ? configured : CoreAIMLXLocalService.defaultContextTokens
+        return min(max(512, resolved), appStateCoreAIMLXMaxContextHardCap)
     }
 
     private func optimizedPromptForMLX(_ prompt: String) -> String {
@@ -9597,17 +9528,6 @@ class AppState: ObservableObject {
 
     private func estimateTokens(for text: String) -> Int {
         max(1, Int(ceil(Double(text.count) / 4.0)))
-    }
-
-    private func mlxLocalPromptFits(_ prompt: String, outputTokens: Int? = nil) async -> Bool {
-        let optimizedPrompt = optimizedPromptForMLX(prompt)
-        let maxOutputTokens = outputTokens.map { max(1, $0) } ?? cappedMLXOutputTokens(settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(settings.mlxMaxContextTokens)
-        return await LiteRTLocalService.shared.promptFits(
-            optimizedPrompt,
-            maxOutputTokens: maxOutputTokens,
-            maxContextTokens: maxContextTokens
-        )
     }
 
     private func coreAIMLXLocalPromptFits(_ prompt: String, outputTokens: Int? = nil) async -> Bool {
@@ -9623,8 +9543,6 @@ class AppState: ObservableObject {
 
     private func shouldRerouteLocalPrompt(_ prompt: String, outputTokens: Int? = nil) async -> Bool {
         switch settings.selectedSummaryProvider {
-        case .mlxLocal:
-            return !(await mlxLocalPromptFits(prompt, outputTokens: outputTokens))
         case .coreAIMLXLocal:
             return !(await coreAIMLXLocalPromptFits(prompt, outputTokens: outputTokens))
         case .appleLocal:
@@ -9777,7 +9695,7 @@ class AppState: ObservableObject {
         let provider = settings.selectedSummaryProvider
 
         switch provider {
-        case .mlxLocal, .coreAIMLXLocal:
+        case .coreAIMLXLocal:
             let systemPrompt = "You answer questions about an article. Use ONLY the provided text. If the answer is not in the text, say you cannot find it."
             var parts: [String] = []
             if !context.isEmpty { parts.append("Text from article:\n\(context)") }
@@ -9789,8 +9707,8 @@ class AppState: ObservableObject {
                 Task { await completion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.") }
                 return
             }
-            let maxOutput = cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
-            let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+            let maxOutput = cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+            let maxCtx = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
 
             Task {
                 await MainActor.run { self.mlxStreamingText = "" }
@@ -9900,6 +9818,9 @@ class AppState: ObservableObject {
         case .summarizeDaemon:
             answerQuestion(question, context: context, provider: .summarizeDaemon, completion: completion)
 
+        case .chatGPT:
+            answerQuestion(question, context: context, provider: .chatGPT, completion: completion)
+
         case .applePCCGateway:
             answerQuestion(question, context: context, provider: .applePCCGateway, completion: completion)
 
@@ -9932,6 +9853,13 @@ class AppState: ObservableObject {
                     Task { await completion(message) }
                 }
             )
+            return
+        }
+
+        if provider == .chatGPT {
+            performChatGPTSummaryPublic(prompt: prompt, taskName: "Ask AI", isQA: true, managesLoading: false) { answer in
+                completion(answer)
+            }
             return
         }
 
@@ -10080,8 +10008,8 @@ class AppState: ObservableObject {
         let isGemma4 = settings.selectedSummaryProvider == .coreAIMLXLocal && (isGemma4ModelID(modelID) || isGemma4External)
         let maxOutputTokens = isGemma4
             ? min(cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens), 160)
-            : cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
-        let maxContextTokens = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+            : cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+        let maxContextTokens = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
         let preparedPrompt = optimizedPromptForMLX(
             isGemma4 ? adaptedPromptForGemma4Summary(prompt) : prompt
         )
@@ -10229,8 +10157,8 @@ class AppState: ObservableObject {
             completion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.")
             return
         }
-        let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
-        let configuredOutput = settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens
+        let maxCtx = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
+        let configuredOutput = settings.coreAIMLXMaxOutputTokens
         let maxOutput = cappedMLXAnalysisOutputTokens(configured: configuredOutput, maxContextTokens: maxCtx)
         isLoading = true
         Task { [self] in
@@ -10352,6 +10280,14 @@ class AppState: ObservableObject {
             return
         }
 
+        if settings.selectedSummaryProvider == .chatGPT {
+            let prompt = articleQAPrompt(article: article, question: question)
+            performChatGPTSummaryPublic(prompt: prompt, taskName: "Article Q&A", isQA: true) { answer in
+                cleanedCompletion(answer)
+            }
+            return
+        }
+
         if settings.selectedSummaryProvider == .summarizeDaemon {
             isLoading = true
             let prompt = articleQAPrompt(article: article, question: question)
@@ -10468,7 +10404,7 @@ class AppState: ObservableObject {
             print("📱 AppState: Using Apple Cloud for Article Q&A")
             launchCloudRequest(for: prompt, type: .articleQA, completion: cleanedCompletion)
             return
-        } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
+        } else if settings.selectedSummaryProvider == .coreAIMLXLocal {
             // Use the existing limited article context for local models.
             let systemPrompt = "You answer questions about an article. Use ONLY the provided text. If the answer is not in the text, say you cannot find it."
             let prompt = localArticleQAPrompt(
@@ -10482,8 +10418,8 @@ class AppState: ObservableObject {
                 cleanedCompletion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.")
                 return
             }
-            let maxOutput = cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
-            let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+            let maxOutput = cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+            let maxCtx = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
             isLoading = true
             Task { [self] in
                 await MainActor.run { self.mlxStreamingText = "" }
@@ -10591,6 +10527,14 @@ class AppState: ObservableObject {
                     cleanedCompletion(message)
                 }
             )
+            return
+        }
+
+        if settings.selectedSummaryProvider == .chatGPT {
+            let prompt = redditQAPrompt(post: post, comments: comments, question: question)
+            performChatGPTSummaryPublic(prompt: prompt, taskName: "Reddit Q&A", isQA: true) { answer in
+                cleanedCompletion(answer)
+            }
             return
         }
 
@@ -10719,7 +10663,7 @@ class AppState: ObservableObject {
             print("📱 AppState: Using Apple Cloud for Reddit Q&A")
             launchCloudRequest(for: prompt, type: .redditQA, completion: cleanedCompletion)
             return
-        } else if settings.selectedSummaryProvider == .mlxLocal || settings.selectedSummaryProvider == .coreAIMLXLocal {
+        } else if settings.selectedSummaryProvider == .coreAIMLXLocal {
             // Use local model for Q&A with Q&A-appropriate parameters
             let systemPrompt = "You answer questions about a Reddit post and its comments. Use ONLY the provided text. If the answer is not in the text, say you cannot find it."
             let prompt = """
@@ -10743,8 +10687,8 @@ class AppState: ObservableObject {
                 cleanedCompletion("\(selectedLocalModelLabel) model id is not configured. Set it in Settings -> Summary Provider.")
                 return
             }
-            let maxOutput = cappedMLXOutputTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxOutputTokens : settings.mlxMaxOutputTokens)
-            let maxCtx = cappedMLXContextTokens(settings.selectedSummaryProvider == .coreAIMLXLocal ? settings.coreAIMLXMaxContextTokens : settings.mlxMaxContextTokens)
+            let maxOutput = cappedMLXOutputTokens(settings.coreAIMLXMaxOutputTokens)
+            let maxCtx = cappedMLXContextTokens(settings.coreAIMLXMaxContextTokens)
             isLoading = true
             Task { [self] in
                 await MainActor.run { self.mlxStreamingText = "" }
@@ -10964,7 +10908,8 @@ class AppState: ObservableObject {
                 selectedText: selected,
                 extractedContext: nearby,
                 sourceContext: source?.text ?? "",
-                sourceLabel: source?.label ?? ""
+                sourceLabel: source?.label ?? "",
+                explainSelection: !useWebAI && settings.selectedSummaryProvider != .webAI
             )
             guard !fallbackPrompt.isEmpty else {
                 completion("No saved source material is available for this selection.")
@@ -11000,14 +10945,14 @@ class AppState: ObservableObject {
         }
 
         if chunks.count == 1 {
-            let prompt = selectionAnswerPrompt(selected: selected, nearby: nearby, source: chunks[0])
+            let prompt = selectionAnswerPrompt(selected: selected, nearby: nearby, source: chunks[0], useWebAI: useWebAI)
             executeSelectionPrompt(prompt, useWebAI: useWebAI, completion: completion)
             return
         }
 
         func processChunk(_ index: Int, evidence: [String]) {
             guard index < chunks.count else {
-                let finalPrompt = """
+                var finalPrompt = """
                 Produce the final answer to the selection question using only the evidence extracted from all source chunks below.
 
                 Selected text:
@@ -11021,6 +10966,14 @@ class AppState: ObservableObject {
 
                 If the evidence does not answer the selection, say that explicitly. Return plain text only, using short paragraphs and no Markdown symbols, headings, bullets, or code fences.
                 """
+                if !useWebAI && self.settings.selectedSummaryProvider != .webAI {
+                    // Preserve every chunk's evidence; do not reapply a source truncation limit.
+                    finalPrompt += """
+
+
+                    Explain what the selected passage means, rather than repeating or paraphrasing the surrounding summary. Resolve references, wordplay, contrasts and implied relationships using the evidence. Start with the explanation, distinguish source claims from facts, and do not invent missing details. Give any supported partial explanation and identify only the specific uncertainty that remains.
+                    """
+                }
                 executeSelectionPrompt(finalPrompt, useWebAI: useWebAI, completion: completion)
                 return
             }
@@ -11055,12 +11008,21 @@ class AppState: ObservableObject {
         if useWebAI {
             executeWebGlobalQAPrompt(prompt: prompt, completion: completion)
         } else {
-            executeGlobalQAPrompt(prompt: prompt, completion: completion)
+            executeGlobalQAPrompt(prompt: prompt, interpretQuestion: false, completion: completion)
         }
     }
 
-    private func selectionAnswerPrompt(selected: String, nearby: String, source: String) -> String {
-        """
+    private func selectionAnswerPrompt(selected: String, nearby: String, source: String, useWebAI: Bool) -> String {
+        if !useWebAI && settings.selectedSummaryProvider != .webAI {
+            return buildAskAISelectionPrompt(
+                selectedText: selected,
+                extractedContext: nearby,
+                sourceContext: source,
+                sourceLabel: "Saved Reddit posts and extracted comments",
+                explainSelection: true
+            )
+        }
+        return """
         Answer what the saved Reddit posts and extracted comments say about the selected text. Use only the supplied source material.
 
         Selected text:
@@ -11117,7 +11079,10 @@ class AppState: ObservableObject {
         return chunks
     }
     
-    private func executeGlobalQAPrompt(prompt: String, completion: @escaping (String) -> Void) {
+    private func executeGlobalQAPrompt(prompt: String, interpretQuestion: Bool = true, completion: @escaping (String) -> Void) {
+        let prompt = interpretQuestion && settings.selectedSummaryProvider != .webAI
+            ? buildSettingsBatchQAPrompt(prompt)
+            : prompt
         let cleanedCompletion: (String) -> Void = { [weak self] answer in
             guard let self = self else {
                 completion(answer)
@@ -11128,7 +11093,7 @@ class AppState: ObservableObject {
 
         switch settings.selectedSummaryProvider {
         case .appleLocal:
-            performLocalWithGeminiFallback(prompt: prompt, taskName: "Global Summary Q&A", completion: cleanedCompletion)
+            performLocalWithGeminiFallback(prompt: prompt, taskName: "Global Summary Q&A", appleRequestType: .globalSummaryQA, isQA: true, completion: cleanedCompletion)
         case .appleCloud:
             launchCloudRequest(for: prompt, type: .globalSummaryQA, completion: cleanedCompletion)
         case .applePCCGateway:
@@ -11148,8 +11113,9 @@ class AppState: ObservableObject {
                     }
                 }
             }
-        case .mlxLocal, .coreAIMLXLocal:
-            performMLXLocalSummary(prompt: prompt, completion: cleanedCompletion)
+        case .coreAIMLXLocal:
+            // Q&A must not pass through the Gemma summary/re-summary adapter.
+            answerQuestion(prompt, context: "", completion: cleanedCompletion)
         case .webAI:
             performWebAIRequest(
                 title: "Global Summary Q&A",
@@ -11172,6 +11138,10 @@ class AppState: ObservableObject {
                         cleanedCompletion("Codex / Summarize error: \(error.localizedDescription)")
                     }
                 }
+            }
+        case .chatGPT:
+            performChatGPTSummaryPublic(prompt: prompt, taskName: "Global Summary Q&A", isQA: true, managesLoading: false) { answer in
+                cleanedCompletion(answer)
             }
         default:
             summaryService.summarizeText("", customPrompt: prompt)

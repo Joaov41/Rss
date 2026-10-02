@@ -1,0 +1,33 @@
+From 25b05ca616636262c7a964cf8040281310d679f2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 18:45:25 +0100
+Subject: [PATCH] Sidebar: keep list below the sidebar button so sticky headers
+ don't slide under it
+
+---
+ RSSReaderApp/Views/ContentView.swift | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 40eb950..3a962d5 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -4177,8 +4177,13 @@ struct ContentView: View {
+                 }
+             }
+             #endif
+-	        .background(sidebarSurfaceBackground)
+-	        .ignoresSafeArea()
++	        // Only the background runs under the status bar and sidebar button; the list
++	        // itself stays below them, so sticky section headers (and the Subscriptions
++	        // filter) pin beneath the sidebar button instead of underneath it.
++	        .background {
++	            sidebarSurfaceBackground
++	                .ignoresSafeArea()
++	        }
+         .onAppear {
+             // Sync Reddit read states from persistence to ensure badge counts are accurate
+             appState.syncRedditReadStatesFromPersistence()
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,113 @@
+From b618c4d18b1fe4eaddd79a654db5fd89bd999ccd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 22:59:09 +0100
+Subject: [PATCH] iPhone only: tighter Reddit page margins, comment cards and
+ avatars
+
+---
+ RSSReaderApp/Views/CommentViews.swift     | 19 +++++++++++--------
+ RSSReaderApp/Views/RedditDetailView.swift |  6 +++---
+ 2 files changed, 14 insertions(+), 11 deletions(-)
+
+diff --git a/RSSReaderApp/Views/CommentViews.swift b/RSSReaderApp/Views/CommentViews.swift
+index 8fed6b3..2e16e14 100644
+--- a/RSSReaderApp/Views/CommentViews.swift
++++ b/RSSReaderApp/Views/CommentViews.swift
+@@ -128,9 +128,12 @@ struct CommentView: View {
+     }
+ 
+     private var leadingIndent: CGFloat {
+-        min(CGFloat(depth) * 26, 84)
++        // iPhone: shallower reply steps so deep threads keep a readable text column.
++        isPhoneDevice ? min(CGFloat(depth) * 14, 42) : min(CGFloat(depth) * 26, 84)
+     }
+ 
++    private var avatarSide: CGFloat { isPhoneDevice ? 30 : 44 }
++
+     private var accentColor: Color {
+         Color(red: 0.53, green: 0.25, blue: 1.0)
+     }
+@@ -237,7 +240,7 @@ struct CommentView: View {
+             Circle()
+                 .stroke(Color.white.opacity(colorScheme == .dark ? 0.18 : 0.7), lineWidth: 1)
+         }
+-        .frame(width: 44, height: 44)
++        .frame(width: avatarSide, height: avatarSide)
+         #if os(macOS)
+         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 6, x: 0, y: 3)
+         #endif
+@@ -253,9 +256,9 @@ struct CommentView: View {
+                 .resizable()
+                 .scaledToFit()
+                 .foregroundColor(.white)
+-                .frame(width: 24, height: 24)
++                .frame(width: isPhoneDevice ? 17 : 24, height: isPhoneDevice ? 17 : 24)
+         }
+-        .frame(width: 44, height: 44)
++        .frame(width: avatarSide, height: avatarSide)
+     }
+ 
+     @ViewBuilder
+@@ -451,7 +454,7 @@ struct CommentView: View {
+     }
+ 
+     private var commentCard: some View {
+-        HStack(alignment: .top, spacing: 12) {
++        HStack(alignment: .top, spacing: isPhoneDevice ? 10 : 12) {
+             avatarView
+ 
+             VStack(alignment: .leading, spacing: 10) {
+@@ -466,8 +469,8 @@ struct CommentView: View {
+             }
+             .frame(maxWidth: .infinity, alignment: .leading)
+         }
+-        .padding(.horizontal, 14)
+-        .padding(.vertical, 14)
++        .padding(.horizontal, isPhoneDevice ? 10 : 14)
++        .padding(.vertical, isPhoneDevice ? 12 : 14)
+         .background(
+             RoundedRectangle(cornerRadius: 12, style: .continuous)
+                 .fill(cardFill)
+@@ -527,7 +530,7 @@ struct CommentView: View {
+                             )
+                         }
+                         .buttonStyle(.plain)
+-                        .padding(.leading, leadingIndent + 44)
++                        .padding(.leading, leadingIndent + avatarSide)
+                     }
+                 }
+             }
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index dc0ad08..7966450 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -165,7 +165,7 @@ struct RedditDetailView: View {
+     private let redditPostSummaryAnchor = "redditPostSummaryAnchor"
+     private let redditCommentSummaryAnchor = "redditCommentSummaryAnchor"
+     private let redditQAAnchor = "redditDetailQAAnchor"
+-    private let iphoneDetailHorizontalInset: CGFloat = 16
++    private var iphoneDetailHorizontalInset: CGFloat { isPhoneDevice ? 10 : 16 }
+ 
+     private var detailBackground: Color {
+         colorScheme == .dark ? .black : AppColors.redditBackground(for: colorScheme)
+@@ -902,7 +902,7 @@ struct RedditDetailView: View {
+                         }
+                     }
+                 }
+-                .padding(14)
++                .padding(isPhoneDevice ? 8 : 14)
+                 .background {
+                     RoundedRectangle(cornerRadius: 18, style: .continuous)
+                         #if os(iOS)
+@@ -947,7 +947,7 @@ struct RedditDetailView: View {
+                     alignment: .leading
+                 )
+                 #endif
+-                .padding(.horizontal)
++                .padding(.horizontal, isPhoneDevice ? 10 : nil)
+                 .padding(.bottom, UIDevice.current.userInterfaceIdiom == .phone ? 16 : OverlayBarScrollEdgeFade.bottomToolbarClearance)
+                 .zIndex(1) // ensure ScrollView sits above any background layers for proper gesture hit-testing
+                 #if os(iOS)
+-- 
+2.54.0 (Apple Git-157)
+

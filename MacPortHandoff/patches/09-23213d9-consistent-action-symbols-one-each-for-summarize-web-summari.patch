@@ -1,0 +1,193 @@
+From 23213d9201a3d6bc536b3375fdc54c13efea27bc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:01:46 +0100
+Subject: [PATCH] Consistent action symbols: one each for summarize, web
+ summarize, ask, web ask
+
+---
+ RSSReaderApp/Views/ContentView.swift      | 34 +++++++++++------------
+ RSSReaderApp/Views/RedditDetailView.swift | 14 +++++-----
+ 2 files changed, 24 insertions(+), 24 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 53f7cac..b524381 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -4746,12 +4746,12 @@ struct ContentView: View {
+                     }) {
+                         #if os(iOS)
+                         if UIDevice.current.userInterfaceIdiom == .phone {
+-                            Image(systemName: "sparkles")
++                            Image(systemName: "text.quote")
+                         } else {
+-                            Label("Summarize Today", systemImage: "sparkles")
++                            Label("Summarize Today", systemImage: "text.quote")
+                         }
+                         #else
+-                        Label("Summarize Today", systemImage: "sparkles")
++                        Label("Summarize Today", systemImage: "text.quote")
+                         #endif
+                     }
+                     .buttonStyle(LiquidGlassButtonStyle(isTranslucent: true, showsBorder: false, showsBackground: false))
+@@ -5141,12 +5141,12 @@ struct ContentView: View {
+                 }) {
+                     #if os(iOS)
+                     if UIDevice.current.userInterfaceIdiom == .phone {
+-                        Image(systemName: "text.bubble")
++                        Image(systemName: "text.quote")
+                     } else {
+-                        Label("Summarize Articles", systemImage: "text.bubble")
++                        Label("Summarize Articles", systemImage: "text.quote")
+                     }
+                     #else
+-                    Label("Summarize Articles", systemImage: "text.bubble")
++                    Label("Summarize Articles", systemImage: "text.quote")
+                     #endif
+                 }
+                 .buttonStyle(LiquidGlassButtonStyle(isTranslucent: true, showsBorder: false, showsBackground: false))
+@@ -5350,12 +5350,12 @@ struct ContentView: View {
+                     }) {
+                         #if os(iOS)
+                         if UIDevice.current.userInterfaceIdiom == .phone {
+-                            Image(systemName: "text.bubble")
++                            Image(systemName: "text.quote")
+                         } else {
+-                            Label("Summarize Reddit", systemImage: "text.bubble")
++                            Label("Summarize Reddit", systemImage: "text.quote")
+                         }
+                         #else
+-                        Label("Summarize Reddit", systemImage: "text.bubble")
++                        Label("Summarize Reddit", systemImage: "text.quote")
+                         #endif
+                     }
+                     .buttonStyle(LiquidGlassButtonStyle(isTranslucent: true, showsBorder: false, showsBackground: false))
+@@ -5967,7 +5967,7 @@ struct DraggableGlobalSummaryView: View {
+                             appState.generateCombinedGlobalSummary(force: false)
+                         }
+                     } label: {
+-                        Image(systemName: "sparkles")
++                        Image(systemName: "text.quote")
+                             .foregroundColor(appState.isGeneratingAggregateSummary ? .gray : .secondary)
+                     }
+                     .disabled(appState.isGeneratingAggregateSummary || appState.isLoading)
+@@ -6022,9 +6022,9 @@ struct DraggableGlobalSummaryView: View {
+                     }
+                 } label: {
+                     if isPhoneSummaryToolbar {
+-                        Image(systemName: "questionmark.bubble")
++                        Image(systemName: "questionmark.circle")
+                     } else {
+-                        Label("Ask", systemImage: "questionmark.bubble")
++                        Label("Ask", systemImage: "questionmark.circle")
+                     }
+                 }
+                 .foregroundColor(showQAInterface ? .accentColor : .secondary)
+@@ -6346,9 +6346,9 @@ struct DraggableGlobalSummaryView: View {
+                             .cornerRadius(8)
+                         } else if formattedAggregateSummary == nil && (appState.aggregateSummaryError?.isEmpty ?? true) && !parsedSummaries.isEmpty {
+                             HStack(spacing: 8) {
+-                                Image(systemName: "sparkles")
++                                Image(systemName: "text.quote")
+                                     .foregroundColor(.secondary)
+-                                Text("Tap the sparkles button to generate an overall summary.")
++                                Text("Tap the summarize button to generate an overall summary.")
+                                     .font(.subheadline)
+                                     .foregroundColor(.secondary)
+                             }
+@@ -12075,7 +12075,7 @@ struct ArticleDetailView: View {
+                             qaState.showQAInterface = true
+                         }
+                     } label: {
+-                        Label("Ask About This Episode", systemImage: "questionmark.bubble")
++                        Label("Ask About This Episode", systemImage: "questionmark.circle")
+                             .font(.callout.weight(.medium))
+                             .foregroundStyle(.primary)
+                             .padding(.horizontal, 14)
+@@ -12139,7 +12139,7 @@ struct ArticleDetailView: View {
+                             qaState.showQAInterface = true
+                         }
+                     } label: {
+-                        Label("Ask About This Video", systemImage: "questionmark.bubble")
++                        Label("Ask About This Video", systemImage: "questionmark.circle")
+                             .font(.callout.weight(.medium))
+                             .foregroundStyle(.primary)
+                             .padding(.horizontal, 14)
+@@ -12555,7 +12555,7 @@ struct ArticleDetailView: View {
+                     )
+                     .shadow(color: Color.blue.opacity(0.36), radius: 12, x: 0, y: 0)
+ 
+-                Image(systemName: "sparkles")
++                Image(systemName: "questionmark")
+                     .font(.system(size: 20, weight: .bold))
+                     .foregroundStyle(.white)
+             }
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index 721d8b7..e8b45f5 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -1140,7 +1140,7 @@ struct RedditDetailView: View {
+                                     }
+                                     print("📱 RedditDetailView: Ask AI button \(showQAInterface ? "enabled" : "disabled")")
+                                 }) {
+-                                    Image(systemName: showQAInterface ? "xmark.circle.fill" : "questionmark.circle.fill")
++                                    Image(systemName: showQAInterface ? "xmark.circle.fill" : "questionmark.circle")
+                                 }
+                                 .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
+                                 .buttonStyle(RedditCommentsChromeIconButtonStyle())
+@@ -1190,7 +1190,7 @@ struct RedditDetailView: View {
+                         }
+                         print("📱 RedditDetailView: Ask AI button \(showQAInterface ? "enabled" : "disabled")")
+                     }) {
+-                        Image(systemName: showQAInterface ? "xmark.circle.fill" : "questionmark.circle.fill")
++                        Image(systemName: showQAInterface ? "xmark.circle.fill" : "questionmark.circle")
+                             .font(.subheadline)
+                     }
+                     .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
+@@ -1245,7 +1245,7 @@ struct RedditDetailView: View {
+                     .fill(AppColors.redditCardBorder(for: colorScheme))
+                     .shadow(color: redditQAAccentColor.opacity(0.36), radius: 12, x: 0, y: 0)
+ 
+-                Image(systemName: "sparkles")
++                Image(systemName: "questionmark")
+                     .font(.system(size: 20, weight: .bold))
+                     .foregroundStyle(.white)
+             }
+@@ -1669,7 +1669,7 @@ struct RedditDetailView: View {
+             Button {
+                 requestWebCommentSummary(for: post)
+             } label: {
+-                Label("Comment Summary", systemImage: "text.redaction")
++                Label("Comment Summary", systemImage: "quote.bubble")
+             }
+ 
+             Button {
+@@ -1691,7 +1691,7 @@ struct RedditDetailView: View {
+             commentSummary = nil
+             summarizeComments(for: post)
+         }) {
+-            compactHeaderIcon(systemName: "text.redaction", grouped: grouped)
++            compactHeaderIcon(systemName: "text.quote", grouped: grouped)
+         }
+         .buttonStyle(.plain)
+         .accessibilityLabel("Summarize")
+@@ -1742,7 +1742,7 @@ struct RedditDetailView: View {
+                     commentSummary = nil
+                     summarizeComments(for: post)
+                 } label: {
+-                    Label("Summarize", systemImage: "text.redaction")
++                    Label("Summarize", systemImage: "text.quote")
+                 }
+                 .disabled(isLoadingComments)
+             }
+@@ -1831,7 +1831,7 @@ struct RedditDetailView: View {
+                     commentSummary = nil
+                     summarizeComments(for: post)
+                 }) {
+-                    Label("Summarize", systemImage: "text.redaction")
++                    Label("Summarize", systemImage: "text.quote")
+                 }
+                 .accessibilityLabel("Summarize comments")
+                 .disabled(isLoadingComments)
+-- 
+2.54.0 (Apple Git-157)
+

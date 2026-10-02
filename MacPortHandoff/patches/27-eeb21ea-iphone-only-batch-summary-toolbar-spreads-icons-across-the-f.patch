@@ -1,0 +1,80 @@
+From eeb21ea1b3f231b83c5cdb740aab58d2f64b98d4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 23:08:48 +0100
+Subject: [PATCH] iPhone only: batch summary toolbar spreads icons across the
+ full bar
+
+---
+ RSSReaderApp/Views/ContentView.swift | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 600bd80..7331e75 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -6088,6 +6088,7 @@ struct DraggableGlobalSummaryView: View {
+                             .foregroundColor(.secondary)
+                     }
+                 }
++                .frame(maxWidth: isPhoneSummaryToolbar ? .infinity : nil, minHeight: isPhoneSummaryToolbar ? 40 : nil)
+                 .disabled(!hasSummaryContent)
+                 .accessibilityLabel("Create whiteboard, infographic or podcast")
+                 .help("Create a whiteboard, infographic or podcast")
+@@ -6117,6 +6118,7 @@ struct DraggableGlobalSummaryView: View {
+                         Image(systemName: "quote.bubble")
+                             .foregroundColor(.secondary)
+                     }
++                    .frame(maxWidth: isPhoneSummaryToolbar ? .infinity : nil, minHeight: isPhoneSummaryToolbar ? 40 : nil)
+                     .disabled(!hasSummaryContent)
+                     .accessibilityLabel("Send to \(appState.settings.selectedWebAIProvider.displayName)")
+                     .help("Web actions for \(appState.settings.selectedWebAIProvider.displayName)")
+@@ -6145,7 +6147,7 @@ struct DraggableGlobalSummaryView: View {
+                 }
+                 .modifier(SummaryToolbarLayoutModifier(compact: isPhoneSummaryToolbar))
+                 .padding(.horizontal, isPhoneSummaryToolbar ? 8 : 16)
+-                .padding(.vertical, 16)
++                .padding(.vertical, isPhoneSummaryToolbar ? 8 : 16)
+                 .background(
+                     ZStack {
+                         RoundedRectangle(cornerRadius: 12)
+@@ -15542,15 +15544,35 @@ private struct SummaryToolbarSeparator: View {
+     }
+ }
+ 
++private struct PhoneSummaryToolbarButtonStyle: ButtonStyle {
++    func makeBody(configuration: Configuration) -> some View {
++        PhoneSummaryToolbarButton(configuration: configuration)
++    }
++
++    private struct PhoneSummaryToolbarButton: View {
++        let configuration: ButtonStyleConfiguration
++        @Environment(\.isEnabled) private var isEnabled
++
++        var body: some View {
++            configuration.label
++                .frame(maxWidth: .infinity, minHeight: 40)
++                .contentShape(Rectangle())
++                .opacity(isEnabled ? (configuration.isPressed ? 0.5 : 1) : 0.35)
++        }
++    }
++}
++
+ private struct SummaryToolbarLayoutModifier: ViewModifier {
+     let compact: Bool
+ 
+     @ViewBuilder
+     func body(content: Content) -> some View {
+         if compact {
++            // iPhone: icons share the full width of the bar evenly instead of hugging the left edge.
+             content
+-                .buttonStyle(.plain)
+-                .font(.system(size: 21, weight: .semibold))
++                .buttonStyle(PhoneSummaryToolbarButtonStyle())
++                .font(.system(size: 19, weight: .medium))
++                .frame(maxWidth: .infinity)
+         } else {
+             content
+         }
+-- 
+2.54.0 (Apple Git-157)
+

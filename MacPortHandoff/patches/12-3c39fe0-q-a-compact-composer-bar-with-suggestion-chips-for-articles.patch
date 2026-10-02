@@ -1,0 +1,560 @@
+From 3c39fe0e8b0a2db0675fc36fdb00ec37ec4e6c83 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:48:10 +0100
+Subject: [PATCH] Q&A: compact composer bar with suggestion chips for articles
+ and Reddit
+
+---
+ RSSReaderApp/Views/ContentView.swift      | 316 ++++++++++++----------
+ RSSReaderApp/Views/RedditDetailView.swift | 176 +++---------
+ 2 files changed, 213 insertions(+), 279 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index d68606c..fe279ba 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -12526,159 +12526,63 @@ struct ArticleDetailView: View {
+     @ViewBuilder
+     private func qaSection(article: Article) -> some View {
+         if qaState.showQAInterface {
+-            VStack(alignment: .leading, spacing: 18) {
+-                qaSectionHeader(article: article)
+-                qaPromptField(article: article)
+-                    .id(articleQAAnchor)
+-                qaAnswerContent(article: article)
+-                if !qaAnswerUnavailable {
+-                    qaUtilityButtons()
+-                }
+-                qaStatusIndicators()
+-            }
+-            .padding(24)
+-            .background(qaCardBackground)
+-            .padding(.bottom, 16)
+-        }
+-    }
+-
+-    private func qaSectionHeader(article: Article) -> some View {
+-        HStack(alignment: .center, spacing: 16) {
+-            ZStack {
+-                Circle()
+-                    .fill(
+-                        LinearGradient(
+-                            colors: [
+-                                Color.blue.opacity(0.92),
+-                                Color.blue.opacity(0.46)
+-                            ],
+-                            startPoint: .topLeading,
+-                            endPoint: .bottomTrailing
+-                        )
+-                    )
+-                    .shadow(color: Color.blue.opacity(0.36), radius: 12, x: 0, y: 0)
+-
+-                Image(systemName: "questionmark")
+-                    .font(.system(size: 20, weight: .bold))
+-                    .foregroundStyle(.white)
+-            }
+-            .frame(width: 58, height: 58)
+-
+-            VStack(alignment: .leading, spacing: 4) {
+-                Text("Ask a question")
+-                    .font(.system(size: 18, weight: .semibold))
+-                    .foregroundStyle(.primary)
+-            }
+-
+-            Spacer(minLength: 12)
++            VStack(alignment: .leading, spacing: 12) {
++                AskComposerBar(
++                    text: $qaState.questionText,
++                    placeholder: qaPlaceholder(for: article),
++                    accent: .blue,
++                    isBusy: qaState.isProcessingQuestion,
++                    suggestions: qaSuggestions(for: article),
++                    webAskLabel: shouldShowExplicitWebAIControls
++                        ? "Ask \(appState.settings.selectedWebAIProvider.displayName)"
++                        : nil,
++                    onAsk: { askQuestion(article: article) },
++                    onAskWeb: shouldShowExplicitWebAIControls ? { askWebQuestion(article: article) } : nil,
++                    onClose: closeQA
++                )
++                .id(articleQAAnchor)
+ 
+-            HStack(spacing: 8) {
+-                if shouldShowExplicitWebAIControls {
+-                    qaHeaderActionButton(
+-                        systemName: "bubble.left.and.bubble.right",
+-                        accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+-                        isDisabled: qaState.questionText.isEmpty || qaState.isProcessingQuestion
+-                    ) {
+-                        askWebQuestion(article: article)
++                // The answer panel appears only once there is something to show.
++                if qaState.isProcessingQuestion || appState.isWaitingForArticleQA || !qaAnswerUnavailable {
++                    VStack(alignment: .leading, spacing: 8) {
++                        qaAnswerContent(article: article)
++                        if !qaAnswerUnavailable {
++                            qaUtilityButtons()
++                        }
+                     }
++                    .padding(8)
++                    .background(
++                        RoundedRectangle(cornerRadius: 16, style: .continuous)
++                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.035))
++                    )
+                 }
+-
+-                qaHeaderActionButton(systemName: "xmark", accessibilityLabel: "Cancel") {
+-                    qaState.showQAInterface = false
+-                    qaState.questionText = ""
+-                    qaState.answerText = "Ask a question about this article..."
+-                    qaState.markdownAnswerText = nil
+-                    print("📱 ArticleDetailView: Q&A interface canceled by user")
+-                }
+-            }
+-        }
+-    }
+-
+-    private func qaPromptField(article: Article) -> some View {
+-        HStack(spacing: 12) {
+-            qaInputField(article: article)
+-
+-            Button(action: {
+-                if !qaState.questionText.isEmpty {
+-                    askQuestion(article: article)
+-                }
+-            }) {
+-                Image(systemName: "paperplane.fill")
+-                    .font(.system(size: 18, weight: .semibold))
+-                    .foregroundStyle(.white)
+-                    .frame(width: 46, height: 46)
+-                    .background(Circle().fill(Color.blue))
+-                    .shadow(color: Color.blue.opacity(0.45), radius: 10, x: 0, y: 0)
++                qaStatusIndicators()
+             }
+-            .buttonStyle(.plain)
+-            .accessibilityLabel("Ask")
+-            .disabled(qaState.questionText.isEmpty || qaState.isProcessingQuestion)
+-            .opacity(qaState.questionText.isEmpty || qaState.isProcessingQuestion ? 0.45 : 1)
++            .padding(.bottom, 16)
+         }
+-        .padding(.horizontal, 18)
+-        .padding(.vertical, 12)
+-        .background(
+-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+-                .fill(colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.72))
+-        )
+-        .overlay(
+-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+-                .stroke(Color.blue.opacity(0.88), lineWidth: 1.2)
+-        )
+-        .shadow(color: Color.blue.opacity(colorScheme == .dark ? 0.22 : 0.12), radius: 10, x: 0, y: 0)
+     }
+ 
+-    private func qaInputField(article: Article) -> some View {
+-        TextField("Type your question...", text: $qaState.questionText)
+-            .textFieldStyle(PlainTextFieldStyle())
+-            .font(.system(size: 16, weight: .regular))
+-            .foregroundStyle(.primary)
+-            .submitLabel(.send)
+-            .disabled(qaState.isProcessingQuestion)
+-            .onSubmit {
+-                if !qaState.questionText.isEmpty && !qaState.isProcessingQuestion {
+-                    askQuestion(article: article)
+-                }
+-            }
+-            .onAppear {
+-                print("📱 ArticleDetailView: Q&A interface appeared")
+-            }
++    private func qaPlaceholder(for article: Article) -> String {
++        if article.isPodcastEpisode { return "Ask about this episode…" }
++        if article.isYouTubeVideo { return "Ask about this video…" }
++        return "Ask about this article…"
+     }
+ 
+-    private func qaHeaderActionButton(
+-        systemName: String,
+-        accessibilityLabel: String,
+-        isDisabled: Bool = false,
+-        action: @escaping () -> Void
+-    ) -> some View {
+-        Button(action: action) {
+-            Image(systemName: systemName)
+-                .font(.system(size: 15, weight: .semibold))
+-                .foregroundStyle(isDisabled ? Color.secondary : Color.blue)
+-                .frame(width: 40, height: 34)
+-                .background(
+-                    Capsule(style: .continuous)
+-                        .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.035))
+-                )
+-                .overlay(
+-                    Capsule(style: .continuous)
+-                        .stroke(Color.blue.opacity(isDisabled ? 0.16 : 0.32), lineWidth: 1)
+-                )
+-        }
+-        .buttonStyle(.plain)
+-        .accessibilityLabel(accessibilityLabel)
+-        .disabled(isDisabled)
+-        .opacity(isDisabled ? 0.55 : 1)
++    private func qaSuggestions(for article: Article) -> [AskComposerBar.Suggestion] {
++        let subject = article.isPodcastEpisode ? "episode" : (article.isYouTubeVideo ? "video" : "article")
++        return [
++            .init(label: "Key points", question: "What are the key points of this \(subject)?"),
++            .init(label: "What's new here?", question: "What's actually new in this \(subject)?"),
++            .init(label: "Explain simply", question: "Explain this \(subject) in simple terms.")
++        ]
+     }
+ 
+-    private var qaCardBackground: some View {
+-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+-            .fill(articlePanelFill)
+-            .overlay(
+-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+-                    .stroke(Color.blue.opacity(colorScheme == .dark ? 0.28 : 0.24), lineWidth: 1)
+-            )
+-            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 12, x: 0, y: 8)
++    private func closeQA() {
++        qaState.showQAInterface = false
++        qaState.questionText = ""
++        qaState.answerText = "Ask a question about this article..."
++        qaState.markdownAnswerText = nil
++        print("📱 ArticleDetailView: Q&A interface canceled by user")
+     }
+ 
+     private func qaActionRow(article: Article) -> some View {
+@@ -15763,6 +15667,134 @@ struct SummaryTTSMiniPlayer: View {
+     }
+ }
+ 
++/// A one-line "ask" composer shared by the article and Reddit Q&A: a rounded field with the
++/// Ask symbol, an optional web-model button, a send button that lights up only when there
++/// is text, a plain close button and optional suggestion chips.
++struct AskComposerBar: View {
++    struct Suggestion: Hashable {
++        let label: String
++        let question: String
++    }
++
++    @Binding var text: String
++    let placeholder: String
++    let accent: Color
++    let isBusy: Bool
++    var suggestions: [Suggestion] = []
++    var webAskLabel: String? = nil
++    let onAsk: () -> Void
++    var onAskWeb: (() -> Void)? = nil
++    let onClose: () -> Void
++
++    @Environment(\.colorScheme) private var colorScheme
++
++    private var canSend: Bool {
++        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isBusy
++    }
++
++    var body: some View {
++        VStack(alignment: .leading, spacing: 10) {
++            HStack(spacing: 8) {
++                HStack(spacing: 10) {
++                    Image(systemName: "questionmark.circle")
++                        .font(.system(size: 17, weight: .regular))
++                        .foregroundStyle(.secondary)
++                        .accessibilityHidden(true)
++
++                    TextField(placeholder, text: $text)
++                        .textFieldStyle(.plain)
++                        .font(.system(size: 17))
++                        .submitLabel(.send)
++                        .disabled(isBusy)
++                        .onSubmit { if canSend { onAsk() } }
++
++                    if let onAskWeb, let webAskLabel {
++                        Button(action: onAskWeb) {
++                            Image(systemName: "bubble.left.and.bubble.right")
++                                .font(.system(size: 16, weight: .regular))
++                                .foregroundStyle(.secondary)
++                                .frame(width: 34, height: 34)
++                                .contentShape(Circle())
++                        }
++                        .buttonStyle(.plain)
++                        .disabled(!canSend)
++                        .opacity(canSend ? 1 : 0.5)
++                        .accessibilityLabel(webAskLabel)
++                        .help(webAskLabel)
++                    }
++
++                    Button(action: onAsk) {
++                        Group {
++                            if isBusy {
++                                ProgressView()
++                                    .controlSize(.small)
++                            } else {
++                                Image(systemName: "arrow.up")
++                                    .font(.system(size: 15, weight: .bold))
++                                    .foregroundStyle(canSend ? Color.white : Color.secondary)
++                            }
++                        }
++                        .frame(width: 32, height: 32)
++                        .background(Circle().fill(canSend ? accent : Color.primary.opacity(0.08)))
++                    }
++                    .buttonStyle(.plain)
++                    .disabled(!canSend)
++                    .accessibilityLabel("Ask")
++                    .animation(.easeOut(duration: 0.15), value: canSend)
++                }
++                .padding(.leading, 14)
++                .padding(.trailing, 6)
++                .frame(minHeight: 46)
++                .background(
++                    Capsule(style: .continuous)
++                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
++                )
++                .overlay(
++                    Capsule(style: .continuous)
++                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
++                )
++
++                Button(action: onClose) {
++                    Image(systemName: "xmark")
++                        .font(.system(size: 14, weight: .semibold))
++                        .foregroundStyle(.secondary)
++                        .frame(width: 34, height: 34)
++                        .contentShape(Circle())
++                }
++                .buttonStyle(.plain)
++                .accessibilityLabel("Close")
++                .help("Close")
++            }
++
++            if !suggestions.isEmpty && text.isEmpty && !isBusy {
++                ScrollView(.horizontal, showsIndicators: false) {
++                    HStack(spacing: 8) {
++                        ForEach(suggestions, id: \.self) { suggestion in
++                            Button {
++                                text = suggestion.question
++                                onAsk()
++                            } label: {
++                                Text(suggestion.label)
++                                    .font(.subheadline)
++                                    .foregroundStyle(.primary)
++                                    .padding(.horizontal, 12)
++                                    .padding(.vertical, 6)
++                                    .background(
++                                        Capsule(style: .continuous)
++                                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
++                                    )
++                            }
++                            .buttonStyle(.plain)
++                            .accessibilityHint(suggestion.question)
++                        }
++                    }
++                    .padding(.leading, 4)
++                }
++            }
++        }
++    }
++}
++
+ /// Small, plain icon button used for the summary card's read-aloud and copy actions.
+ struct SummaryQuietIconButton: View {
+     let systemName: String
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index ea5b8f5..0626d65 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -1223,140 +1223,52 @@ struct RedditDetailView: View {
+     }
+ 
+     private func redditQASection(post: RedditPost) -> some View {
+-        VStack(alignment: .leading, spacing: 18) {
+-            redditQAHeader(post: post)
+-            redditQAPromptField(post: post)
+-            redditQAAnswerContent()
+-            if !qaAnswerUnavailable {
+-                redditQAUtilityButtons()
+-            }
+-            redditQAStatusIndicators()
+-        }
+-        .padding(24)
+-        .background(redditQACardBackground)
+-        .padding(.bottom, 16)
+-        .id(redditQAAnchor)
+-    }
+-
+-    private func redditQAHeader(post: RedditPost) -> some View {
+-        HStack(alignment: .center, spacing: 16) {
+-            ZStack {
+-                Circle()
+-                    .fill(AppColors.redditCardBorder(for: colorScheme))
+-                    .shadow(color: redditQAAccentColor.opacity(0.36), radius: 12, x: 0, y: 0)
+-
+-                Image(systemName: "questionmark")
+-                    .font(.system(size: 20, weight: .bold))
+-                    .foregroundStyle(.white)
+-            }
+-            .frame(width: 58, height: 58)
+-
+-            VStack(alignment: .leading, spacing: 4) {
+-                Text("Ask a question")
+-                    .font(.system(size: 18, weight: .semibold))
+-                    .foregroundStyle(.primary)
+-            }
+-
+-            Spacer(minLength: 12)
++        VStack(alignment: .leading, spacing: 12) {
++            AskComposerBar(
++                text: $questionText,
++                placeholder: "Ask about this post and its comments…",
++                accent: redditQAAccentColor,
++                isBusy: isProcessingQuestion,
++                suggestions: [
++                    .init(label: "Key points", question: "What are the key points of this post and its comments?"),
++                    .init(label: "Where do people disagree?", question: "Where do the commenters disagree?"),
++                    .init(label: "Consensus", question: "What's the overall consensus in the comments?")
++                ],
++                webAskLabel: shouldShowExplicitWebAIControls
++                    ? "Ask \(appState.settings.selectedWebAIProvider.displayName)"
++                    : nil,
++                onAsk: { askQuestion(post: post) },
++                onAskWeb: shouldShowExplicitWebAIControls ? { askWebQuestion(post: post) } : nil,
++                onClose: closeRedditQA
++            )
+ 
+-            HStack(spacing: 8) {
+-                if shouldShowExplicitWebAIControls {
+-                    redditQAHeaderActionButton(
+-                        systemName: "bubble.left.and.bubble.right",
+-                        accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+-                        isDisabled: questionText.isEmpty || isProcessingQuestion
+-                    ) {
+-                        askWebQuestion(post: post)
++            // The answer panel appears only once there is something to show.
++            if isProcessingQuestion || !qaAnswerUnavailable {
++                VStack(alignment: .leading, spacing: 8) {
++                    redditQAAnswerContent()
++                    if !qaAnswerUnavailable {
++                        redditQAUtilityButtons()
+                     }
+                 }
+-
+-                redditQAHeaderActionButton(systemName: "xmark", accessibilityLabel: "Cancel") {
+-                    showQAInterface = false
+-                    questionText = ""
+-                    answerText = "Ask a question about this post or its comments..."
+-                    markdownAnswerText = nil
+-                    commentsSentToLLMCount = nil
+-                    print("📱 RedditDetailView: Q&A interface canceled by user")
+-                }
++                .padding(8)
++                .background(
++                    RoundedRectangle(cornerRadius: 16, style: .continuous)
++                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.035))
++                )
+             }
++            redditQAStatusIndicators()
+         }
++        .padding(.bottom, 16)
++        .id(redditQAAnchor)
+     }
+ 
+-    private func redditQAPromptField(post: RedditPost) -> some View {
+-        HStack(spacing: 12) {
+-            redditQAInputField(post: post)
+-
+-            Button(action: {
+-                if !questionText.isEmpty {
+-                    askQuestion(post: post)
+-                }
+-            }) {
+-                Image(systemName: "paperplane.fill")
+-                    .font(.system(size: 18, weight: .semibold))
+-                    .foregroundStyle(.white)
+-                    .frame(width: 46, height: 46)
+-                    .background(Circle().fill(redditQAAccentColor))
+-                    .shadow(color: redditQAAccentColor.opacity(0.45), radius: 10, x: 0, y: 0)
+-            }
+-            .buttonStyle(.plain)
+-            .accessibilityLabel("Ask")
+-            .disabled(questionText.isEmpty || isProcessingQuestion)
+-            .opacity(questionText.isEmpty || isProcessingQuestion ? 0.45 : 1)
+-        }
+-        .padding(.horizontal, 18)
+-        .padding(.vertical, 12)
+-        .background(
+-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+-                .fill(colorScheme == .dark ? Color.white.opacity(0.06) : Color.white.opacity(0.74))
+-        )
+-        .overlay(
+-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+-                .stroke(AppColors.redditCardBorder(for: colorScheme), lineWidth: 1.2)
+-        )
+-        .shadow(color: redditQAAccentColor.opacity(colorScheme == .dark ? 0.22 : 0.12), radius: 10, x: 0, y: 0)
+-    }
+-
+-    private func redditQAInputField(post: RedditPost) -> some View {
+-        TextField("Type your question...", text: $questionText)
+-            .textFieldStyle(PlainTextFieldStyle())
+-            .font(.system(size: 16, weight: .regular))
+-            .foregroundStyle(.primary)
+-            .submitLabel(.send)
+-            .disabled(isProcessingQuestion)
+-            .onSubmit {
+-                if !questionText.isEmpty && !isProcessingQuestion {
+-                    askQuestion(post: post)
+-                }
+-            }
+-            .onAppear {
+-                print("📱 RedditDetailView: Q&A interface appeared")
+-            }
+-    }
+-
+-    private func redditQAHeaderActionButton(
+-        systemName: String,
+-        accessibilityLabel: String,
+-        isDisabled: Bool = false,
+-        action: @escaping () -> Void
+-    ) -> some View {
+-        Button(action: action) {
+-            Image(systemName: systemName)
+-                .font(.system(size: 15, weight: .semibold))
+-                .foregroundStyle(isDisabled ? Color.secondary : redditQAAccentColor)
+-                .frame(width: 40, height: 34)
+-                .background(
+-                    Capsule(style: .continuous)
+-                        .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.035))
+-                )
+-                .overlay(
+-                    Capsule(style: .continuous)
+-                        .stroke(redditQAAccentColor.opacity(isDisabled ? 0.16 : 0.32), lineWidth: 1)
+-                )
+-        }
+-        .buttonStyle(.plain)
+-        .accessibilityLabel(accessibilityLabel)
+-        .disabled(isDisabled)
+-        .opacity(isDisabled ? 0.55 : 1)
++    private func closeRedditQA() {
++        showQAInterface = false
++        questionText = ""
++        answerText = "Ask a question about this post or its comments..."
++        markdownAnswerText = nil
++        commentsSentToLLMCount = nil
++        print("📱 RedditDetailView: Q&A interface canceled by user")
+     }
+ 
+     @ViewBuilder
+@@ -1505,16 +1417,6 @@ struct RedditDetailView: View {
+         }
+     }
+ 
+-    private var redditQACardBackground: some View {
+-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+-            .fill(colorScheme == .dark ? Color(red: 0.035, green: 0.035, blue: 0.04) : Color.orange.opacity(0.055))
+-            .overlay(
+-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+-                    .stroke(AppColors.redditCardBorder(for: colorScheme), lineWidth: 1)
+-            )
+-            .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 12, x: 0, y: 8)
+-    }
+-
+     @ViewBuilder
+     private func commentsSectionHeader(for post: RedditPost, availableWidth: CGFloat) -> some View {
+         #if os(iOS)
+-- 
+2.54.0 (Apple Git-157)
+

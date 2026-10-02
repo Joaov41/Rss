@@ -1,0 +1,98 @@
+/* Home page, local redesign. Everything is in normal document flow. */
+.redesign { background: var(--bg); color: var(--ink); }
+.rd-wrap { width: min(1200px, calc(100% - 64px)); margin-inline: auto; }
+@media (min-width: 1024px) { .rd-wrap { width: min(1200px, calc(100% - 200px)); } }
+.redesign h2 { font-size: clamp(32px, 3.6vw, 48px); line-height: 1.08; margin: 0; }
+.redesign a:not(.arrow-button):not(.text-link):not(.device-frame) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-color: var(--line-strong); }
+.redesign a:not(.arrow-button):hover { color: var(--ink); text-decoration-color: currentColor; }
+
+/* Hero */
+.rd-hero { padding-top: 150px; }
+.rd-kicker { margin: 0 0 22px; font-size: 16px; color: var(--muted); }
+.rd-hero h1 { font-size: clamp(40px, 4.4vw, 62px); line-height: 1.05; letter-spacing: -0.02em; margin: 0; max-width: 13em; }
+.redesign .rd-hero h1 a { text-decoration-thickness: 2px; text-underline-offset: 0.12em; text-decoration-color: var(--line-strong); }
+.rd-hero-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 48px; align-items: end; margin-top: 32px; }
+.rd-hero-foot > p { margin: 0; max-width: 54ch; font-size: 18px; line-height: 1.6; color: var(--muted); }
+.rd-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.rd-actions span { font-size: 13px; color: var(--faint); padding-left: 4px; }
+.redesign .arrow-button { min-height: 50px; padding-inline: 24px; gap: 12px; font-size: 15px; }
+.rd-hero-shot { margin: 56px 0 0; }
+.rd-hero-shot figcaption, .redesign figcaption { margin-top: 14px; font-size: 13px; color: var(--faint); }
+
+/* Sections */
+.rd-section { padding-top: 120px; }
+.rd-head { display: flex; justify-content: space-between; align-items: end; gap: 40px; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.rd-head > p { max-width: 44ch; margin: 0; font-size: 16px; line-height: 1.6; color: var(--muted); }
+
+/* Source tabs (component styles come from cinematic.css) */
+.redesign .story-tabs { border-top: 0; margin-bottom: 40px; }
+.redesign .story-tabs button { font-size: 17px; min-height: 60px; color: var(--muted); }
+.redesign .story-tabs button:hover { background: none; color: var(--ink); }
+.redesign .story-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.redesign .story-tabs button[aria-selected="true"] svg { color: var(--ink); }
+.redesign .story-copy h3 { font-family: var(--display); font-weight: 500; font-size: 34px; }
+.redesign .story-copy .page-label { color: var(--faint); }
+.redesign .story-modes { border-color: var(--line-strong); background: transparent; box-shadow: none; }
+.redesign .story-modes button { color: var(--muted); }
+.redesign .story-modes button[aria-checked="true"] { color: var(--on-ink); background: var(--ink); border-color: var(--ink); box-shadow: none; }
+.redesign .story-figure .device-frame { border: 0; }
+
+/* Ask */
+.rd-ask { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 64px; align-items: center; }
+.rd-ask > div > p { margin: 22px 0 0; font-size: 17px; line-height: 1.65; color: var(--muted); }
+.rd-questions { list-style: none; margin: 24px 0 0; padding: 0; }
+.rd-questions li { padding: 14px 0; border-top: 1px solid var(--line); font-family: var(--display); font-style: italic; font-size: 21px; line-height: 1.35; }
+.rd-questions li:last-child { border-bottom: 1px solid var(--line); }
+.rd-ask figure { margin: 0; }
+
+/* Feature list */
+.rd-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 36px 48px; margin: 0; }
+.rd-list dt { font-weight: 600; font-size: 17px; margin-bottom: 8px; }
+.rd-list dd { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+
+/* Privacy */
+.rd-privacy { margin-top: 120px; }
+.rd-privacy > .rd-wrap { padding-block: 72px; border-block: 1px solid var(--ink); }
+.rd-privacy h2 { max-width: 16ch; }
+.rd-privacy p { max-width: 62ch; margin: 24px 0 0; font-size: 19px; line-height: 1.65; color: var(--muted); }
+
+/* Video, gallery */
+.redesign .closing-video { margin: 0; }
+.redesign .closing-video video { border-radius: 12px; border: 0; }
+.redesign .gallery-grid { gap: 40px 32px; }
+.redesign .gallery-figure:nth-child(even) { margin-top: 0; }
+
+/* Steps */
+.rd-steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 36px; }
+.rd-steps li { counter-increment: step; font-size: 15px; line-height: 1.65; color: var(--muted); }
+.rd-steps li::before { content: counter(step); display: block; margin-bottom: 10px; font-family: var(--display); font-size: 40px; line-height: 1; color: var(--ink); }
+.rd-steps strong { color: var(--ink); font-weight: 600; }
+
+/* Close */
+.rd-close { display: flex; justify-content: space-between; align-items: center; gap: 32px; margin-top: 120px; padding-block: 56px 96px; border-top: 1px solid var(--ink); }
+.redesign .rd-close h2 { font-size: clamp(36px, 4.4vw, 60px); }
+
+@media (max-width: 1180px) {
+  .rd-hero-foot { grid-template-columns: 1fr; gap: 24px; }
+}
+@media (max-width: 1000px) {
+  .rd-ask { grid-template-columns: 1fr; gap: 36px; }
+  .rd-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rd-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .rd-wrap { width: calc(100% - 40px); }
+  .rd-hero { padding-top: 104px; }
+  .rd-kicker { font-size: 14px; margin-bottom: 16px; }
+  .rd-hero-foot > p { font-size: 16px; }
+  .rd-hero-shot { margin-top: 36px; }
+  .rd-section { padding-top: 80px; }
+  .rd-head { flex-direction: column; align-items: start; gap: 12px; margin-bottom: 28px; }
+  .redesign .story-tabs button { font-size: 12px; }
+  .rd-questions li { font-size: 18px; }
+  .rd-list, .rd-steps { grid-template-columns: 1fr; gap: 28px; }
+  .rd-privacy { margin-top: 80px; }
+  .rd-privacy > .rd-wrap { padding-block: 48px; }
+  .rd-privacy p { font-size: 17px; }
+  .rd-close { flex-direction: column; align-items: start; margin-top: 80px; padding-block: 40px 64px; }
+}

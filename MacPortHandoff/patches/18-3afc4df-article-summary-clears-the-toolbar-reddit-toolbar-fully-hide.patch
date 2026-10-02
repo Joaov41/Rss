@@ -1,0 +1,45 @@
+From 3afc4dfea0931a67c717d36e0954c1457460eb67 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 20:23:25 +0100
+Subject: [PATCH] Article summary clears the toolbar; Reddit toolbar fully
+ hides scrolled content
+
+---
+ RSSReaderApp/Views/ContentView.swift      | 3 ++-
+ RSSReaderApp/Views/RedditDetailView.swift | 4 +++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 4191d0d..b025308 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -12477,7 +12477,8 @@ struct ArticleDetailView: View {
+             return 0
+         }
+ 
+-        return qaState.showQAInterface ? 104 : 72
++        // The summary card now carries its own title row, so it needs the full toolbar clearance.
++        return qaState.showQAInterface ? 104 : 100
+         #else
+         return 0
+         #endif
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index 1fd34a4..d686739 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -5176,9 +5176,11 @@ private struct OverlayBarScrollEdgeFade: ViewModifier {
+             content.mask {
+                 VStack(spacing: 0) {
+                     LinearGradient(
++                        // Fully clear under the post's toolbar so scrolled content (e.g. the
++                        // comments header pill) never shows through it; fade in just below.
+                         stops: [
+                             .init(color: .clear, location: 0),
+-                            .init(color: .clear, location: 0.35),
++                            .init(color: .clear, location: 0.8),
+                             .init(color: .black, location: 1)
+                         ],
+                         startPoint: .top,
+-- 
+2.54.0 (Apple Git-157)
+

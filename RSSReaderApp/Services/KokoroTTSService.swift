@@ -1,5 +1,8 @@
 import Foundation
 import AVFoundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
 import MLXAudioCore
@@ -93,7 +96,41 @@ final class KokoroTTSService {
     private var hasConfiguredMemory = false
     #endif
 
-    private init() { }
+    /// How long the voice model stays loaded after the last Read Aloud finishes.
+    private let idleUnloadDelay: TimeInterval = 300
+    private var idleUnloadWorkItem: DispatchWorkItem?
+
+    private init() {
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.unloadIfAllowed()
+        }
+        #endif
+    }
+
+    /// Frees the model after `idleUnloadDelay` unless another read starts first.
+    func scheduleIdleUnload() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.idleUnloadWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.unloadIfAllowed()
+            }
+            self.idleUnloadWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.idleUnloadDelay, execute: workItem)
+        }
+    }
+
+    private func cancelIdleUnload() {
+        DispatchQueue.main.async { [weak self] in
+            self?.idleUnloadWorkItem?.cancel()
+            self?.idleUnloadWorkItem = nil
+        }
+    }
 
     func newPlaybackToken() -> UUID {
         playbackLock.lock()
@@ -150,6 +187,7 @@ final class KokoroTTSService {
 
     func synthesize(text: String, voice: String, speed: Float, allowCaching: Bool = true) async throws -> Data {
         #if canImport(MLXAudioCore) && canImport(MLXAudioTTS)
+        cancelIdleUnload()
         if allowCaching {
             recordVoiceForWarmup(voice)
         }

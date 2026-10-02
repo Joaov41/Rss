@@ -1,0 +1,76 @@
+From 4beef742c56bd90eb9bb0c3ef1dc9e46773d5066 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:12:48 +0100
+Subject: [PATCH] Restore 'Send to <provider>' heading in web comment menus
+
+---
+ RSSReaderApp/Views/RedditDetailView.swift | 44 ++++++++++++-----------
+ 1 file changed, 24 insertions(+), 20 deletions(-)
+
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index e8b45f5..ea5b8f5 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -1666,17 +1666,19 @@ struct RedditDetailView: View {
+ 
+     private func compactWebActionsMenu(for post: RedditPost, grouped: Bool = false) -> some View {
+         Menu {
+-            Button {
+-                requestWebCommentSummary(for: post)
+-            } label: {
+-                Label("Comment Summary", systemImage: "quote.bubble")
+-            }
++            Section("Send to \(appState.settings.selectedWebAIProvider.displayName)") {
++                Button {
++                    requestWebCommentSummary(for: post)
++                } label: {
++                    Label("Comment Summary", systemImage: "quote.bubble")
++                }
+ 
+-            Button {
+-                analyticsProviderOverride = .webAI
+-                isShowingAnalytics = true
+-            } label: {
+-                Label("Deep Analysis", systemImage: "chart.pie.fill")
++                Button {
++                    analyticsProviderOverride = .webAI
++                    isShowingAnalytics = true
++                } label: {
++                    Label("Deep Analysis", systemImage: "chart.pie.fill")
++                }
+             }
+         } label: {
+             compactHeaderIcon(systemName: "quote.bubble", grouped: grouped)
+@@ -1860,17 +1862,19 @@ struct RedditDetailView: View {
+                 // Only the web-model versions live in this menu.
+                 if shouldShowExplicitWebAIControls {
+                     Menu {
+-                        Button {
+-                            requestWebCommentSummary(for: post)
+-                        } label: {
+-                            Label("Comment Summary", systemImage: "quote.bubble")
+-                        }
++                        Section("Send to \(appState.settings.selectedWebAIProvider.displayName)") {
++                            Button {
++                                requestWebCommentSummary(for: post)
++                            } label: {
++                                Label("Comment Summary", systemImage: "quote.bubble")
++                            }
+ 
+-                        Button {
+-                            analyticsProviderOverride = .webAI
+-                            isShowingAnalytics = true
+-                        } label: {
+-                            Label("Deep Analysis", systemImage: "chart.pie")
++                            Button {
++                                analyticsProviderOverride = .webAI
++                                isShowingAnalytics = true
++                            } label: {
++                                Label("Deep Analysis", systemImage: "chart.pie")
++                            }
+                         }
+                     } label: {
+                         Image(systemName: "quote.bubble")
+-- 
+2.54.0 (Apple Git-157)
+

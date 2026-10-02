@@ -1,0 +1,26 @@
+From 16268f00c1a3d3ae1739e6601e8cec2eec3600b5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 18:47:55 +0100
+Subject: [PATCH] Sidebar: remove extra top padding above LIBRARY header
+
+---
+ RSSReaderApp/Views/ContentView.swift | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 3a962d5..0b50cb3 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -3682,7 +3682,8 @@ struct ContentView: View {
+                 .textCase(nil)
+                 .tracking(0.6)
+         }
+-        .padding(.top, showsDivider ? 10 : 22)
++        // The list now starts below the sidebar button, so the first header needs no extra clearance.
++        .padding(.top, showsDivider ? 10 : 0)
+         .padding(.bottom, 2)
+     }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

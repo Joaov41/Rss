@@ -1,0 +1,80 @@
+From 74163c463f3356f58cf50a0730829a277afb0636 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 00:25:03 +0100
+Subject: [PATCH] Reader: quiet delayed spinner instead of cross-fading from
+ the RSS version
+
+---
+ RSSReaderApp/Views/AskAIUtilities.swift | 17 +++++++++++++++++
+ RSSReaderApp/Views/ContentView.swift    | 19 ++++++-------------
+ 2 files changed, 23 insertions(+), 13 deletions(-)
+
+diff --git a/RSSReaderApp/Views/AskAIUtilities.swift b/RSSReaderApp/Views/AskAIUtilities.swift
+index 19b1fef..6c0dcb0 100644
+--- a/RSSReaderApp/Views/AskAIUtilities.swift
++++ b/RSSReaderApp/Views/AskAIUtilities.swift
+@@ -13,6 +13,23 @@ import SwiftUI
+ 
+ /// Horizontal inset for text inside summary and answer cards; tighter on iPhone so lines aren't squeezed.
+ @MainActor var summaryCardTextInset: CGFloat { isPhoneDevice ? 14 : 20 }
++
++/// Shows its content only after a short delay, so quick loads never flash a spinner.
++struct DelayedReveal<Content: View>: View {
++    let delay: Double
++    @ViewBuilder var content: Content
++    @State private var isVisible = false
++
++    var body: some View {
++        content
++            .opacity(isVisible ? 1 : 0)
++            .animation(.easeIn(duration: 0.2), value: isVisible)
++            .task {
++                try? await Task.sleep(for: .seconds(delay))
++                isVisible = true
++            }
++    }
++}
+ #if os(iOS)
+ import UIKit
+ import WebKit
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index e3b4072..dfec94c 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -13773,27 +13773,20 @@ struct ArticleContentRenderer: View {
+         }
+     }
+ 
+-    @ViewBuilder
++    /// Quiet placeholder while the reader page loads. It used to show the RSS version of the article,
++    /// but cross-fading that into the reader briefly showed both sets of images at once.
++    /// The spinner only appears if loading takes noticeably long.
+     private var readerLoadingFallback: some View {
+-        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
++        DelayedReveal(delay: 0.35) {
+             VStack(spacing: 10) {
+                 ProgressView()
+                 Text("Opening article…")
+                     .font(.caption)
+                     .foregroundStyle(.secondary)
+             }
+-            .frame(maxWidth: .infinity, minHeight: readerViewportHeight)
+-            .articleReaderPanel(colorScheme: colorScheme)
+-        } else {
+-            HTMLWebView(
+-                htmlContent: enhanceHTML(content),
+-                baseURL: baseURL,
+-                contentHeight: .constant(readerViewportHeight)
+-            )
+-            .frame(maxWidth: .infinity)
+-            .frame(height: readerViewportHeight)
+-            .articleReaderPanel(colorScheme: colorScheme)
+         }
++        .frame(maxWidth: .infinity, minHeight: readerViewportHeight)
++        .articleReaderPanel(colorScheme: colorScheme)
+     }
+ 
+     private func buttonTextColor(isActive: Bool) -> Color {
+-- 
+2.54.0 (Apple Git-157)
+

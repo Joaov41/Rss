@@ -1,0 +1,153 @@
+From 86625a9e6950df014922bb5cbd6d7702a00ae9da Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:51:56 +0100
+Subject: [PATCH] Q&A answer: plain read-aloud/copy icons without capsule
+
+---
+ RSSReaderApp/Views/ContentView.swift      | 50 +++++++++---------
+ RSSReaderApp/Views/RedditDetailView.swift | 64 +++++++++++------------
+ 2 files changed, 57 insertions(+), 57 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index fe279ba..f941c56 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -12697,33 +12697,33 @@ struct ArticleDetailView: View {
+     }
+ 
+     private func qaUtilityButtons() -> some View {
+-        IOSArticleActionCapsule {
+-            HStack(spacing: 0) {
+-                SummaryTTSMiniPlayer(
+-                    isReddit: false,
+-                    playDisabled: isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || qaAnswerUnavailable,
+-                    stopDisabled: !isSynthesizingSpeechQA && !isPreparingLocalTTSQA && !isSpeakingLocallyQA,
+-                    localDisabled: isSynthesizingSpeechQA || qaAnswerUnavailable,
+-                    localIsActive: isPreparingLocalTTSQA || isSpeakingLocallyQA,
+-                    onPlay: { speakAnswerQA(qaState.answerText) },
+-                    onStop: stopQASpeech,
+-                    onLocal: { speakAnswerLocallyQA(qaState.answerText) },
+-                    playHelp: "Read aloud (Cloud)",
+-                    localHelp: "Read aloud (Local)",
+-                    usesGlass: false
+-                )
++        // Plain quiet icons, matching the summary cards (no capsule).
++        HStack(spacing: 2) {
++            SummaryTTSMiniPlayer(
++                isReddit: false,
++                playDisabled: isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || qaAnswerUnavailable,
++                stopDisabled: !isSynthesizingSpeechQA && !isPreparingLocalTTSQA && !isSpeakingLocallyQA,
++                localDisabled: isSynthesizingSpeechQA || qaAnswerUnavailable,
++                localIsActive: isPreparingLocalTTSQA || isSpeakingLocallyQA,
++                onPlay: { speakAnswerQA(qaState.answerText) },
++                onStop: stopQASpeech,
++                onLocal: { speakAnswerLocallyQA(qaState.answerText) },
++                playHelp: "Read aloud (Cloud)",
++                localHelp: "Read aloud (Local)",
++                usesGlass: false
++            )
+ 
+-                SummaryGlassActionButton(
+-                    systemName: "doc.on.doc",
+-                    tint: Color(red: 0.28, green: 0.43, blue: 0.61).opacity(0.42),
+-                    isDisabled: qaAnswerUnavailable,
+-                    helpText: "Copy answer",
+-                    action: { setPlatformClipboardString(qaState.answerText) },
+-                    usesGlass: false
+-                )
+-            }
++            SummaryGlassActionButton(
++                systemName: "doc.on.doc",
++                tint: Color(red: 0.28, green: 0.43, blue: 0.61).opacity(0.42),
++                isDisabled: qaAnswerUnavailable,
++                helpText: "Copy answer",
++                action: { setPlatformClipboardString(qaState.answerText) },
++                usesGlass: false
++            )
+         }
+-        .padding(.top, 5)
++        .padding(.top, 2)
++        .padding(.leading, 12)
+     }
+ 
+     @ViewBuilder
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index 0626d65..1fd34a4 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -1309,40 +1309,40 @@ struct RedditDetailView: View {
+     }
+ 
+     private func redditQAUtilityButtons() -> some View {
+-        RedditCommentsActionCapsule {
+-            HStack(spacing: 0) {
+-                SummaryTTSMiniPlayer(
+-                    isReddit: true,
+-                    playDisabled: isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || qaAnswerUnavailable,
+-                    stopDisabled: !isSynthesizingSpeechQA && !isPreparingLocalTTSQA && !isSpeakingLocallyQA,
+-                    localDisabled: isSynthesizingSpeechQA || qaAnswerUnavailable,
+-                    localIsActive: isPreparingLocalTTSQA || isSpeakingLocallyQA,
+-                    onPlay: { speakAnswerQA(answerText) },
+-                    onStop: stopQASpeech,
+-                    onLocal: { speakAnswerLocallyQA(answerText) },
+-                    playHelp: "Read aloud (Cloud)",
+-                    localHelp: "Read aloud (Local)",
+-                    usesGlass: false
+-                )
++        // Plain quiet icons, matching the summary cards (no capsule).
++        HStack(spacing: 2) {
++            SummaryTTSMiniPlayer(
++                isReddit: true,
++                playDisabled: isSynthesizingSpeechQA || isPreparingLocalTTSQA || isSpeakingLocallyQA || qaAnswerUnavailable,
++                stopDisabled: !isSynthesizingSpeechQA && !isPreparingLocalTTSQA && !isSpeakingLocallyQA,
++                localDisabled: isSynthesizingSpeechQA || qaAnswerUnavailable,
++                localIsActive: isPreparingLocalTTSQA || isSpeakingLocallyQA,
++                onPlay: { speakAnswerQA(answerText) },
++                onStop: stopQASpeech,
++                onLocal: { speakAnswerLocallyQA(answerText) },
++                playHelp: "Read aloud (Cloud)",
++                localHelp: "Read aloud (Local)",
++                usesGlass: false
++            )
+ 
+-                SummaryGlassActionButton(
+-                    systemName: "doc.on.doc",
+-                    tint: Color(red: 0.35, green: 0.40, blue: 0.49).opacity(0.40),
+-                    isDisabled: qaAnswerUnavailable,
+-                    helpText: "Copy answer",
+-                    action: {
+-                        #if os(iOS)
+-                        UIPasteboard.general.string = answerText
+-                        #elseif os(macOS)
+-                        NSPasteboard.general.clearContents()
+-                        NSPasteboard.general.setString(answerText, forType: .string)
+-                        #endif
+-                    },
+-                    usesGlass: false
+-                )
+-            }
++            SummaryGlassActionButton(
++                systemName: "doc.on.doc",
++                tint: Color(red: 0.35, green: 0.40, blue: 0.49).opacity(0.40),
++                isDisabled: qaAnswerUnavailable,
++                helpText: "Copy answer",
++                action: {
++                    #if os(iOS)
++                    UIPasteboard.general.string = answerText
++                    #elseif os(macOS)
++                    NSPasteboard.general.clearContents()
++                    NSPasteboard.general.setString(answerText, forType: .string)
++                    #endif
++                },
++                usesGlass: false
++            )
+         }
+-        .padding(.top, 5)
++        .padding(.top, 2)
++        .padding(.leading, 12)
+     }
+ 
+     @ViewBuilder
+-- 
+2.54.0 (Apple Git-157)
+

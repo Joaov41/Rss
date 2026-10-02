@@ -1,0 +1,44 @@
+From 9ec6998605ab93014d9dbf6798918d5082f470fe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 21:03:45 +0100
+Subject: [PATCH] Use one web AI icon (quote.bubble) everywhere, including Ask
+ fields
+
+---
+ RSSReaderApp/Views/ContentView.swift | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 209794c..2132567 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -6211,7 +6211,7 @@ struct DraggableGlobalSummaryView: View {
+                                 Button {
+                                     askGlobalSummaryWebQuestion()
+                                 } label: {
+-                                    Image(systemName: "bubble.left.and.bubble.right")
++                                    Image(systemName: "quote.bubble")
+                                         .font(.subheadline)
+                                 }
+                                 .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+@@ -12625,7 +12625,7 @@ struct ArticleDetailView: View {
+                 Button(action: {
+                     askWebQuestion(article: article)
+                 }) {
+-                    Image(systemName: "bubble.left.and.bubble.right")
++                    Image(systemName: "quote.bubble")
+                         .font(.subheadline)
+                 }
+                 .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+@@ -15732,7 +15732,7 @@ struct AskComposerBar: View {
+ 
+                     if let onAskWeb, let webAskLabel {
+                         Button(action: onAskWeb) {
+-                            Image(systemName: "bubble.left.and.bubble.right")
++                            Image(systemName: "quote.bubble")
+                                 .font(.system(size: 16, weight: .regular))
+                                 .foregroundStyle(.secondary)
+                                 .frame(width: 34, height: 34)
+-- 
+2.54.0 (Apple Git-157)
+

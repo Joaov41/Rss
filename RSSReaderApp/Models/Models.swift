@@ -55,15 +55,30 @@ struct AppSettings: Codable {
         case appleLocal = "Apple Local"
         case appleCloud = "Apple Cloud"
         case applePCCGateway = "Apple PCC Gateway"
-        case mlxLocal = "MLX Local"
         case coreAIMLXLocal = "CoreAI MLX Local"
         case webAI = "Web AI"
         case summarizeDaemon = "Codex / Summarize"
+        /// The user's own ChatGPT plan via Sign in with ChatGPT. Xcode builds only.
+        case chatGPT = "ChatGPT Plan"
+
+        /// "MLX Local" was the stored value of the removed LiteRT provider; map it
+        /// (and any other unknown value) to CoreAI MLX Local so settings still decode.
+        init(from decoder: Decoder) throws {
+            let rawValue = try decoder.singleValueContainer().decode(String.self)
+            self = SummaryProvider(rawValue: rawValue) ?? .coreAIMLXLocal
+            // ChatGPT Plan is hidden outside Xcode builds; fall back to the default provider.
+            if self == .chatGPT && !ChatGPTPlanAvailability.isEnabled {
+                self = .appleCloud
+            }
+        }
+
+        /// Providers offered in pickers; ChatGPT Plan only in builds installed from Xcode.
+        static var selectableCases: [SummaryProvider] {
+            allCases.filter { $0 != .chatGPT || ChatGPTPlanAvailability.isEnabled }
+        }
 
         var displayName: String {
             switch self {
-            case .mlxLocal:
-                return "LiteRT Local"
             case .coreAIMLXLocal:
                 return "CoreAI MLX Local"
             default:
@@ -72,8 +87,8 @@ struct AppSettings: Codable {
         }
     }
 
-    // LiteRT Local settings. The setting key keeps the old MLX name for migration.
-    var mlxModelID: String = LiteRTLocalService.defaultModelRepo
+    // MLX Local settings, used by MLXLocalService (structured JSON, external model downloads).
+    var mlxModelID: String = CoreAIMLXLocalService.defaultModelRepo
     var mlxMaxOutputTokens: Int = 256
     var mlxMaxContextTokens: Int = 0
 
@@ -126,9 +141,12 @@ struct AppSettings: Codable {
         return model.isEmpty ? defaultPCCGatewayModel : model
     }
 
-    static func normalizedLiteRTContextTokens(_ rawValue: Int) -> Int {
+    static let localMLXDefaultContextTokens = 2_048
+    static let localMLXContextTokenCap = 8_192
+
+    static func normalizedMLXContextTokens(_ rawValue: Int) -> Int {
         guard rawValue > 0 else { return 0 }
-        return min(max(LiteRTLocalService.defaultContextTokens, rawValue), LiteRTLocalService.maxContextTokens)
+        return min(max(localMLXDefaultContextTokens, rawValue), localMLXContextTokenCap)
     }
 
     static func normalizedCoreAIMLXContextTokens(_ rawValue: Int) -> Int {
@@ -136,9 +154,9 @@ struct AppSettings: Codable {
         return min(max(CoreAIMLXLocalService.defaultContextTokens, rawValue), CoreAIMLXLocalService.maxContextTokens)
     }
 
-    static func effectiveLiteRTContextTokens(_ rawValue: Int) -> Int {
-        let normalized = normalizedLiteRTContextTokens(rawValue)
-        return normalized > 0 ? normalized : LiteRTLocalService.defaultContextTokens
+    static func effectiveMLXContextTokens(_ rawValue: Int) -> Int {
+        let normalized = normalizedMLXContextTokens(rawValue)
+        return normalized > 0 ? normalized : localMLXDefaultContextTokens
     }
 
     static func effectiveCoreAIMLXContextTokens(_ rawValue: Int) -> Int {
@@ -146,7 +164,7 @@ struct AppSettings: Codable {
         return normalized > 0 ? normalized : CoreAIMLXLocalService.defaultContextTokens
     }
 
-    static func normalizedLiteRTOutputTokens(_ rawValue: Int, contextTokens: Int) -> Int {
+    static func normalizedMLXOutputTokens(_ rawValue: Int, contextTokens: Int) -> Int {
         normalizedLocalOutputTokens(rawValue, contextTokens: contextTokens, hardCap: 4096)
     }
 
@@ -240,11 +258,11 @@ struct AppSettings: Codable {
         redditTokenExpiry = try container.decodeIfPresent(Date.self, forKey: .redditTokenExpiry)
         redditUsername = try container.decodeIfPresent(String.self, forKey: .redditUsername) ?? ""
         redditGrantedScopes = try container.decodeIfPresent(String.self, forKey: .redditGrantedScopes) ?? ""
-        mlxModelID = LiteRTLocalService.normalizedModelID(try container.decodeIfPresent(String.self, forKey: .mlxModelID) ?? LiteRTLocalService.defaultModelRepo)
-        mlxMaxContextTokens = AppSettings.normalizedLiteRTContextTokens(try container.decodeIfPresent(Int.self, forKey: .mlxMaxContextTokens) ?? 0)
-        mlxMaxOutputTokens = AppSettings.normalizedLiteRTOutputTokens(
+        mlxModelID = MLXLocalService.normalizedModelIdentifier(from: try container.decodeIfPresent(String.self, forKey: .mlxModelID) ?? CoreAIMLXLocalService.defaultModelRepo)
+        mlxMaxContextTokens = AppSettings.normalizedMLXContextTokens(try container.decodeIfPresent(Int.self, forKey: .mlxMaxContextTokens) ?? 0)
+        mlxMaxOutputTokens = AppSettings.normalizedMLXOutputTokens(
             try container.decodeIfPresent(Int.self, forKey: .mlxMaxOutputTokens) ?? 256,
-            contextTokens: AppSettings.effectiveLiteRTContextTokens(mlxMaxContextTokens)
+            contextTokens: AppSettings.effectiveMLXContextTokens(mlxMaxContextTokens)
         )
         coreAIMLXModelID = CoreAIMLXLocalService.normalizedModelID(try container.decodeIfPresent(String.self, forKey: .coreAIMLXModelID) ?? CoreAIMLXLocalService.defaultModelRepo)
         coreAIMLXMaxContextTokens = AppSettings.normalizedCoreAIMLXContextTokens(try container.decodeIfPresent(Int.self, forKey: .coreAIMLXMaxContextTokens) ?? 0)
@@ -324,16 +342,23 @@ enum LocalRerouteProvider: String, CaseIterable, Identifiable {
     case gemini
     case applePCCGateway
     case summarizeDaemon
+    case chatGPT
     case appleCloud
     case webAI
 
     var id: String { rawValue }
+
+    /// Reroute targets offered in the UI; ChatGPT Plan only in builds installed from Xcode.
+    static var available: [LocalRerouteProvider] {
+        allCases.filter { $0 != .chatGPT || ChatGPTPlanAvailability.isEnabled }
+    }
 
     var displayName: String {
         switch self {
         case .gemini: return "Gemini"
         case .applePCCGateway: return "Apple PCC Gateway"
         case .summarizeDaemon: return "Codex / Summarize"
+        case .chatGPT: return "ChatGPT Plan"
         case .appleCloud: return "Apple Cloud"
         case .webAI: return "Web AI"
         }
@@ -344,6 +369,7 @@ enum LocalRerouteProvider: String, CaseIterable, Identifiable {
         case .gemini: return .gemini
         case .applePCCGateway: return .applePCCGateway
         case .summarizeDaemon: return .summarizeDaemon
+        case .chatGPT: return .chatGPT
         case .appleCloud: return .appleCloud
         case .webAI: return .webAI
         }
@@ -955,100 +981,60 @@ extension RedditPost {
         resolvedImageURL
     }
 
+    /// All distinct images in the post. A gallery lists each of its images once; any other post has at most
+    /// one image, even though Reddit exposes it under several URLs (direct link, preview source, resized copies).
     var allImageURLs: [URL] {
         var urls = [URL]()
-        if let resolvedImageURL {
-            urls.append(resolvedImageURL)
-        }
-        // 1) From preview - try to get highest resolution versions.
-        if let preview = preview, let firstImage = preview.images.first {
-            // Add source (full resolution) first
-            let sourceURLString = firstImage.source.url.replacingOccurrences(of: "&amp;", with: "&")
-            if let url = URL(string: sourceURLString) {
+        var seenKeys = Set<String>()
+        func appendDistinct(_ url: URL) {
+            if seenKeys.insert(Self.imageIdentityKey(for: url)).inserted {
                 urls.append(url)
             }
-            // Add high resolution alternatives (skip low-res versions)
-            for resolution in firstImage.resolutions.reversed() {
-                let resURLString = resolution.url.replacingOccurrences(of: "&amp;", with: "&")
-                if let url = URL(string: resURLString), 
-                   !urls.contains(url),
-                   resolution.width > 320 { // Only include resolutions wider than 320px
-                    urls.append(url)
-                }
-            }
         }
-        // 2) From gallery (gallery_data + media_metadata).
+
+        // 1) Gallery (gallery_data + media_metadata): one entry per gallery item.
         if let gallery = gallery_data, let media = media_metadata {
             for item in gallery.items {
                 if let mediaItem = media[item.media_id],
                    mediaItem.status == "valid",
                    let urlString = mediaItem.s?.u?.replacingOccurrences(of: "&amp;", with: "&"),
-                   let url = URL(string: urlString),
-                   !urls.contains(url) { // Avoid duplicates
-                    urls.append(url)
+                   let url = URL(string: urlString) {
+                    appendDistinct(url)
                 }
             }
         }
-        // 3) Direct URL if it points to an image.
-        if let urlString = url?.absoluteString.lowercased(),
-           (urlString.hasSuffix(".jpg") ||
-            urlString.hasSuffix(".jpeg") ||
-            urlString.hasSuffix(".png") ||
-            urlString.hasSuffix(".gif") ||
-            urlString.hasSuffix(".webp")),
-           let validUrl = url,
-           !urls.contains(validUrl) {
-            urls.append(validUrl)
+        if !urls.isEmpty {
+            return urls
         }
-        // 3.5) If the direct URL is a reddit.com/media link, extract the image.
-        if let urlString = url?.absoluteString,
-           urlString.contains("reddit.com/media"),
-           let components = URLComponents(string: urlString),
-           let queryItems = components.queryItems,
-           let actualItem = queryItems.first(where: { $0.name == "url" }),
-           let encodedUrlString = actualItem.value,
-           let decodedUrlString = encodedUrlString.removingPercentEncoding,
-           let actualUrl = URL(string: decodedUrlString),
-           !urls.contains(actualUrl) {
-            urls.append(actualUrl)
+
+        // 2) Not a gallery: a single image, taken from the best available source.
+        if let resolvedImageURL {
+            return [resolvedImageURL]
         }
-        // 4) Parse the post's content for inline images BEFORE thumbnails.
-        if let inlineImageURL = parseFirstImageURL(in: content),
-           !urls.contains(inlineImageURL) {
-            urls.append(inlineImageURL)
+        if let preview = preview, let firstImage = preview.images.first,
+           let url = URL(string: firstImage.source.url.replacingOccurrences(of: "&amp;", with: "&")) {
+            return [url]
         }
-        // 5) AVOID thumbnails in gallery - they are low quality and look terrible
-        // Only include if we have no other images AND they're not Reddit's low-quality thumbnails
-        if urls.isEmpty {
-            if let thumb = thumbnail,
-               !thumb.isEmpty,
-               thumb != "self",
-               thumb != "default",
-               thumb != "nsfw",
-               thumb != "spoiler",
-               !thumb.contains("NSFW_") {
-                
-                let decodedThumb = thumb
-                    .replacingOccurrences(of: "&amp;", with: "&")
-                    .replacingOccurrences(of: "&lt;", with: "<")
-                    .replacingOccurrences(of: "&gt;", with: ">")
-                    .replacingOccurrences(of: "&quot;", with: "\"")
-                    .replacingOccurrences(of: "&#39;", with: "'")
-                    .replacingOccurrences(of: "&nbsp;", with: " ")
-                
-                // Skip Reddit's own low-quality thumbnails even in gallery
-                if decodedThumb.contains("redd.it") && 
-                   (decodedThumb.contains("://a.thumbs.redditmedia.com") || 
-                    decodedThumb.contains("://b.thumbs.redditmedia.com") ||
-                    decodedThumb.contains("external-preview.redd.it")) {
-                } else if let thumbURL = URL(string: decodedThumb) {
-                    urls.append(thumbURL)
-                }
-            }
+        if let inlineImageURL = parseFirstImageURL(in: content) {
+            return [inlineImageURL]
         }
-        return urls
+        return []
     }
-    
+
+    /// Identifies an image independent of host, size and query, so that i.redd.it/abc.jpg,
+    /// preview.redd.it/abc.jpg?width=640 and preview.redd.it/some-title-v0-abc.png?... compare equal.
+    static func imageIdentityKey(for url: URL) -> String {
+        let host = url.host?.lowercased() ?? ""
+        var name = (url.lastPathComponent as NSString).deletingPathExtension.lowercased()
+        if host.hasSuffix("redd.it") || host.hasSuffix("redditmedia.com") {
+            if let range = name.range(of: "-v0-", options: .backwards) {
+                name = String(name[range.upperBound...])
+            }
+            return "reddit:" + name
+        }
+        return host + url.deletingPathExtension().path.lowercased()
+    }
+
     /// Returns a cleaned preview text by stripping HTML tags and replacing image/link URLs.
     var cleanPreviewText: String {
         var cleaned = content

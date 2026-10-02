@@ -29,6 +29,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleDisplayName</key>
+	<string>RSSum</string>
 	<key>INIntentsSupported</key>
 	<array>
 		<string>Intent</string>
@@ -43,9 +45,9 @@
 		<string>_rss-sum._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>RSSReaderApp connects to the Summarize bridge or Apple PCC Gateway running on your Mac for local AI summaries.</string>
+	<string>RSSum connects to the Summarize bridge or Apple PCC Gateway running on your Mac for local AI summaries.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>RSS Reader uses on-device speech recognition to create transcripts for podcast episodes when publishers do not provide one.</string>
+	<string>RSSum uses on-device speech recognition to create transcripts for podcast episodes when publishers do not provide one.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

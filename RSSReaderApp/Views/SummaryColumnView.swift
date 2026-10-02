@@ -77,7 +77,7 @@ struct SummaryColumnView: View {
                 
                 if appState.isSummarizingArticle(article) {
                     let streamText = appState.mlxStreamingText
-                    if (appState.settings.selectedSummaryProvider == .mlxLocal || appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !streamText.isEmpty {
+                    if (appState.settings.selectedSummaryProvider == .coreAIMLXLocal) && !streamText.isEmpty {
                         ScrollView {
                             Text(streamText)
                                 .font(.body)
@@ -205,7 +205,7 @@ struct SummaryColumnView: View {
 
                         // On-device throughput badge (MLX + Apple Local)
                         let _provider = appState.settings.selectedSummaryProvider
-                        if (_provider == .mlxLocal || _provider == .coreAIMLXLocal || _provider == .appleLocal || _provider == .applePCCGateway),
+                        if (_provider == .coreAIMLXLocal || _provider == .appleLocal || _provider == .applePCCGateway),
                            !appState.mlxLastThroughput.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "cpu")
@@ -772,7 +772,8 @@ struct SummaryColumnView: View {
             selectedText: selectedText,
             extractedContext: context,
             sourceContext: origin?.boundedSource() ?? "",
-            sourceLabel: origin?.promptSourceLabel ?? ""
+            sourceLabel: origin?.promptSourceLabel ?? "",
+            explainSelection: !useWebPath && appState.settings.selectedSummaryProvider != .webAI
         )
         guard !prompt.isEmpty else { return }
 
@@ -808,12 +809,14 @@ struct SummaryColumnView: View {
             return "cloud.fill"
         case .applePCCGateway:
             return "network"
-        case .mlxLocal, .coreAIMLXLocal:
+        case .coreAIMLXLocal:
             return "memorychip"
         case .webAI:
             return "globe"
         case .summarizeDaemon:
             return "terminal"
+        case .chatGPT:
+            return "person.badge.key"
         }
     }
 
@@ -827,12 +830,14 @@ struct SummaryColumnView: View {
             return .blue.opacity(0.1)
         case .applePCCGateway:
             return .cyan.opacity(0.12)
-        case .mlxLocal, .coreAIMLXLocal:
+        case .coreAIMLXLocal:
             return .orange.opacity(0.1)
         case .webAI:
             return .teal.opacity(0.14)
         case .summarizeDaemon:
             return .indigo.opacity(0.14)
+        case .chatGPT:
+            return .green.opacity(0.12)
         }
     }
 }

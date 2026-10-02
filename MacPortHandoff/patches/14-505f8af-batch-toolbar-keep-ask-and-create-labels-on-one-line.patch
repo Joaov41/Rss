@@ -1,0 +1,34 @@
+From 505f8af1810b5900aa5625304e07eb0979a17846 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 17:16:46 +0100
+Subject: [PATCH] Batch toolbar: keep Ask and Create labels on one line
+
+---
+ RSSReaderApp/Views/ContentView.swift | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index f941c56..40eb950 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -6025,6 +6025,8 @@ struct DraggableGlobalSummaryView: View {
+                         Image(systemName: "questionmark.circle")
+                     } else {
+                         Label("Ask", systemImage: "questionmark.circle")
++                            .lineLimit(1)
++                            .fixedSize()
+                     }
+                 }
+                 .foregroundColor(showQAInterface ? .accentColor : .secondary)
+@@ -6066,6 +6068,8 @@ struct DraggableGlobalSummaryView: View {
+                             .foregroundColor(.secondary)
+                     } else {
+                         Label("Create", systemImage: "wand.and.stars")
++                            .lineLimit(1)
++                            .fixedSize()
+                             .foregroundColor(.secondary)
+                     }
+                 }
+-- 
+2.54.0 (Apple Git-157)
+

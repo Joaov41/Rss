@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#141614">
+  <meta name="description" content="An interactive visual guide to RSSum for iPad and iPhone.">
+  <link rel="icon" href="/favicon.png">
+  <title>RSSum Tutorial</title>
+  <link rel="stylesheet" href="/site-theme.css">
+  <link rel="stylesheet" href="styles.css?v=20260924b">
+</head>
+<body>
+  <a class="skip-link" href="#guide">Skip to the guide</a>
+
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="RSSum home">
+      <img src="/app-icon.png" width="36" height="36" alt="">
+      <span>RSSum</span>
+      <small>Guide</small>
+    </a>
+    <div class="header-actions">
+      <a class="header-link" href="#reddit-setup">Reddit setup</a>
+      <a class="header-link" href="#models">Model guide</a>
+      <a class="header-link" href="#gateways">Gateway setup</a>
+      <button class="quiet-button" id="startTourTop" type="button">Start guide <span aria-hidden="true">→</span></button>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-label="Tutorial overview">
+      <div class="hero-copy">
+        <p class="eyebrow">RSSum for iPhone and iPad</p>
+        <h1>Your RSSum guide.</h1>
+        <p class="hero-deck">Set up your sources, explore the controls, and choose your AI provider. A visual reference for reading, summaries, Q&amp;A, YouTube, and podcasts.</p>
+        <div class="hero-actions">
+          <button class="primary-button" id="startTour" type="button">Begin the walkthrough</button>
+          <a class="text-link" href="#guide">Browse all 16 screens <span aria-hidden="true">↓</span></a>
+        </div>
+      </div>
+      <div class="hero-index" aria-label="Guide sections">
+        <span class="hero-index-label">Inside the guide</span>
+        <ol>
+          <li><a href="#guide">App walkthrough <span>16 screens</span></a></li>
+          <li><a href="#feature-notes">Summaries &amp; podcasts <span>Overview</span></a></li>
+          <li><a href="#reddit-setup">Connect Reddit <span>Setup</span></a></li>
+          <li><a href="#models">Choose an AI model <span>7 options</span></a></li>
+          <li><a href="#gateways">Set up a gateway <span>2 guides</span></a></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="video-overview" aria-label="RSSum app video walkthrough">
+      <details><summary>Watch the video walkthrough</summary>
+      <video
+        controls
+        playsinline
+        preload="metadata"
+        poster="/rssreader-video-poster.jpg"
+        aria-label="RSSum app walkthrough"
+      >
+        <source src="/rssreader-walkthrough.mp4" type="video/mp4">
+        Your browser does not support HTML video.
+      </video>
+      </details>
+    </section>
+
+    <section class="feature-notes" id="feature-notes" aria-labelledby="feature-notes-title">
+      <div class="section-heading feature-notes-heading">
+        <div>
+          <p class="eyebrow">Reference</p>
+          <h2 id="feature-notes-title">Summaries &amp; podcasts</h2>
+        </div>
+      </div>
+      <div class="feature-notes-grid">
+        <article class="feature-note">
+          <span>Summarize</span>
+          <h3>Summarize and ask questions</h3>
+          <p>Summarize RSS articles, Reddit posts and their comments, YouTube videos, and podcast episodes. Use individual summaries, an overall summary, or ask questions across the saved sources.</p>
+        </article>
+        <article class="feature-note">
+          <span>Embedded podcast player</span>
+          <h3>Play a podcast episode</h3>
+          <p>Play episodes from your podcast feeds inside RSSum. Summarize an episode or ask questions about it. If the podcast does not supply a transcript, RSSum creates one locally.</p>
+        </article>
+        <article class="feature-note">
+          <span>Local podcast creation</span>
+          <h3>Create a podcast from reading</h3>
+          <p>Generate a two-host podcast from your saved summaries, then listen inside RSSum. The Batch Podcast chapter below explains the voices, script, and episode workspace.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="guide" id="guide" aria-labelledby="guide-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Interactive walkthrough</p>
+          <h2 id="guide-title">App walkthrough</h2>
+        </div>
+        <p>Select a screen and then a control to read its explanation.</p>
+      </div>
+
+      <div class="tour-shell">
+        <aside class="chapter-rail" aria-label="Tutorial screens">
+          <div class="rail-progress"><span id="progressBar"></span></div>
+          <div class="rail-list" id="chapterList"></div>
+        </aside>
+
+        <div class="tour-main">
+          <div class="tour-meta">
+            <div>
+              <span class="step-kicker" id="stepKicker">Screen 01 of 16</span>
+              <h3 id="stepTitle">Your reading desk</h3>
+            </div>
+            <p id="stepSummary">Choose a source, scan the feed, then act on everything in it.</p>
+          </div>
+
+          <div class="stage-wrap">
+            <figure class="screen-stage" id="screenStage">
+              <img id="screenImage" src="assets/screens/01-feed.png" alt="RSSum feed screen">
+              <div class="hotspot-layer" id="hotspotLayer"></div>
+              <figcaption id="screenCaption">RSS feed and subscription navigation</figcaption>
+            </figure>
+
+            <aside class="inspector" aria-live="polite">
+              <div class="inspector-topline">
+                <span id="controlCount">Control 1 of 7</span>
+                <span class="control-symbol" id="controlSymbol" aria-hidden="true">▣</span>
+              </div>
+              <h4 id="controlTitle">Show or hide the sidebar</h4>
+              <p id="controlDescription">Collapse the Library and Subscriptions column when you want more room for the feed.</p>
+              <p class="control-tip" id="controlTip"><strong>Good to know</strong><span>Your selected source and reading position stay in place.</span></p>
+              <div class="control-list" id="controlList" aria-label="Controls on this screen"></div>
+            </aside>
+          </div>
+
+          <div class="tour-navigation">
+            <button class="nav-button" id="prevStep" type="button"><span aria-hidden="true">←</span> Previous</button>
+            <div class="step-dots" id="stepDots" aria-label="Tour progress"></div>
+            <button class="nav-button next" id="nextStep" type="button">Next <span aria-hidden="true">→</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="reddit-setup" id="reddit-setup" aria-labelledby="reddit-setup-title">
+      <div class="section-heading reddit-heading">
+        <div>
+          <p class="eyebrow">Reddit connection</p>
+          <h2 id="reddit-setup-title">Connect Reddit<br>without errors.</h2>
+        </div>
+        <p>RSSum connects through a Reddit app that you create. The app type and redirect URI must match these instructions exactly or Reddit sign-in will fail.</p>
+      </div>
+
+      <ol class="reddit-setup-steps">
+        <li>
+          <span>01</span>
+          <div>
+            <h3>Choose installed app</h3>
+            <p>When creating the app in Reddit&apos;s developer settings, select <strong>installed app</strong> as the app type.</p>
+          </div>
+        </li>
+        <li>
+          <span>02</span>
+          <div>
+            <h3>Use the exact redirect URI</h3>
+            <p>Enter <code>redapp://auth</code> exactly as shown. The value is case-sensitive and must not end with a slash.</p>
+            <div class="command-row reddit-uri-row"><code>redapp://auth</code><button class="copy-command" type="button" data-copy="redapp://auth" aria-label="Copy Reddit redirect URI">Copy</button></div>
+          </div>
+        </li>
+        <li>
+          <span>03</span>
+          <div>
+            <h3>Paste the Client ID into RSSum</h3>
+            <p>Copy the Client ID shown under your Reddit app&apos;s name and paste it into RSSum. Do not paste a client secret.</p>
+          </div>
+        </li>
+        <li>
+          <span>04</span>
+          <div>
+            <h3>Check for invisible formatting</h3>
+            <p>Remove any leading or trailing whitespace. <code>redapp://auth/</code> is not valid because it includes a trailing slash.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="model-guide" id="models" aria-labelledby="models-title">
+      <div class="section-heading model-heading">
+        <div>
+          <p class="eyebrow">AI providers</p>
+          <h2 id="models-title">Choose the right model<br>for the job.</h2>
+        </div>
+        <p>RSSum can use local models, cloud APIs, browser-based AI, or a Mac gateway. The main differences are how much content each option can process, where that processing happens, and what it costs.</p>
+      </div>
+
+      <div class="model-grid">
+        <article class="model-card recommended">
+          <div class="model-card-top"><span>On device</span><b>Good default</b></div>
+          <h3>Apple Local</h3>
+          <p>Runs entirely on your device. It is private, free, and needs no API key, but it requires a device that supports Apple Intelligence.</p>
+          <ul>
+            <li>Best for articles and smaller Reddit posts</li>
+            <li>Limited context window for very large threads</li>
+            <li>Offers to reroute when the content is too large</li>
+          </ul>
+        </article>
+
+        <article class="model-card recommended">
+          <div class="model-card-top"><span>Apple cloud</span><b>Large context</b></div>
+          <h3>Apple Cloud</h3>
+          <p>Uses Apple Private Cloud Compute. It is free and can handle much more content than Apple Local, making it better for large Reddit threads and long documents.</p>
+          <ul>
+            <li>Available on iOS 27</li>
+            <li>Unavailable on iOS 26</li>
+            <li>Supports podcast creation</li>
+          </ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-card-top"><span>Cloud API</span><b>Best all-rounder</b></div>
+          <h3>Gemini</h3>
+          <p>Uses Google’s Gemini API with your own API key. It is fast, inexpensive, and has a very large context window.</p>
+          <ul>
+            <li>Well suited to full subreddits and long time ranges</li>
+            <li>Supports large inputs and podcast creation</li>
+            <li>Heavy personal use cost about $2 in one month; actual cost varies</li>
+          </ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-card-top"><span>Built-in browser</span><b>No API key</b></div>
+          <h3>Web AI</h3>
+          <p>Uses ChatGPT or Gemini through the app’s built-in browser. Sign in with your normal account, including a free account, without configuring an API key.</p>
+          <ul>
+            <li>No separate API usage charges</li>
+            <li>Slower than using an API directly</li>
+            <li>Processing happens through the selected web service</li>
+          </ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-card-top"><span>On device</span><b>Bring a model</b></div>
+          <h3>CoreAI MLX Local</h3>
+          <p>Lets you choose and run a free local MLX model. It gives you more control while keeping processing on the device.</p>
+          <ul>
+            <li>Private and configurable</li>
+            <li>Uses device storage, memory, and compute</li>
+            <li>Context depends on the model and device</li>
+          </ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-card-top"><span>Mac gateway</span><b>For subscribers</b></div>
+          <h3>Codex / Summarize</h3>
+          <p>Uses the Codex or ChatGPT account already signed in on your Mac. It is useful if you already subscribe and want to avoid separate per-request API billing.</p>
+          <ul>
+            <li>The Mac must be on and available</li>
+            <li>Your account’s normal usage limits still apply</li>
+            <li>Supports large inputs and podcast creation</li>
+          </ul>
+        </article>
+
+        <article class="model-card">
+          <div class="model-card-top"><span>Mac gateway</span><b>Temporary</b></div>
+          <h3>Apple PCC Gateway</h3>
+          <p>Lets an iOS 26 device use the Apple Private Cloud Compute model through a Mac running the latest beta software.</p>
+          <ul>
+            <li>Uses the same model as Apple Cloud</li>
+            <li>The Mac must stay on and reachable</li>
+            <li>Expected to be removed after iOS 27 is publicly available</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="model-advice">
+        <div>
+          <p class="eyebrow">Recommended setup</p>
+          <h3>Start local. Reroute when needed.</h3>
+          <p>On an Apple Intelligence device, keep Apple Local enabled for smaller tasks and use Gemini for larger ones. RSSum detects when content exceeds the local context window and lets you choose a larger provider.</p>
+        </div>
+        <div>
+          <p class="eyebrow">Why so many options?</p>
+          <h3>The app is still being tested.</h3>
+          <p>The current list is intentionally broad while local models, cloud models, and gateway workflows are evaluated. It will be simplified before release, and some temporary or experimental options may be removed.</p>
+        </div>
+      </div>
+
+      <div class="model-use-cases">
+        <article>
+          <span>Free option</span>
+          <h3>Web AI</h3>
+          <p>Use a free ChatGPT or Gemini account through the built-in browser when you do not want an API key or usage bill.</p>
+        </article>
+        <article>
+          <span>YouTube</span>
+          <h3>The transcript is the source</h3>
+          <p>RSSum always sends the video’s captions or transcript to the selected provider. Local models favor privacy; cloud models generally offer more context and speed.</p>
+        </article>
+        <article>
+          <span>Podcast creation</span>
+          <h3>Large-context providers only</h3>
+          <p>Podcast creation needs more context and is currently available with Gemini, Apple Cloud, and providers that run through a Mac gateway.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="gateway-guide" id="gateways" aria-labelledby="gateways-title">
+      <div class="section-heading gateway-heading">
+        <div>
+          <p class="eyebrow">Mac-powered providers</p>
+          <h2 id="gateways-title">Connect the app<br>to your Mac.</h2>
+        </div>
+        <p>These providers run through a companion service on your Mac. Your iPhone or iPad sends the prompt over your local network; the Mac forwards it to the selected AI service and returns only the answer.</p>
+      </div>
+
+      <div class="gateway-switcher" role="tablist" aria-label="Choose a gateway guide">
+        <button class="gateway-tab active" id="codexTab" type="button" role="tab" aria-selected="true" aria-controls="codexGateway" data-gateway="codex">
+          <span class="gateway-tab-icon codex-icon" aria-hidden="true">⌘</span>
+          <span><strong>Codex / Summarize</strong><small>Codex CLI through Summarize</small></span>
+        </button>
+        <button class="gateway-tab" id="pccTab" type="button" role="tab" aria-selected="false" aria-controls="pccGateway" data-gateway="pcc" tabindex="-1">
+          <span class="gateway-tab-icon pcc-icon" aria-hidden="true">◌</span>
+          <span><strong>Apple PCC Gateway</strong><small>Foundation Models CLI through PCC</small></span>
+        </button>
+      </div>
+
+      <article class="gateway-panel active" id="codexGateway" role="tabpanel" aria-labelledby="codexTab">
+        <div class="gateway-intro">
+          <div>
+            <span class="route-number">Route 01</span>
+            <h3>Codex / Summarize</h3>
+            <p>Use the Codex account already signed in on your Mac. Summarize prepares the request, Codex generates the answer, and the open RSSum Mac app securely relays it back to your iPhone or iPad.</p>
+          </div>
+          <div class="requirements">
+            <span>Before you begin</span>
+            <ul>
+              <li>A Mac and iPhone/iPad on the same network</li>
+              <li>Node.js with npm installed on the Mac</li>
+              <li>Codex CLI installed and signed in</li>
+              <li>RSSum installed on the Mac</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="route-diagram" aria-label="Codex Summary request route">
+          <div class="route-node"><span>1</span><strong>RSSum</strong><small>iPhone or iPad</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="route-node"><span>2</span><strong>RSS Mac bridge</strong><small>Port 8790 · secret protected</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="route-node"><span>3</span><strong>Summarize</strong><small>Local daemon · port 8787</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="route-node accent-codex"><span>4</span><strong>Codex CLI</strong><small>Signed-in Mac account</small></div>
+        </div>
+
+        <ol class="setup-steps">
+          <li>
+            <span class="step-number">01</span>
+            <div>
+              <h4>Prepare Codex on the Mac</h4>
+              <p>Install the Codex CLI if needed, then sign in. The gateway uses this Mac’s Codex login and its associated usage limits.</p>
+              <div class="command-row"><code>codex login</code><button class="copy-command" type="button" data-copy="codex login" aria-label="Copy codex login command">Copy</button></div>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div>
+              <h4>Download and run the one-time setup</h4>
+              <p>Download the setup script directly from this guide. It installs Summarize, creates private tokens, configures the daemon, starts it, and prints the iPad connection details.</p>
+              <a class="script-download" href="downloads/setup-rssreader-codex-summarize.sh" download="setup-rssreader-codex-summarize.sh">
+                <span aria-hidden="true">↓</span>
+                <span><strong>Download Codex / Summarize setup</strong><small>setup-rssreader-codex-summarize.sh</small></span>
+              </a>
+              <p class="run-label">Then run this command in Terminal:</p>
+              <div class="command-row"><code>chmod +x ~/Downloads/setup-rssreader-codex-summarize.sh &amp;&amp; ~/Downloads/setup-rssreader-codex-summarize.sh</code><button class="copy-command" type="button" data-copy="chmod +x ~/Downloads/setup-rssreader-codex-summarize.sh &amp;&amp; ~/Downloads/setup-rssreader-codex-summarize.sh" aria-label="Copy Summarize setup command">Copy</button></div>
+              <p class="path-note">The full connection details are also saved to <code>~/.summarize/rssreader-gateway-info.txt</code>.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div>
+              <h4>Keep RSSum open on the Mac</h4>
+              <p>The Summarize daemon works locally, while the Mac app provides the network bridge your iPhone or iPad connects to. Both the Mac and the mobile device must remain on the same local network.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">04</span>
+            <div>
+              <h4>Enter the connection on iPhone or iPad</h4>
+              <p>Open <strong>Settings → Summary Source → Codex / Summarize</strong>, then use the values printed by the setup script.</p>
+              <div class="settings-grid">
+                <div><span>Mac host or IP</span><strong>Leave blank first</strong><small>Uses automatic discovery. Enter the Mac’s LAN IP only if discovery fails.</small></div>
+                <div><span>Bridge port</span><strong>8790</strong><small>Default port created by the setup script.</small></div>
+                <div><span>Bridge secret/pass</span><strong>From the Mac</strong><small>Copy the generated bridge secret exactly.</small></div>
+              </div>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">05</span>
+            <div>
+              <h4>Test, then summarize</h4>
+              <p>Tap <strong>Test Connection</strong>. When it reports <strong>Connected</strong>, Codex / Summarize can power article summaries, Reddit summaries, Overall Summary, and Q&amp;A.</p>
+            </div>
+          </li>
+        </ol>
+      </article>
+
+      <article class="gateway-panel" id="pccGateway" role="tabpanel" aria-labelledby="pccTab" hidden>
+        <div class="gateway-intro">
+          <div>
+            <span class="route-number">Route 02</span>
+            <h3>Apple PCC Gateway</h3>
+            <p>Use Apple’s Foundation Models CLI on your Mac. A token-protected local gateway translates RSSum requests for <code>fm serve</code>, which runs the <code>pcc</code> model and returns the response.</p>
+          </div>
+          <div class="requirements">
+            <span>Before you begin</span>
+            <ul>
+              <li>A compatible Mac running the latest macOS 27 beta</li>
+              <li>The latest Apple beta developer toolchain</li>
+              <li>Foundation Models CLI configured on the Mac</li>
+              <li><code>fm available</code> confirms access</li>
+              <li>Mac and iPhone/iPad on the same network</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="route-diagram" aria-label="Apple PCC Gateway request route">
+          <div class="route-node"><span>1</span><strong>RSSum</strong><small>iPhone or iPad</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="route-node"><span>2</span><strong>PCC Gateway</strong><small>Port 1977 · token protected</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="route-node"><span>3</span><strong>fm serve</strong><small>Local service · port 1976</small></div>
+          <i aria-hidden="true">→</i>
+          <div class="route-node accent-pcc"><span>4</span><strong>Apple PCC</strong><small>Model: pcc</small></div>
+        </div>
+
+        <ol class="setup-steps">
+          <li>
+            <span class="step-number">01</span>
+            <div>
+              <h4>Confirm Foundation Models access</h4>
+              <p>In Terminal on the Mac, confirm that the Foundation Models CLI is installed and that the PCC model is available to this Mac.</p>
+              <div class="command-row"><code>fm available</code><button class="copy-command" type="button" data-copy="fm available" aria-label="Copy fm available command">Copy</button></div>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div>
+              <h4>Download, install, and start the gateway</h4>
+              <p>Download the self-contained installer directly from this guide. It creates a private token, installs reusable Mac launchers, and starts the gateway.</p>
+              <a class="script-download pcc-download" href="downloads/install-rssreader-pcc-gateway.sh" download="install-rssreader-pcc-gateway.sh">
+                <span aria-hidden="true">↓</span>
+                <span><strong>Download Apple PCC Gateway installer</strong><small>install-rssreader-pcc-gateway.sh</small></span>
+              </a>
+              <p class="run-label">Then run this command in Terminal:</p>
+              <div class="command-row"><code>chmod +x ~/Downloads/install-rssreader-pcc-gateway.sh &amp;&amp; ~/Downloads/install-rssreader-pcc-gateway.sh --start</code><button class="copy-command" type="button" data-copy="chmod +x ~/Downloads/install-rssreader-pcc-gateway.sh &amp;&amp; ~/Downloads/install-rssreader-pcc-gateway.sh --start" aria-label="Copy PCC installer command">Copy</button></div>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div>
+              <h4>Keep the gateway running</h4>
+              <p>The gateway Terminal window must remain open while RSSum uses PCC. To start it again later, open the <strong>Start RSSReader PCC Gateway</strong> launcher installed on the Mac.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">04</span>
+            <div>
+              <h4>Enter the connection on iPhone or iPad</h4>
+              <p>Open <strong>Settings → Summary Source → Apple PCC Gateway</strong> and copy the values shown by the installer.</p>
+              <div class="settings-grid">
+                <div><span>Mac host or IP</span><strong>Mac LAN IP</strong><small>Use <code>127.0.0.1</code> only in Simulator or on the same Mac.</small></div>
+                <div><span>Gateway port</span><strong>1977</strong><small>The gateway’s default network port.</small></div>
+                <div><span>Model</span><strong>pcc</strong><small>The default Foundation Models cloud model.</small></div>
+                <div><span>Gateway token</span><strong>From the Mac</strong><small>Copy the generated token exactly.</small></div>
+              </div>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">05</span>
+            <div>
+              <h4>Test the route</h4>
+              <p>Tap <strong>Test Connection</strong>. A connected result confirms the mobile app can reach the Mac gateway; your first real request also confirms PCC generation is available.</p>
+            </div>
+          </li>
+        </ol>
+      </article>
+
+      <aside class="gateway-notes" aria-label="Gateway security and troubleshooting">
+        <div><strong>Keep secrets private</strong><span>The bridge secret and gateway token authorize devices on your network. Do not publish or share them.</span></div>
+        <div><strong>Same network</strong><span>The mobile device must be able to reach the Mac. VPN isolation, guest Wi-Fi, or a firewall can block local connections.</span></div>
+        <div><strong>Mac IP changed?</strong><span>Wi-Fi may assign a new address. Re-run the setup tool or check the Mac’s Wi-Fi details, then update the host field.</span></div>
+        <div><strong>Still not connected?</strong><span>Keep the required Mac app or Terminal gateway open, verify the port and secret, then tap Test Connection again.</span></div>
+      </aside>
+    </section>
+
+    <section class="onboarding-note">
+      <button class="primary-button" id="restartTour" type="button">Restart the guide</button>
+      <a class="text-link" href="/download">Get RSSum</a>
+    </section>
+  </main>
+
+  <footer>
+    <a href="/">RSSum home</a>
+    <nav aria-label="Footer navigation"><a href="/support">Support</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+  </footer>
+
+  <script src="app.js?v=20260924b"></script>
+</body>
+</html>

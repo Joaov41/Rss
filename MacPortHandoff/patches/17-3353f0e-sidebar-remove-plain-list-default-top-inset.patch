@@ -1,0 +1,25 @@
+From 3353f0eaf2c6de11e199acf53e8aeca382f345a9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 18:49:44 +0100
+Subject: [PATCH] Sidebar: remove plain list default top inset
+
+---
+ RSSReaderApp/Views/ContentView.swift | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 0b50cb3..4191d0d 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -4170,6 +4170,8 @@ struct ContentView: View {
+ 	        .scrollContentBackground(.hidden)
+ 	        .frame(minWidth: 200)
+             #if os(iOS)
++            // Drop the plain list's default top inset; the list already starts below the sidebar button.
++            .contentMargins(.top, 4, for: .scrollContent)
+             .navigationTitle("")
+             .navigationBarTitleDisplayMode(.inline)
+             .toolbar {
+-- 
+2.54.0 (Apple Git-157)
+

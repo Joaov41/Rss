@@ -1,0 +1,34 @@
+From 1908045bfb851c74d4721a55c546a8a73241a4f7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 20:40:25 +0100
+Subject: [PATCH] Reddit toolbar: dim scrolled content under the glass instead
+ of hiding it
+
+---
+ RSSReaderApp/Views/RedditDetailView.swift | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index d686739..df717b1 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -5176,11 +5176,12 @@ private struct OverlayBarScrollEdgeFade: ViewModifier {
+             content.mask {
+                 VStack(spacing: 0) {
+                     LinearGradient(
+-                        // Fully clear under the post's toolbar so scrolled content (e.g. the
+-                        // comments header pill) never shows through it; fade in just below.
++                        // Keep scrolled content faintly visible under the post's glass toolbar
++                        // (text still reads as passing beneath it) but dimmed enough that other
++                        // glass pills, like the comments header, don't clash with it.
+                         stops: [
+-                            .init(color: .clear, location: 0),
+-                            .init(color: .clear, location: 0.8),
++                            .init(color: .black.opacity(0.18), location: 0),
++                            .init(color: .black.opacity(0.3), location: 0.75),
+                             .init(color: .black, location: 1)
+                         ],
+                         startPoint: .top,
+-- 
+2.54.0 (Apple Git-157)
+

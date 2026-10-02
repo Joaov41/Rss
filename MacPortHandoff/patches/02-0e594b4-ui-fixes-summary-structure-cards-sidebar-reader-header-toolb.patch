@@ -1,0 +1,1516 @@
+From 0e594b432469497274ddd1c47b611a65a123042a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 11:48:02 +0100
+Subject: [PATCH] UI fixes: summary structure, cards, sidebar, reader header,
+ toolbars, timestamps
+
+---
+ RSSReaderApp/Views/AskAIUtilities.swift    |  99 ++++
+ RSSReaderApp/Views/ContentView.swift       | 504 ++++++++++++---------
+ RSSReaderApp/Views/RedditDetailView.swift  | 224 ++++-----
+ RSSReaderApp/Views/YouTubePlayerView.swift |  15 +
+ 4 files changed, 516 insertions(+), 326 deletions(-)
+
+diff --git a/RSSReaderApp/Views/AskAIUtilities.swift b/RSSReaderApp/Views/AskAIUtilities.swift
+index 6677437..fc6df55 100644
+--- a/RSSReaderApp/Views/AskAIUtilities.swift
++++ b/RSSReaderApp/Views/AskAIUtilities.swift
+@@ -210,10 +210,22 @@ func cleanMarkdownArtifactsForDisplay(_ input: String) -> String {
+     value = value.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+     value = value.replacingOccurrences(of: "(?m)(^\\s*[-•]?\\s*)#{1,6}\\s*", with: "$1", options: .regularExpression)
+     value = value.replacingOccurrences(of: "(?m)^\\s*\\*\\s+", with: "• ", options: .regularExpression)
++    value = value.replacingOccurrences(of: "(?m)^[ \\t]*[-–][ \\t]+", with: "• ", options: .regularExpression)
++    value = removingRepeatedZeroTimestamps(value)
+     value = value.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+     return value.trimmingCharacters(in: .whitespacesAndNewlines)
+ }
+ 
++/// Models without real timing data sometimes cite "[0:00]" after nearly every sentence.
++/// A lone [0:00] can be a genuine citation of the opening, so only repeated ones are dropped.
++private func removingRepeatedZeroTimestamps(_ input: String) -> String {
++    let pattern = #"[ \t]?\[0?0:00\]"#
++    guard let regex = try? NSRegularExpression(pattern: pattern) else { return input }
++    let range = NSRange(input.startIndex..., in: input)
++    guard regex.numberOfMatches(in: input, range: range) >= 3 else { return input }
++    return regex.stringByReplacingMatches(in: input, range: range, withTemplate: "")
++}
++
+ func cleanAndFormatCommentSummaryForDisplay(_ input: String) -> String {
+     var value = cleanMarkdownArtifactsForDisplay(input)
+     guard !value.isEmpty else { return value }
+@@ -1323,6 +1335,92 @@ final class AskAITextView: UITextView, UITextViewDelegate {
+         return TimeInterval(values[0] * 3_600 + values[1] * 60 + values[2])
+     }
+ 
++    /// Gives plain-text summaries visual structure without changing a single character:
++    /// standalone short lines become headings, a leading "Label:" becomes bold, and
++    /// "• " bullets get a hanging indent. Copy, TTS and Ask AI keep reading the same text.
++    private func applySummaryStructureStyling() {
++        let storage = textStorage
++        let source = storage.string as NSString
++        guard source.length > 0 else { return }
++
++        let baseFont = font ?? UIFont.preferredFont(forTextStyle: .body)
++        let boldDescriptor = baseFont.fontDescriptor.withSymbolicTraits(.traitBold) ?? baseFont.fontDescriptor
++        let labelFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize)
++        let headingFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize + 2)
++
++        var paragraphRanges: [NSRange] = []
++        source.enumerateSubstrings(
++            in: NSRange(location: 0, length: source.length),
++            options: [.byParagraphs, .substringNotRequired]
++        ) { _, range, _, _ in
++            paragraphRanges.append(range)
++        }
++        let contentParagraphCount = paragraphRanges.filter {
++            !source.substring(with: $0).trimmingCharacters(in: .whitespaces).isEmpty
++        }.count
++        guard contentParagraphCount > 1 else { return }
++
++        let bulletPrefix = "• "
++        let bulletIndent = (bulletPrefix as NSString).size(withAttributes: [.font: baseFont]).width
++
++        storage.beginEditing()
++        for range in paragraphRanges {
++            let paragraph = source.substring(with: range)
++            let trimmed = paragraph.trimmingCharacters(in: .whitespaces)
++            guard !trimmed.isEmpty else { continue }
++
++            if Self.isSummaryHeading(trimmed) {
++                storage.addAttribute(.font, value: headingFont, range: range)
++                continue
++            }
++
++            var labelSearchStart = 0
++            if paragraph.hasPrefix(bulletPrefix) {
++                let style = NSMutableParagraphStyle()
++                style.headIndent = bulletIndent
++                storage.addAttribute(.paragraphStyle, value: style, range: range)
++                labelSearchStart = (bulletPrefix as NSString).length
++            }
++
++            if let labelLength = Self.summaryLabelLength(in: paragraph, from: labelSearchStart) {
++                storage.addAttribute(
++                    .font,
++                    value: labelFont,
++                    range: NSRange(location: range.location + labelSearchStart, length: labelLength)
++                )
++            }
++        }
++        storage.endEditing()
++    }
++
++    /// A heading is a short standalone line that does not read like a sentence.
++    private static func isSummaryHeading(_ line: String) -> Bool {
++        guard line.count <= 70,
++              let first = line.unicodeScalars.first,
++              CharacterSet.uppercaseLetters.contains(first) || CharacterSet.decimalDigits.contains(first),
++              !line.hasPrefix("• ") else { return false }
++        let words = line.split(whereSeparator: { $0.isWhitespace })
++        guard (1...9).contains(words.count) else { return false }
++        if line.hasSuffix(":") { return !line.dropLast().contains(":") }
++        guard let last = line.last, !".!?,;:\"”".contains(last) else { return false }
++        return !line.contains(": ")
++    }
++
++    /// Length (in UTF-16 units, including the colon) of a leading "Short Label:" to embolden.
++    private static func summaryLabelLength(in paragraph: String, from offset: Int) -> Int? {
++        let text = paragraph as NSString
++        guard offset < text.length else { return nil }
++        let body = text.substring(from: offset)
++        guard let match = body.range(
++            of: "^[A-Z0-9][A-Za-z0-9&/'’()\\- ]{0,48}:(?=\\s)",
++            options: .regularExpression
++        ) else { return nil }
++        let label = body[match]
++        guard label.split(separator: " ").count <= 6,
++              body[match.upperBound...].trimmingCharacters(in: .whitespaces).count > 0 else { return nil }
++        return (String(label) as NSString).length
++    }
++
+     private func applySummaryReferenceLinks(maximumReference: Int) {
+         let fullRange = NSRange(location: 0, length: textStorage.length)
+         if fullRange.length > 0 {
+@@ -1336,6 +1434,7 @@ final class AskAITextView: UITextView, UITextViewDelegate {
+                     ],
+                     range: fullRange
+                 )
++                applySummaryStructureStyling()
+             }
+         }
+         applyDetectedURLLinks()
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index d5e38a9..568b40e 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -597,7 +597,7 @@ enum ReaderModeService {
+               '<style>' +
+               ':root { --bg-color: #f6f4ef; --text-color: #1e1e1e; --secondary-color: #6b6b6b; --link-color: #007AFF; }' +
+               '@media (prefers-color-scheme: dark) { :root { --bg-color: #101113; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
+-              'body { margin: 0; background: var(--bg-color); color: var(--text-color); }' +
++              'body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; }' +
+               '.reader-shell { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }' +
+               '.reader-title { font-size: \(titleFontSize)px; line-height: 1.2; margin: 0 0 16px; font-weight: 700; }' +
+               '.reader-byline { font-size: 14px; color: var(--secondary-color); margin-bottom: 20px; }' +
+@@ -1058,7 +1058,7 @@ enum ReaderModeService {
+               '<style>' +
+               ':root { --bg-color: #f6f4ef; --text-color: #1e1e1e; --secondary-color: #6b6b6b; --link-color: #007AFF; }' +
+               '@media (prefers-color-scheme: dark) { :root { --bg-color: #101113; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
+-              'body { margin: 0; background: var(--bg-color); color: var(--text-color); }' +
++              'body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; }' +
+               '.reader-shell { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }' +
+               '.reader-title { font-size: 30px; line-height: 1.2; margin: 0 0 16px; font-weight: 700; }' +
+               '.reader-byline { font-size: 14px; color: var(--secondary-color); margin-bottom: 20px; }' +
+@@ -1424,9 +1424,9 @@ struct AppColors {
+     static func redditCardBorder(for colorScheme: ColorScheme) -> LinearGradient {
+         return LinearGradient(
+             colors: [
+-                Color(red: 0.82, green: 0.26, blue: 0.14),
+-                Color.orange,
+-                Color(red: 0.96, green: 0.78, blue: 0.28)
++                Color(red: 0.82, green: 0.26, blue: 0.14).opacity(0.4),
++                Color.orange.opacity(0.4),
++                Color(red: 0.96, green: 0.78, blue: 0.28).opacity(0.4)
+             ],
+             startPoint: .leading,
+             endPoint: .trailing
+@@ -2278,6 +2278,26 @@ private struct IOSArticleChromeIconButtonStyle: ButtonStyle {
+     }
+ }
+ 
++/// Same look as the icon style, but sized to fit an icon plus a short text label.
++private struct IOSArticleChromeLabeledButtonStyle: ButtonStyle {
++    @Environment(\.colorScheme) private var colorScheme
++
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label
++            .font(.system(size: 14, weight: .semibold))
++            .symbolRenderingMode(.hierarchical)
++            .padding(.horizontal, 12)
++            .frame(minHeight: 36)
++            .contentShape(Capsule(style: .continuous))
++            .background {
++                Capsule(style: .continuous)
++                    .fill(configuration.isPressed ? Color.white.opacity(colorScheme == .dark ? 0.16 : 0.12) : .clear)
++            }
++            .scaleEffect(configuration.isPressed ? 0.96 : 1)
++            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
++    }
++}
++
+ private struct IOSArticleChromeSelectedButtonStyle: ButtonStyle {
+     @Environment(\.colorScheme) private var colorScheme
+ 
+@@ -2341,26 +2361,29 @@ struct DetailTopBar: View {
+                         Button(action: {
+                             appState.requestSummary(for: article)
+                         }) {
+-                            topBarIcon("text.quote")
++                            summarizeLabel
+                         }
+-                        .buttonStyle(IOSArticleChromeIconButtonStyle())
++                        .buttonStyle(IOSArticleChromeLabeledButtonStyle())
++                        .accessibilityLabel("Summarize")
+ 
+                         if shouldShowExplicitWebAIControls {
+                             Button(action: {
+                                 appState.requestWebSummary(for: article)
+                             }) {
+-                                topBarIcon("globe")
++                                topBarIcon("arrow.up.forward.app")
+                             }
+                             .buttonStyle(IOSArticleChromeIconButtonStyle())
++                            .accessibilityLabel("Summarize with \(appState.settings.selectedWebAIProvider.displayName)")
+                             .help("Generate article summary with \(appState.settings.selectedWebAIProvider.displayName)")
+                         }
+                     } else if let post = appState.selectedRedditPost {
+                         Button(action: {
+                             appState.requestSummary(for: nil, redditPost: post)
+                         }) {
+-                            topBarIcon("text.quote")
++                            summarizeLabel
+                         }
+-                        .buttonStyle(IOSArticleChromeSelectedButtonStyle())
++                        .buttonStyle(IOSArticleChromeLabeledButtonStyle())
++                        .accessibilityLabel("Summarize")
+                     }
+ 
+                     if let article = appState.selectedArticle {
+@@ -2370,6 +2393,7 @@ struct DetailTopBar: View {
+                             topBarIcon(article.isFavorite ? "star.fill" : "star", color: article.isFavorite ? .yellow : .primary)
+                         }
+                         .buttonStyle(IOSArticleChromeIconButtonStyle())
++                        .accessibilityLabel(article.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+                     } else if let post = appState.selectedRedditPost {
+                         Button(action: {
+                             appState.toggleRedditPostFavorite(post)
+@@ -2377,6 +2401,7 @@ struct DetailTopBar: View {
+                             topBarIcon(post.isFavorite ? "star.fill" : "star", color: post.isFavorite ? .yellow : .primary)
+                         }
+                         .buttonStyle(IOSArticleChromeIconButtonStyle())
++                        .accessibilityLabel(post.isFavorite ? "Remove from Favorites" : "Add to Favorites")
+                     }
+ 
+                     if appState.selectedArticle != nil {
+@@ -2386,6 +2411,8 @@ struct DetailTopBar: View {
+                             topBarIcon("questionmark.circle")
+                         }
+                         .buttonStyle(IOSArticleChromeIconButtonStyle())
++                        .accessibilityLabel("Ask about this article")
++                        .help("Ask about this article")
+                     }
+ 
+                     if let article = appState.selectedArticle {
+@@ -2454,6 +2481,21 @@ struct DetailTopBar: View {
+         .frame(minWidth: 72, minHeight: 24)
+     }
+ 
++    /// "Summarize" with its icon on iPad; icon-only on iPhone where the bar is narrow.
++    @ViewBuilder
++    private var summarizeLabel: some View {
++        if UIDevice.current.userInterfaceIdiom == .phone {
++            topBarIcon("text.quote")
++        } else {
++            HStack(spacing: 6) {
++                Image(systemName: "text.quote")
++                    .font(.system(size: 15, weight: .semibold))
++                Text("Summarize")
++                    .lineLimit(1)
++            }
++        }
++    }
++
+     private func topBarIcon(_ systemName: String, color: Color = .primary) -> some View {
+         Image(systemName: systemName)
+             .font(.system(size: 18, weight: .semibold))
+@@ -3407,7 +3449,9 @@ struct ContentView: View {
+             BatchPodcastPresentationHost(session: appState.batchPodcastSession)
+                 .environmentObject(appState)
+         }
+-        .overlay(alignment: .bottom) {
++        // Anchored bottom-trailing (not centred on the whole window) so on iPad it sits
++        // inside the content column instead of straddling the sidebar edge.
++        .overlay(alignment: .bottomTrailing) {
+             if UIDevice.current.userInterfaceIdiom == .pad,
+                let activeEpisodeID = appState.podcastEpisodePlayer.activeEpisodeID,
+                appState.selectedArticle?.id != activeEpisodeID,
+@@ -3416,7 +3460,8 @@ struct ContentView: View {
+                     player: appState.podcastEpisodePlayer,
+                     onOpenEpisode: appState.openActivePodcastEpisode
+                 )
+-                    .padding(.horizontal, 16)
++                    .frame(maxWidth: 520)
++                    .padding(.horizontal, 24)
+                     .padding(.bottom, 18)
+                     .transition(.move(edge: .bottom).combined(with: .opacity))
+                     .zIndex(2_000)
+@@ -4564,16 +4609,11 @@ struct ContentView: View {
+                 } else if let summary = appState.todaySummaryResult {
+                     Section(header: Text("Today's Topics Overview")) {
+                         VStack(alignment: .leading, spacing: 12) {
+-                            ArticleGlassySummary(summary: summary)
++                            ArticleGlassySummary(
++                                summary: summary,
++                                onCopy: { setPlatformClipboardString(summary) }
++                            )
+                             HStack(spacing: 12) {
+-                                Button(action: {
+-                                setPlatformClipboardString(summary)
+-                            }) {
+-                                Label("Copy Summary", systemImage: "doc.on.doc")
+-                            }
+-                                .buttonStyle(LiquidGlassButtonStyle())
+-                                .disabled(summary.isEmpty)
+-
+                                 Button(role: .cancel) {
+                                     appState.clearTodaySummary()
+                                 } label: {
+@@ -4998,7 +5038,7 @@ struct ContentView: View {
+                             Text("Loading feed...")
+                         }
+                     }
+-                    .navigationTitle(subscription.title)
++                    .navigationTitle(RedditCardPreview.decodeHTMLEntities(subscription.title))
+                     .onAppear {
+                         appState.refreshSingleRSSFeed(url: subscription.url)
+                     }
+@@ -5008,7 +5048,7 @@ struct ContentView: View {
+                     redditSubscriptionView(feed: feed, subscription: subscription)
+                 } else {
+                     Text("Loading subreddit...")
+-                        .navigationTitle(subscription.title)
++                        .navigationTitle(RedditCardPreview.decodeHTMLEntities(subscription.title))
+                         .onAppear {
+                             appState.refreshRedditFeeds(specificSubreddit: subscription.url)
+                         }
+@@ -5952,36 +5992,26 @@ struct DraggableGlobalSummaryView: View {
+                     Button {
+                         appState.retryLastGlobalSummary()
+                     } label: {
+-                        Image(systemName: "arrow.clockwise.circle.fill")
++                        Image(systemName: "arrow.clockwise")
+                             .foregroundColor(.secondary)
+                     }
+                     .disabled(appState.isLoading)
+-                }
+-
+-                Button {
+-                    appState.showGlobalSummary = false
+-                    appState.resumeDeferredFeedRefreshAfterGlobalSummary()
+-                } label: {
+-                    Image(systemName: "minus.circle.fill")
+-                        .foregroundColor(.secondary)
+-                }
+-
+-                Button {
+-                    appState.dismissGlobalSummaryAndClearContext()
+-                } label: {
+-                    Image(systemName: "xmark.circle.fill")
+-                        .foregroundColor(.secondary)
++                    .accessibilityLabel("Retry summary")
++                    .help("Retry summary")
+                 }
+ 
+                 Button {
+                     copySummaryToClipboard()
+                 } label: {
+-                    Image(systemName: "c.circle.fill")
++                    Image(systemName: "doc.on.doc")
+                         .foregroundColor(.secondary)
+                 }
+                 .disabled(!canCopySummary)
++                .accessibilityLabel("Copy summary")
+                 .help("Copy summary overview")
+ 
++                SummaryToolbarSeparator()
++
+                 Button {
+                     withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                         if showQAInterface {
+@@ -5991,60 +6021,57 @@ struct DraggableGlobalSummaryView: View {
+                         }
+                     }
+                 } label: {
+-                    Image(systemName: showQAInterface ? "questionmark.circle.fill" : "questionmark.circle.fill")
+-                        .foregroundColor(showQAInterface ? .accentColor : .secondary)
++                    if isPhoneSummaryToolbar {
++                        Image(systemName: "questionmark.bubble")
++                    } else {
++                        Label("Ask", systemImage: "questionmark.bubble")
++                    }
+                 }
++                .foregroundColor(showQAInterface ? .accentColor : .secondary)
+                 .disabled(!hasSummaryContent)
++                .accessibilityLabel("Ask about this overview")
+                 .help("Ask a question about this overview")
+ 
+-                SummaryToolbarSeparator()
++                // Whiteboard, infographic and podcast all turn the overview into
++                // something new, so they share one labelled menu.
++                Menu {
++                    Button {
++                        generateWhiteboard()
++                    } label: {
++                        Label("Whiteboard", systemImage: "square.grid.3x3")
++                    }
++                    .disabled(isGeneratingWhiteboard || !hasSummaryContent)
+ 
+-                // Whiteboard button
+-                Button {
+-                    generateWhiteboard()
+-                } label: {
+-                    if isGeneratingWhiteboard {
+-                        ProgressView()
+-                            .scaleEffect(0.7)
+-                    } else {
+-                        Image(systemName: "square.grid.3x3.fill")
+-                            .foregroundColor(.secondary)
++                    Button {
++                        generateInfographic()
++                    } label: {
++                        Label("Infographic", systemImage: "chart.bar.doc.horizontal")
+                     }
+-                }
+-                .disabled(isGeneratingWhiteboard || !hasSummaryContent)
+-                .help("Generate whiteboard visualization")
++                    .disabled(isGeneratingInfographic || !hasSummaryContent)
+ 
+-                // Infographic button
+-                Button {
+-                    generateInfographic()
++#if os(iOS)
++                    Button {
++                        appState.presentBatchPodcast()
++                    } label: {
++                        Label("Podcast", systemImage: "waveform.badge.mic")
++                    }
++                    .disabled(!hasSummaryContent)
++#endif
+                 } label: {
+-                    if isGeneratingInfographic {
++                    if isGeneratingWhiteboard || isGeneratingInfographic {
+                         ProgressView()
+                             .scaleEffect(0.7)
++                    } else if isPhoneSummaryToolbar {
++                        Image(systemName: "wand.and.stars")
++                            .foregroundColor(.secondary)
+                     } else {
+-                        Image(systemName: "chart.bar.doc.horizontal.fill")
++                        Label("Create", systemImage: "wand.and.stars")
+                             .foregroundColor(.secondary)
+                     }
+                 }
+-                .disabled(isGeneratingInfographic || !hasSummaryContent)
+-                .help("Generate infographic visualization")
+-
+-                SummaryToolbarSeparator()
+-
+-#if os(iOS)
+-                // Batch Podcast button
+-                Button {
+-                    appState.presentBatchPodcast()
+-                } label: {
+-                    Image(systemName: "waveform.badge.mic")
+-                        .foregroundColor(.secondary)
+-                }
+                 .disabled(!hasSummaryContent)
+-                .help("Generate batch podcast")
+-                .accessibilityLabel("Generate batch podcast")
+-
+-                SummaryToolbarSeparator()
+-#endif
++                .accessibilityLabel("Create whiteboard, infographic or podcast")
++                .help("Create a whiteboard, infographic or podcast")
+ 
+                 if shouldShowExplicitWebAIControls {
+                     Menu {
+@@ -6065,12 +6092,34 @@ struct DraggableGlobalSummaryView: View {
+                         }
+                         .disabled(!hasSummaryContent)
+                     } label: {
+-                        Image(systemName: "globe")
++                        Image(systemName: "arrow.up.forward.app")
+                             .foregroundColor(.secondary)
+                     }
+                     .disabled(!hasSummaryContent)
++                    .accessibilityLabel("Send to \(appState.settings.selectedWebAIProvider.displayName)")
+                     .help("Web actions for \(appState.settings.selectedWebAIProvider.displayName)")
+                 }
++
++                SummaryToolbarSeparator()
++
++                Button {
++                    appState.showGlobalSummary = false
++                    appState.resumeDeferredFeedRefreshAfterGlobalSummary()
++                } label: {
++                    Image(systemName: "minus.circle.fill")
++                        .foregroundColor(.secondary)
++                }
++                .accessibilityLabel("Minimize")
++                .help("Minimize")
++
++                Button {
++                    appState.dismissGlobalSummaryAndClearContext()
++                } label: {
++                    Image(systemName: "xmark.circle.fill")
++                        .foregroundColor(.secondary)
++                }
++                .accessibilityLabel("Close")
++                .help("Close")
+                 }
+                 .modifier(SummaryToolbarLayoutModifier(compact: isPhoneSummaryToolbar))
+                 .padding(.horizontal, isPhoneSummaryToolbar ? 8 : 16)
+@@ -6140,7 +6189,7 @@ struct DraggableGlobalSummaryView: View {
+                                 Button {
+                                     askGlobalSummaryWebQuestion()
+                                 } label: {
+-                                    Image(systemName: "globe")
++                                    Image(systemName: "arrow.up.forward.app")
+                                         .font(.subheadline)
+                                 }
+                                 .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+@@ -10557,7 +10606,7 @@ enum RedditCardPreview {
+             || normalized.hasPrefix("www.")
+     }
+ 
+-    private static func decodeHTMLEntities(_ input: String) -> String {
++    static func decodeHTMLEntities(_ input: String) -> String {
+         var value = input
+         let named: [(String, String)] = [
+             ("&amp;", "&"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"),
+@@ -10815,7 +10864,7 @@ struct ArticleRow: View {
+     }
+ 
+     private var cardBorderColor: Color {
+-        Color.blue
++        Color.blue.opacity(0.35)
+     }
+     
+     var body: some View {
+@@ -10824,11 +10873,14 @@ struct ArticleRow: View {
+             HStack {
+                 // Publication source
+                 HStack(spacing: 4) {
++                    if !article.isRead {
++                        UnreadDot()
++                    }
+                     if let url = article.url, let host = url.host {
+                         DomainIconView(domain: host, size: 14)
+                     }
+                     
+-                            Text(article.feedTitle)
++                            Text(RedditCardPreview.decodeHTMLEntities(article.feedTitle))
+                         .font(.system(size: articleMetadataFontSize, weight: .medium))
+                         .foregroundColor(.secondary)
+                     }
+@@ -10928,7 +10980,7 @@ struct ArticleRow: View {
+                 .fill(cardBackground)
+                 .overlay(
+                     RoundedRectangle(cornerRadius: 8)
+-                        .strokeBorder(cardBorderColor, lineWidth: 1.1)
++                        .strokeBorder(cardBorderColor, lineWidth: 1)
+                 )
+                 .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+         )
+@@ -10951,7 +11003,7 @@ struct ArticleRow: View {
+                     Text(ipadArticlePreviewText)
+                         .font(.system(size: 17))
+                         .foregroundColor(.secondary)
+-                        .lineLimit(6)
++                        .lineLimit(3)
+                         .lineSpacing(2)
+                         .multilineTextAlignment(.leading)
+                         .fixedSize(horizontal: false, vertical: true)
+@@ -10989,7 +11041,7 @@ struct ArticleRow: View {
+                     Text(ipadArticlePreviewText)
+                         .font(.system(size: 17))
+                         .foregroundColor(.secondary)
+-                        .lineLimit(11)
++                        .lineLimit(4)
+                         .lineSpacing(1)
+                         .multilineTextAlignment(.leading)
+                         .frame(maxHeight: .infinity, alignment: .top)
+@@ -10998,8 +11050,7 @@ struct ArticleRow: View {
+             }
+             .frame(
+                 maxWidth: .infinity,
+-                minHeight: 220,
+-                maxHeight: 220,
++                maxHeight: article.imageURL == nil ? nil : 170,
+                 alignment: .topLeading
+             )
+             .clipped()
+@@ -11009,7 +11060,7 @@ struct ArticleRow: View {
+                 FeedRowThumbnailView(
+                     url: imageURL,
+                     width: 160,
+-                    height: 220,
++                    height: 170,
+                     contentMode: .fit,
+                     usesBlurredBackdrop: true
+                 )
+@@ -11055,6 +11106,16 @@ struct ArticleRow: View {
+     }()
+ }
+ 
++/// Small accent dot marking an unread timeline item.
++private struct UnreadDot: View {
++    var body: some View {
++        Circle()
++            .fill(Color.accentColor)
++            .frame(width: 8, height: 8)
++            .accessibilityLabel("Unread")
++    }
++}
++
+ // MARK: - Reddit Post Row
+ struct RedditPostRow: View {
+     let post: RedditPost
+@@ -11098,7 +11159,25 @@ struct RedditPostRow: View {
+     }
+ 
+     private var previewLineLimit: Int {
+-        usesExpandedIOSSubscriptionLayout ? 5 : 2
++        usesExpandedIOSSubscriptionLayout ? 3 : 2
++    }
++
++    /// Title-only posts get a shorter thumbnail so the card doesn't leave an empty band.
++    private var compactThumbnailHeight: CGFloat {
++        cardPreviewText.isEmpty ? 140 : 180
++    }
++
++    private var inlineScore: some View {
++        HStack(spacing: 3) {
++            Image(systemName: "arrow.up")
++            Text(post.score.formatted(.number.notation(.compactName)))
++                .fontWeight(.semibold)
++                .lineLimit(1)
++                .fixedSize()
++        }
++        .foregroundColor(.gray)
++        .accessibilityElement(children: .combine)
++        .accessibilityLabel("\(post.score) points")
+     }
+ 
+     private var cardPreviewText: String {
+@@ -11130,7 +11209,7 @@ struct RedditPostRow: View {
+                     RoundedRectangle(cornerRadius: 12)
+                         .strokeBorder(
+                             AppColors.redditCardBorder(for: colorScheme),
+-                            lineWidth: colorScheme == .dark ? 1.2 : 1
++                            lineWidth: 1
+                         )
+                 )
+ 
+@@ -11154,23 +11233,13 @@ struct RedditPostRow: View {
+                 // Left side: content
+                 VStack(alignment: .leading, spacing: 8) {
+                     // Header with Reddit info
+-                    HStack(alignment: .center) {
+-                        // Upvote/score/downvote column
+-                        HStack(spacing: 0) {
+-                            VStack(spacing: 2) {
+-                                Image(systemName: "arrow.up")
+-                                    .font(.system(size: usesExpandedIpadThumbnail ? 14 : 12))
+-                                    .foregroundColor(.gray)
+-                                Text("\(post.score)")
+-                                    .font(.system(size: usesExpandedIpadThumbnail ? 14 : 12, weight: .bold))
+-                                    .foregroundColor(.gray)
+-                                Image(systemName: "arrow.down")
+-                                    .font(.system(size: usesExpandedIpadThumbnail ? 14 : 12))
+-                                    .foregroundColor(.gray)
+-                            }
+-                            .frame(width: 24)
+-                            .padding(.trailing, 8)
++                    HStack(alignment: .center, spacing: 8) {
++                        if !post.isRead {
++                            UnreadDot()
+                         }
++
++                        inlineScore
++                            .font(.system(size: usesExpandedIpadThumbnail ? 14 : 12))
+                         
+                         if showsSubredditLabel {
+                             // Subreddit info
+@@ -11291,16 +11360,10 @@ struct RedditPostRow: View {
+         VStack(alignment: .leading, spacing: 10) {
+             HStack(alignment: .top, spacing: 12) {
+                 VStack(alignment: .leading, spacing: 8) {
+-                    HStack(alignment: .center, spacing: 6) {
+-                        VStack(spacing: 2) {
+-                            Image(systemName: "arrow.up")
+-                            Text("\(post.score)")
+-                                .fontWeight(.bold)
+-                            Image(systemName: "arrow.down")
++                    HStack(alignment: .center, spacing: 8) {
++                        if !post.isRead {
++                            UnreadDot()
+                         }
+-                        .font(.system(size: 13))
+-                        .foregroundColor(.gray)
+-                        .frame(width: 24)
+ 
+                         VStack(alignment: .leading, spacing: 3) {
+                             if showsSubredditLabel {
+@@ -11319,6 +11382,8 @@ struct RedditPostRow: View {
+                             }
+ 
+                             HStack(spacing: 5) {
++                                inlineScore
++                                Text("•")
+                                 Text("u/\(post.author)")
+                                     .lineLimit(1)
+                                 Text("•")
+@@ -11341,7 +11406,7 @@ struct RedditPostRow: View {
+                         Text(cardPreviewText)
+                             .font(.system(size: 17))
+                             .foregroundColor(.secondary)
+-                            .lineLimit(10)
++                            .lineLimit(4)
+                             .lineSpacing(1)
+                             .frame(
+                                 maxWidth: .infinity,
+@@ -11353,8 +11418,7 @@ struct RedditPostRow: View {
+                 }
+                 .frame(
+                     maxWidth: .infinity,
+-                    minHeight: 220,
+-                    maxHeight: 220,
++                    maxHeight: post.resolvedImageURL == nil ? nil : compactThumbnailHeight,
+                     alignment: .topLeading
+                 )
+                 .clipped()
+@@ -11364,7 +11428,7 @@ struct RedditPostRow: View {
+                     FeedRowThumbnailView(
+                         url: imageURL,
+                         width: 160,
+-                        height: 220,
++                        height: compactThumbnailHeight,
+                         contentMode: .fit,
+                         usesBlurredBackdrop: true
+                     )
+@@ -11437,6 +11501,7 @@ struct ArticleDetailView: View {
+     @State private var isArticleMetadataChromeHidden: Bool = false
+     @State private var isArticleReaderLoading: Bool = true
+     @State private var youtubePlaybackError: String?
++    @State private var youtubeSeekRequest: YouTubeSeekRequest?
+ #if os(iOS)
+     @State private var audioPlayerQA: AVAudioPlayer?
+     @State private var localSpeechSynthQA: AVSpeechSynthesizer?
+@@ -12043,7 +12108,7 @@ struct ArticleDetailView: View {
+             }
+         } else if appState.settings.youtubeSupportEnabled, let videoID = article.youtubeVideoID {
+             VStack(alignment: .leading, spacing: 14) {
+-                YouTubePlayerView(videoID: videoID) { message in
++                YouTubePlayerView(videoID: videoID, seekRequest: youtubeSeekRequest) { message in
+                     youtubePlaybackError = message
+                 }
+                 .aspectRatio(16 / 9, contentMode: .fit)
+@@ -12246,12 +12311,14 @@ struct ArticleDetailView: View {
+                         accent: .blue
+                     )
+ 
+-                    articleMetadataCompactItem(
+-                        icon: "person",
+-                        title: normalizedArticleAuthor(article),
+-                        subtitle: "Author",
+-                        accent: .secondary
+-                    )
++                    if let author = knownArticleAuthor(article) {
++                        articleMetadataCompactItem(
++                            icon: "person",
++                            title: author,
++                            subtitle: "Author",
++                            accent: .secondary
++                        )
++                    }
+ 
+                     articleMetadataCompactItem(
+                         icon: "calendar",
+@@ -12261,31 +12328,25 @@ struct ArticleDetailView: View {
+                     )
+                 }
+             } else {
+-                HStack(spacing: 0) {
+-                    articleMetadataItem(
+-                        icon: "clock.fill",
+-                        title: article.feedTitle,
+-                        subtitle: "Source",
+-                        accent: .blue
+-                    )
+-
+-                    articleMetadataDivider()
+-
+-                    articleMetadataItem(
+-                        icon: "person",
+-                        title: normalizedArticleAuthor(article),
+-                        subtitle: "Author",
+-                        accent: .secondary
+-                    )
+-
+-                    articleMetadataDivider()
++                // One quiet line instead of a three-panel card: source · author · date.
++                HStack(spacing: 8) {
++                    Text(RedditCardPreview.decodeHTMLEntities(article.feedTitle))
++                        .font(.system(size: 15, weight: .semibold))
++                        .foregroundStyle(.primary)
++                        .lineLimit(1)
+ 
+-                    articleMetadataItem(
+-                        icon: "calendar",
+-                        title: formattedDate(article.publishDate),
+-                        subtitle: "Published",
+-                        accent: .secondary
+-                    )
++                    Group {
++                        if let author = knownArticleAuthor(article) {
++                            Text("·")
++                            Text(author)
++                                .lineLimit(1)
++                        }
++                        Text("·")
++                        Text(formattedDate(article.publishDate))
++                            .lineLimit(1)
++                    }
++                    .font(.system(size: 15))
++                    .foregroundStyle(.secondary)
+ 
+                     Spacer(minLength: 18)
+ 
+@@ -12295,10 +12356,14 @@ struct ArticleDetailView: View {
+                 }
+             }
+         }
+-        .padding(.horizontal, usesPhoneArticleLayout ? 16 : 18)
+-        .padding(.vertical, usesPhoneArticleLayout ? 16 : 14)
++        .padding(.horizontal, usesPhoneArticleLayout ? 16 : 6)
++        .padding(.vertical, usesPhoneArticleLayout ? 16 : 6)
+         .frame(maxWidth: .infinity, alignment: .leading)
+-        .background(articleMetadataPanelBackground(cornerRadius: 22))
++        .background {
++            if usesPhoneArticleLayout {
++                articleMetadataPanelBackground(cornerRadius: 22)
++            }
++        }
+     }
+ 
+     private var articleLanguageChip: some View {
+@@ -12340,39 +12405,11 @@ struct ArticleDetailView: View {
+         .frame(maxWidth: .infinity)
+     }
+ 
+-    private func articleMetadataItem(icon: String, title: String, subtitle: String, accent: Color) -> some View {
+-        HStack(spacing: 12) {
+-            Image(systemName: icon)
+-                .font(.system(size: 16, weight: .semibold))
+-                .foregroundStyle(accent)
+-                .frame(width: 38, height: 38)
+-                .background(articleSoftFill, in: Circle())
+-
+-            VStack(alignment: .leading, spacing: 3) {
+-                Text(title)
+-                    .font(.system(size: 14, weight: .semibold))
+-                    .foregroundStyle(.primary)
+-                    .lineLimit(1)
+-
+-                Text(subtitle)
+-                    .font(.system(size: 12, weight: .medium))
+-                    .foregroundStyle(.secondary)
+-            }
+-            .frame(maxWidth: .infinity, alignment: .leading)
+-        }
+-        .frame(maxWidth: .infinity, alignment: .leading)
+-    }
+-
+-    private func articleMetadataDivider() -> some View {
+-        Rectangle()
+-            .fill(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.24))
+-            .frame(width: 1, height: 48)
+-            .padding(.horizontal, 18)
+-    }
+-
+-    private func normalizedArticleAuthor(_ article: Article) -> String {
++    /// The article's author, or nil when the feed doesn't provide one (so no "Unknown" label is shown).
++    private func knownArticleAuthor(_ article: Article) -> String? {
+         let trimmed = article.author?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+-        return trimmed.isEmpty ? "Unknown" : trimmed
++        guard !trimmed.isEmpty, trimmed.lowercased() != "unknown" else { return nil }
++        return trimmed
+     }
+ 
+     private func articlePanelBackground(cornerRadius: CGFloat) -> some View {
+@@ -12469,33 +12506,14 @@ struct ArticleDetailView: View {
+             }
+             .padding(.bottom, 16)
+         } else if let summary = article.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+-            VStack(alignment: .leading, spacing: 8) {
+-                HStack {
+-                    Text("Summary")
+-                        .font(.headline)
+-                    Spacer()
+-                }
+-                ArticleGlassySummary(
+-                    summary: summary,
+-                    onAskAISelection: handleAskAISelection(selectedText:context:),
+-                    onAskAIWebSelection: handleAskAIWebSelection(selectedText:context:),
+-                    onPodcastTimestampTap: podcastTimestampTapHandler(for: article)
+-                )
+-                IOSArticleActionCapsule {
+-                    Button(action: {
+-                        setPlatformClipboardString(summary)
+-                    }) {
+-                        Label("Copy Summary", systemImage: "doc.on.doc")
+-                    }
+-                    .buttonStyle(.plain)
+-                    .font(.callout.weight(.medium))
+-                    .foregroundStyle(.primary)
+-                    .padding(.horizontal, 14)
+-                    .frame(minHeight: 36)
+-                    .disabled(summary.isEmpty)
+-                }
+-                .padding(.top, 5)
+-            }
++            ArticleGlassySummary(
++                summary: summary,
++                onAskAISelection: handleAskAISelection(selectedText:context:),
++                onAskAIWebSelection: handleAskAIWebSelection(selectedText:context:),
++                onPodcastTimestampTap: podcastTimestampTapHandler(for: article),
++                headerTitle: "Summary",
++                onCopy: { setPlatformClipboardString(summary) }
++            )
+             .padding(.bottom, 16)
+         } else {
+             EmptyView()
+@@ -12554,7 +12572,7 @@ struct ArticleDetailView: View {
+             HStack(spacing: 8) {
+                 if shouldShowExplicitWebAIControls {
+                     qaHeaderActionButton(
+-                        systemName: "globe",
++                        systemName: "arrow.up.forward.app",
+                         accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+                         isDisabled: qaState.questionText.isEmpty || qaState.isProcessingQuestion
+                     ) {
+@@ -12678,7 +12696,7 @@ struct ArticleDetailView: View {
+                 Button(action: {
+                     askWebQuestion(article: article)
+                 }) {
+-                    Image(systemName: "globe")
++                    Image(systemName: "arrow.up.forward.app")
+                         .font(.subheadline)
+                 }
+                 .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+@@ -12755,6 +12773,11 @@ struct ArticleDetailView: View {
+ 
+     private func podcastTimestampTapHandler(for article: Article) -> ((TimeInterval) -> Void)? {
+         #if os(iOS)
++        if article.isYouTubeVideo, appState.settings.youtubeSupportEnabled, article.youtubeVideoID != nil {
++            return { seconds in
++                youtubeSeekRequest = YouTubeSeekRequest(seconds: seconds)
++            }
++        }
+         guard article.isPodcastEpisode else { return nil }
+         return { seconds in
+             appState.podcastEpisodePlayer.prepare(article)
+@@ -12994,7 +13017,7 @@ struct ArticleDetailView: View {
+                         Button {
+                             appState.requestWebSummary(for: article)
+                         } label: {
+-                            Image(systemName: "globe")
++                            Image(systemName: "arrow.up.forward.app")
+                         }
+                         .buttonStyle(IOSArticleChromeIconButtonStyle())
+                         .accessibilityLabel("Web AI summary")
+@@ -15923,6 +15946,8 @@ struct ArticleGlassySummary: View {
+     var onSummaryReferenceTap: ((Int) -> Void)? = nil
+     var onPodcastTimestampTap: ((TimeInterval) -> Void)? = nil
+     var borderStyle: SummaryCardBorderStyle? = nil
++    var headerTitle: String? = nil
++    var onCopy: (() -> Void)? = nil
+     @EnvironmentObject var appState: AppState
+ 
+     // TTS state variables
+@@ -15954,8 +15979,12 @@ struct ArticleGlassySummary: View {
+         summaryReferenceCount: Int = 0,
+         onSummaryReferenceTap: ((Int) -> Void)? = nil,
+         onPodcastTimestampTap: ((TimeInterval) -> Void)? = nil,
+-        borderStyle: SummaryCardBorderStyle? = nil
++        borderStyle: SummaryCardBorderStyle? = nil,
++        headerTitle: String? = nil,
++        onCopy: (() -> Void)? = nil
+     ) {
++        self.headerTitle = headerTitle
++        self.onCopy = onCopy
+         self.summary = summary
+         self.markdownText = markdownText
+         self.displaySummary = displaySummary ?? cleanMarkdownArtifactsForDisplay(summary)
+@@ -15978,6 +16007,8 @@ struct ArticleGlassySummary: View {
+             onSummaryReferenceTap: onSummaryReferenceTap,
+             onPodcastTimestampTap: onPodcastTimestampTap,
+             borderStyle: borderStyle,
++            headerTitle: headerTitle,
++            onCopy: onCopy,
+             isSynthesizingSpeech: isSynthesizingSpeech,
+             isSpeakingLocally: isSpeakingLocally,
+             isPreparingLocalTTS: isPreparingLocalTTS,
+@@ -16437,6 +16468,8 @@ private struct ArticleGlassySummaryContent: View {
+     let onSummaryReferenceTap: ((Int) -> Void)?
+     let onPodcastTimestampTap: ((TimeInterval) -> Void)?
+     let borderStyle: SummaryCardBorderStyle?
++    let headerTitle: String?
++    let onCopy: (() -> Void)?
+     let isSynthesizingSpeech: Bool
+     let isSpeakingLocally: Bool
+     let isPreparingLocalTTS: Bool
+@@ -16446,10 +16479,35 @@ private struct ArticleGlassySummaryContent: View {
+     let stopArticleSummarySpeech: () -> Void
+     let speakSummaryLocally: () -> Void
+ 
++    @State private var didCopy = false
++
+     var body: some View {
+         VStack(alignment: .leading, spacing: 0) {
++            // Header row: title on the left, copy + read-aloud on the right, so the
++            // controls share a line with the title instead of taking a row of their own.
+             HStack(spacing: 12) {
++                if let headerTitle {
++                    Text(headerTitle)
++                        .font(.headline)
++                }
+                 Spacer()
++                if let onCopy {
++                    Button {
++                        onCopy()
++                        didCopy = true
++                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { didCopy = false }
++                    } label: {
++                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
++                            .font(.system(size: 16, weight: .semibold))
++                            .frame(width: 40, height: 40)
++                            .contentShape(Circle())
++                    }
++                    .buttonStyle(.plain)
++                    .foregroundStyle(didCopy ? Color.green : Color.primary)
++                    .disabled(summary.isEmpty)
++                    .accessibilityLabel(didCopy ? "Copied" : "Copy Summary")
++                    .help("Copy Summary")
++                }
+                 SummaryTTSMiniPlayer(
+                     isReddit: borderStyle == .reddit,
+                     playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally || summary.isEmpty,
+@@ -16464,7 +16522,7 @@ private struct ArticleGlassySummaryContent: View {
+                 )
+             }
+             .padding(.horizontal, 20)
+-            .padding(.top, 16)
++            .padding(.top, 12)
+ 
+             Group {
+                 if onAskAISelection != nil || onAskAIWebSelection != nil || onSummaryReferenceTap != nil || onPodcastTimestampTap != nil {
+@@ -16487,7 +16545,8 @@ private struct ArticleGlassySummaryContent: View {
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                 }
+             }
+-            .padding(.vertical, 16)
++            .padding(.top, 8)
++            .padding(.bottom, 16)
+             .padding(.horizontal, 20)
+ 
+             if isSynthesizingSpeech {
+@@ -16623,11 +16682,12 @@ private struct SidebarMenuRow<Icon: View>: View {
+             icon
+                 .frame(width: 28, height: 28)
+ 
+-            Text(title)
++            Text(RedditCardPreview.decodeHTMLEntities(title))
+                 .font(.system(size: 16, weight: .medium))
+                 .foregroundStyle(isSelected ? selectedTextColor : unselectedTextColor)
+-                .lineLimit(1)
++                .lineLimit(2)
+                 .truncationMode(.tail)
++                .fixedSize(horizontal: false, vertical: true)
+ 
+             Spacer(minLength: 8)
+ 
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index dcabbae..ab433fb 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -112,6 +112,26 @@ private struct RedditCommentsChromeIconButtonStyle: ButtonStyle {
+     }
+ }
+ 
++/// Icon plus short text, for the most-used actions in the comments bar.
++private struct RedditCommentsChromeLabeledButtonStyle: ButtonStyle {
++    @Environment(\.colorScheme) private var colorScheme
++
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label
++            .font(.system(size: 14, weight: .semibold))
++            .symbolRenderingMode(.hierarchical)
++            .padding(.horizontal, 12)
++            .frame(minHeight: 36)
++            .contentShape(Capsule(style: .continuous))
++            .background {
++                Capsule(style: .continuous)
++                    .fill(configuration.isPressed ? Color.white.opacity(colorScheme == .dark ? 0.16 : 0.12) : .clear)
++            }
++            .scaleEffect(configuration.isPressed ? 0.96 : 1)
++            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
++    }
++}
++
+ struct RedditDetailView: View {
+     @EnvironmentObject var appState: AppState
+     @Environment(\.colorScheme) private var colorScheme
+@@ -186,7 +206,7 @@ struct RedditDetailView: View {
+         case .coreAIMLXLocal:
+             return "memorychip"
+         case .webAI:
+-            return "globe"
++            return "arrow.up.forward.app"
+         case .summarizeDaemon:
+             return "terminal"
+         }
+@@ -194,7 +214,7 @@ struct RedditDetailView: View {
+ 
+     private func summaryProviderBadge(webAIProviderOverride: WebAIProvider? = nil) -> some View {
+         let providerName = webAIProviderOverride?.displayName ?? activeSummaryProviderName
+-        let providerIcon = webAIProviderOverride == nil ? activeSummaryProviderIcon : "globe"
++        let providerIcon = webAIProviderOverride == nil ? activeSummaryProviderIcon : "arrow.up.forward.app"
+ 
+         return Label(providerName, systemImage: providerIcon)
+             .font(.caption2)
+@@ -498,7 +518,7 @@ struct RedditDetailView: View {
+                             postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                             appState.requestWebSummary(for: post)
+                         } label: {
+-                            Image(systemName: "globe")
++                            Image(systemName: "arrow.up.forward.app")
+                         }
+                         .accessibilityLabel("Summarize post with \(appState.settings.selectedWebAIProvider.displayName)")
+                         .accessibilityHint("Use \(appState.settings.selectedWebAIProvider.displayName) to summarize the Reddit post without comments")
+@@ -530,7 +550,7 @@ struct RedditDetailView: View {
+                                     postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                                     appState.requestWebSummary(for: post, comments: comments)
+                                 } label: {
+-                                    Image(systemName: "globe")
++                                    Image(systemName: "arrow.up.forward.app")
+                                         .font(.subheadline)
+                                 }
+                                 .buttonStyle(LiquidGlassButtonStyle())
+@@ -576,7 +596,7 @@ struct RedditDetailView: View {
+                                     postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                                     appState.requestWebSummary(for: post, comments: comments)
+                                 } label: {
+-                                    Image(systemName: "globe")
++                                    Image(systemName: "arrow.up.forward.app")
+                                         .font(.subheadline)
+                                 }
+                                 .buttonStyle(LiquidGlassButtonStyle())
+@@ -922,7 +942,7 @@ struct RedditDetailView: View {
+                 )
+                 #endif
+                 .padding(.horizontal)
+-                .padding(.bottom)
++                .padding(.bottom, UIDevice.current.userInterfaceIdiom == .phone ? 16 : OverlayBarScrollEdgeFade.bottomToolbarClearance)
+                 .zIndex(1) // ensure ScrollView sits above any background layers for proper gesture hit-testing
+                 #if os(iOS)
+                 .padding(.top, usesCompactDetailLayout(availableWidth: geometry.size.width) ? 16 : detailTopPadding(in: geometry))
+@@ -1085,24 +1105,7 @@ struct RedditDetailView: View {
+             }
+             #endif
+         }
+-#if os(iOS)
+-        .overlay(alignment: .bottomTrailing) {
+-            if UIDevice.current.userInterfaceIdiom != .phone {
+-                RedditCommentsActionCapsule {
+-                    Button(action: {
+-                        withAnimation(.easeInOut) {
+-                            proxy.scrollTo(redditTopAnchor, anchor: .top)
+-                        }
+-                    }) {
+-                        Image(systemName: "arrow.up.circle.fill")
+-                    }
+-                    .buttonStyle(RedditCommentsChromeIconButtonStyle())
+-                }
+-                .padding(.trailing, 24)
+-                .padding(.bottom, 24)
+-            }
+-        }
+-#endif
++        // Scroll to Top lives in the bottom toolbar pill below; no separate floating button.
+         // Add toolbar with buttons for non-phone layouts only.
+         .toolbar {
+             #if os(iOS)
+@@ -1259,7 +1262,7 @@ struct RedditDetailView: View {
+             HStack(spacing: 8) {
+                 if shouldShowExplicitWebAIControls {
+                     redditQAHeaderActionButton(
+-                        systemName: "globe",
++                        systemName: "arrow.up.forward.app",
+                         accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+                         isDisabled: questionText.isEmpty || isProcessingQuestion
+                     ) {
+@@ -1676,7 +1679,7 @@ struct RedditDetailView: View {
+                 Label("Deep Analysis", systemImage: "chart.pie.fill")
+             }
+         } label: {
+-            compactHeaderIcon(systemName: "globe", grouped: grouped)
++            compactHeaderIcon(systemName: "arrow.up.forward.app", grouped: grouped)
+         }
+         .buttonStyle(.plain)
+         .help("Send comment prompts to \(appState.settings.selectedWebAIProvider.displayName)")
+@@ -1722,7 +1725,7 @@ struct RedditDetailView: View {
+                 Button {
+                     requestWebCommentSummary(for: post)
+                 } label: {
+-                    Label("Web Summary", systemImage: "globe")
++                    Label("Web Summary", systemImage: "arrow.up.forward.app")
+                 }
+ 
+                 Button {
+@@ -1820,56 +1823,57 @@ struct RedditDetailView: View {
+             .disabled(isLoadingComments)
+             .accessibilityLabel("Comment sort")
+ 
++            // Summarize and Ask stay visible with labels; less frequent actions
++            // (deep analysis, web AI) live in the "…" menu.
+             RedditCommentsActionCapsule {
+-                Button {
+-                    analyticsProviderOverride = nil
+-                    isShowingAnalytics = true
+-                } label: {
+-                    Image(systemName: "chart.pie.fill")
+-                }
+-                .accessibilityLabel("Deep Analysis")
+-                .buttonStyle(RedditCommentsChromeIconButtonStyle())
+-
+-                if shouldShowExplicitWebAIControls {
+-                    Menu {
+-                        Button {
+-                            requestWebCommentSummary(for: post)
+-                        } label: {
+-                            Label("Comment Summary", systemImage: "text.redaction")
+-                        }
+-
+-                        Button {
+-                            analyticsProviderOverride = .webAI
+-                            isShowingAnalytics = true
+-                        } label: {
+-                            Label("Deep Analysis", systemImage: "chart.pie.fill")
+-                        }
+-                    } label: {
+-                        Image(systemName: "globe")
+-                    }
+-                    .accessibilityLabel("Web actions")
+-                    .buttonStyle(RedditCommentsChromeIconButtonStyle())
+-                    .help("Send comment prompts to \(appState.settings.selectedWebAIProvider.displayName)")
+-                }
+-
+                 Button(action: {
+                     print("📱 Summarize button pressed - clearing summary and calling summarizeComments")
+                     commentSummary = nil
+                     summarizeComments(for: post)
+                 }) {
+-                    Image(systemName: "text.redaction")
++                    Label("Summarize", systemImage: "text.redaction")
+                 }
+-                .accessibilityLabel("Summarize")
++                .accessibilityLabel("Summarize comments")
+                 .disabled(isLoadingComments)
+-                .buttonStyle(RedditCommentsChromeIconButtonStyle())
++                .buttonStyle(RedditCommentsChromeLabeledButtonStyle())
+ 
+                 Button(action: {
+                     showQAInterface.toggle()
+                 }) {
+-                    Image(systemName: showQAInterface ? "xmark.circle" : "questionmark.circle")
++                    Label(showQAInterface ? "Close" : "Ask", systemImage: showQAInterface ? "xmark.circle" : "questionmark.circle")
+                 }
+-                .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask")
++                .accessibilityLabel(showQAInterface ? "Hide Q&A" : "Ask about comments")
+                 .disabled(isLoadingComments)
++                .buttonStyle(RedditCommentsChromeLabeledButtonStyle())
++
++                Menu {
++                    Button {
++                        analyticsProviderOverride = nil
++                        isShowingAnalytics = true
++                    } label: {
++                        Label("Deep Analysis", systemImage: "chart.pie.fill")
++                    }
++
++                    if shouldShowExplicitWebAIControls {
++                        Section("Send to \(appState.settings.selectedWebAIProvider.displayName)") {
++                            Button {
++                                requestWebCommentSummary(for: post)
++                            } label: {
++                                Label("Comment Summary", systemImage: "arrow.up.forward.app")
++                            }
++
++                            Button {
++                                analyticsProviderOverride = .webAI
++                                isShowingAnalytics = true
++                            } label: {
++                                Label("Deep Analysis", systemImage: "arrow.up.forward.app")
++                            }
++                        }
++                    }
++                } label: {
++                    Image(systemName: "ellipsis.circle")
++                }
++                .accessibilityLabel("More comment actions")
+                 .buttonStyle(RedditCommentsChromeIconButtonStyle())
+             }
+         }
+@@ -4069,23 +4073,45 @@ VStack(alignment: .leading, spacing: 14) {
+             // Remove duplicate "Comment Summary" title since it's already shown in the main section
+             HStack(spacing: 12) {
+                 Spacer()
+-                
+-            // Mac voice picker removed (avoids cross-scope state). TTS uses current system voice.
+-                SummaryTTSMiniPlayer(
+-                    isReddit: true,
+-                    playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
+-                    stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
+-                    localDisabled: isSynthesizingSpeech,
+-                    localIsActive: isPreparingLocalTTS || isSpeakingLocally,
+-                    onPlay: speakSummary,
+-                    onStop: stopRedditSummarySpeech,
+-                    onLocal: speakSummaryLocally,
+-                    playHelp: "Read aloud (Cloud)",
+-                    localHelp: "Read aloud (Local)"
+-                )
++
++                // Mac voice picker removed (avoids cross-scope state). TTS uses current system voice.
++                // Copy sits in the same capsule as read-aloud, matching GlassySummary.
++                RedditCommentsActionCapsule {
++                    HStack(spacing: 0) {
++                        SummaryTTSMiniPlayer(
++                            isReddit: true,
++                            playDisabled: isSynthesizingSpeech || isPreparingLocalTTS || isSpeakingLocally,
++                            stopDisabled: !isSynthesizingSpeech && !isPreparingLocalTTS && !isSpeakingLocally,
++                            localDisabled: isSynthesizingSpeech,
++                            localIsActive: isPreparingLocalTTS || isSpeakingLocally,
++                            onPlay: speakSummary,
++                            onStop: stopRedditSummarySpeech,
++                            onLocal: speakSummaryLocally,
++                            playHelp: "Read aloud (Cloud)",
++                            localHelp: "Read aloud (Local)",
++                            usesGlass: false
++                        )
++
++                        SummaryGlassActionButton(
++                            systemName: "doc.on.doc",
++                            tint: Color(red: 0.35, green: 0.40, blue: 0.49).opacity(0.40),
++                            isDisabled: summary.summary.isEmpty,
++                            helpText: "Copy summary",
++                            action: {
++                                #if os(iOS)
++                                UIPasteboard.general.string = displaySummaryText
++                                #elseif os(macOS)
++                                NSPasteboard.general.clearContents()
++                                NSPasteboard.general.setString(displaySummaryText, forType: .string)
++                                #endif
++                            },
++                            usesGlass: false
++                        )
++                    }
++                }
+             }
+             .padding(.horizontal, 20)
+-            .padding(.top, 16)
++            .padding(.top, 12)
+             
+             Group {
+                 if onAskAISelection != nil || onAskAIWebSelection != nil {
+@@ -4104,7 +4130,8 @@ VStack(alignment: .leading, spacing: 14) {
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                 }
+             }
+-            .padding(.vertical, 16)
++            .padding(.top, 8)
++            .padding(.bottom, 16)
+             .padding(.horizontal, 20)
+             
+             // TTS status indicators
+@@ -4147,28 +4174,6 @@ VStack(alignment: .leading, spacing: 14) {
+                     .padding(.horizontal, 20)
+             }
+             
+-            // Add Copy button here
+-            RedditCommentsActionCapsule {
+-                Button(action: {
+-                    #if os(iOS)
+-                    UIPasteboard.general.string = displaySummaryText
+-                    #elseif os(macOS)
+-                    NSPasteboard.general.clearContents()
+-                    NSPasteboard.general.setString(displaySummaryText, forType: .string)
+-                    #endif
+-                }) {
+-                    Label("Copy Summary", systemImage: "doc.on.doc")
+-                }
+-                .buttonStyle(.plain)
+-                .font(.callout.weight(.medium))
+-                .foregroundStyle(.primary)
+-                .padding(.horizontal, 14)
+-                .frame(minHeight: 36)
+-                .disabled(summary.summary.isEmpty)
+-            }
+-            .padding(.top, 5)
+-            .padding(.horizontal, 20)
+-            
+             // Stats section
+             VStack(alignment: .leading, spacing: 10) {
+                 // Add comment count indicator first
+@@ -4693,7 +4698,7 @@ VStack(alignment: .leading) {
+                 }
+             }
+             .padding(.horizontal, 20)
+-            .padding(.top, 16)
++            .padding(.top, 12)
+             
+             Group {
+                 if onAskAISelection != nil || onAskAIWebSelection != nil {
+@@ -4712,7 +4717,8 @@ VStack(alignment: .leading) {
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                 }
+             }
+-            .padding(.vertical, 16)
++            .padding(.top, 8)
++            .padding(.bottom, 16)
+             .padding(.horizontal, 20)
+             
+             // TTS status indicators
+@@ -5246,6 +5252,10 @@ struct ClickablePostImage: View {
+ /// system scroll edge effect can't see. Content resting at `height` is untouched;
+ /// only text scrolled up under the icons fades, so it no longer clashes with them.
+ private struct OverlayBarScrollEdgeFade: ViewModifier {
++    /// Space kept below the last content so it can scroll clear of the bottom toolbar pill.
++    static let bottomToolbarClearance: CGFloat = 88
++    private static let bottomFadeHeight: CGFloat = 72
++
+     let height: CGFloat
+     let isEnabled: Bool
+ 
+@@ -5264,8 +5274,14 @@ private struct OverlayBarScrollEdgeFade: ViewModifier {
+                     )
+                     .frame(height: height)
+                     Color.black
++                    // Soften text passing under the floating bottom toolbar pill.
++                    LinearGradient(
++                        colors: [.black, .black.opacity(0.15)],
++                        startPoint: .top,
++                        endPoint: .bottom
++                    )
++                    .frame(height: Self.bottomFadeHeight)
+                 }
+-                .ignoresSafeArea(edges: .bottom)
+             }
+         } else {
+             content
+diff --git a/RSSReaderApp/Views/YouTubePlayerView.swift b/RSSReaderApp/Views/YouTubePlayerView.swift
+index 3fffccb..73f3c93 100644
+--- a/RSSReaderApp/Views/YouTubePlayerView.swift
++++ b/RSSReaderApp/Views/YouTubePlayerView.swift
+@@ -10,8 +10,15 @@
+ import SwiftUI
+ import WebKit
+ 
++/// A request to jump the embedded player to a time; a new `id` triggers a new seek.
++struct YouTubeSeekRequest: Equatable {
++    let id = UUID()
++    let seconds: TimeInterval
++}
++
+ struct YouTubePlayerView: UIViewRepresentable {
+     let videoID: String
++    var seekRequest: YouTubeSeekRequest? = nil
+     var onError: (String) -> Void = { _ in }
+ 
+     func makeCoordinator() -> Coordinator { Coordinator(onError: onError) }
+@@ -34,6 +41,13 @@ struct YouTubePlayerView: UIViewRepresentable {
+ 
+     func updateUIView(_ webView: WKWebView, context: Context) {
+         context.coordinator.onError = onError
++        if let seekRequest, seekRequest.id != context.coordinator.lastSeekID {
++            context.coordinator.lastSeekID = seekRequest.id
++            let seconds = max(0, seekRequest.seconds)
++            webView.evaluateJavaScript(
++                "if (window.player && player.seekTo) { player.seekTo(\(seconds), true); player.playVideo(); }"
++            )
++        }
+         guard context.coordinator.loadedVideoID != videoID else { return }
+         context.coordinator.loadedVideoID = videoID
+         load(videoID: videoID, into: webView)
+@@ -78,6 +92,7 @@ struct YouTubePlayerView: UIViewRepresentable {
+     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+         var onError: (String) -> Void
+         var loadedVideoID: String?
++        var lastSeekID: UUID?
+ 
+         init(onError: @escaping (String) -> Void) { self.onError = onError }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

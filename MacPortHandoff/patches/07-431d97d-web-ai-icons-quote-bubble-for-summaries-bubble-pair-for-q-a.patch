@@ -1,0 +1,164 @@
+From 431d97d643909dccf0fc99a5c8e7f7bf7e4fedef Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 15:41:53 +0100
+Subject: [PATCH] Web AI icons: quote.bubble for summaries, bubble pair for Q&A
+
+---
+ RSSReaderApp/Views/ContentView.swift      | 12 ++++++------
+ RSSReaderApp/Views/RedditDetailView.swift | 20 ++++++++++----------
+ 2 files changed, 16 insertions(+), 16 deletions(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 65ac01a..53f7cac 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -2370,7 +2370,7 @@ struct DetailTopBar: View {
+                             Button(action: {
+                                 appState.requestWebSummary(for: article)
+                             }) {
+-                                topBarIcon("arrow.up.forward.app")
++                                topBarIcon("quote.bubble")
+                             }
+                             .buttonStyle(IOSArticleChromeIconButtonStyle())
+                             .accessibilityLabel("Summarize with \(appState.settings.selectedWebAIProvider.displayName)")
+@@ -6092,7 +6092,7 @@ struct DraggableGlobalSummaryView: View {
+                         }
+                         .disabled(!hasSummaryContent)
+                     } label: {
+-                        Image(systemName: "arrow.up.forward.app")
++                        Image(systemName: "quote.bubble")
+                             .foregroundColor(.secondary)
+                     }
+                     .disabled(!hasSummaryContent)
+@@ -6189,7 +6189,7 @@ struct DraggableGlobalSummaryView: View {
+                                 Button {
+                                     askGlobalSummaryWebQuestion()
+                                 } label: {
+-                                    Image(systemName: "arrow.up.forward.app")
++                                    Image(systemName: "bubble.left.and.bubble.right")
+                                         .font(.subheadline)
+                                 }
+                                 .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+@@ -12572,7 +12572,7 @@ struct ArticleDetailView: View {
+             HStack(spacing: 8) {
+                 if shouldShowExplicitWebAIControls {
+                     qaHeaderActionButton(
+-                        systemName: "arrow.up.forward.app",
++                        systemName: "bubble.left.and.bubble.right",
+                         accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+                         isDisabled: qaState.questionText.isEmpty || qaState.isProcessingQuestion
+                     ) {
+@@ -12696,7 +12696,7 @@ struct ArticleDetailView: View {
+                 Button(action: {
+                     askWebQuestion(article: article)
+                 }) {
+-                    Image(systemName: "arrow.up.forward.app")
++                    Image(systemName: "bubble.left.and.bubble.right")
+                         .font(.subheadline)
+                 }
+                 .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+@@ -13017,7 +13017,7 @@ struct ArticleDetailView: View {
+                         Button {
+                             appState.requestWebSummary(for: article)
+                         } label: {
+-                            Image(systemName: "arrow.up.forward.app")
++                            Image(systemName: "quote.bubble")
+                         }
+                         .buttonStyle(IOSArticleChromeIconButtonStyle())
+                         .accessibilityLabel("Web AI summary")
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index ef4dbe5..d7c8a55 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -206,7 +206,7 @@ struct RedditDetailView: View {
+         case .coreAIMLXLocal:
+             return "memorychip"
+         case .webAI:
+-            return "arrow.up.forward.app"
++            return "quote.bubble"
+         case .summarizeDaemon:
+             return "terminal"
+         }
+@@ -214,7 +214,7 @@ struct RedditDetailView: View {
+ 
+     private func summaryProviderBadge(webAIProviderOverride: WebAIProvider? = nil) -> some View {
+         let providerName = webAIProviderOverride?.displayName ?? activeSummaryProviderName
+-        let providerIcon = webAIProviderOverride == nil ? activeSummaryProviderIcon : "arrow.up.forward.app"
++        let providerIcon = webAIProviderOverride == nil ? activeSummaryProviderIcon : "quote.bubble"
+ 
+         return Label(providerName, systemImage: providerIcon)
+             .font(.caption2)
+@@ -518,7 +518,7 @@ struct RedditDetailView: View {
+                             postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                             appState.requestWebSummary(for: post)
+                         } label: {
+-                            Image(systemName: "arrow.up.forward.app")
++                            Image(systemName: "quote.bubble")
+                         }
+                         .accessibilityLabel("Summarize post with \(appState.settings.selectedWebAIProvider.displayName)")
+                         .accessibilityHint("Use \(appState.settings.selectedWebAIProvider.displayName) to summarize the Reddit post without comments")
+@@ -550,7 +550,7 @@ struct RedditDetailView: View {
+                                     postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                                     appState.requestWebSummary(for: post, comments: comments)
+                                 } label: {
+-                                    Image(systemName: "arrow.up.forward.app")
++                                    Image(systemName: "quote.bubble")
+                                         .font(.subheadline)
+                                 }
+                                 .buttonStyle(LiquidGlassButtonStyle())
+@@ -596,7 +596,7 @@ struct RedditDetailView: View {
+                                     postSummaryWebAIProviderOverride = appState.settings.selectedWebAIProvider
+                                     appState.requestWebSummary(for: post, comments: comments)
+                                 } label: {
+-                                    Image(systemName: "arrow.up.forward.app")
++                                    Image(systemName: "quote.bubble")
+                                         .font(.subheadline)
+                                 }
+                                 .buttonStyle(LiquidGlassButtonStyle())
+@@ -1262,7 +1262,7 @@ struct RedditDetailView: View {
+             HStack(spacing: 8) {
+                 if shouldShowExplicitWebAIControls {
+                     redditQAHeaderActionButton(
+-                        systemName: "arrow.up.forward.app",
++                        systemName: "bubble.left.and.bubble.right",
+                         accessibilityLabel: appState.settings.selectedWebAIProvider.displayName,
+                         isDisabled: questionText.isEmpty || isProcessingQuestion
+                     ) {
+@@ -1679,7 +1679,7 @@ struct RedditDetailView: View {
+                 Label("Deep Analysis", systemImage: "chart.pie.fill")
+             }
+         } label: {
+-            compactHeaderIcon(systemName: "arrow.up.forward.app", grouped: grouped)
++            compactHeaderIcon(systemName: "quote.bubble", grouped: grouped)
+         }
+         .buttonStyle(.plain)
+         .help("Send comment prompts to \(appState.settings.selectedWebAIProvider.displayName)")
+@@ -1725,7 +1725,7 @@ struct RedditDetailView: View {
+                 Button {
+                     requestWebCommentSummary(for: post)
+                 } label: {
+-                    Label("Web Summary", systemImage: "arrow.up.forward.app")
++                    Label("Web Summary", systemImage: "quote.bubble")
+                 }
+ 
+                 Button {
+@@ -1859,14 +1859,14 @@ struct RedditDetailView: View {
+                             Button {
+                                 requestWebCommentSummary(for: post)
+                             } label: {
+-                                Label("Comment Summary", systemImage: "arrow.up.forward.app")
++                                Label("Comment Summary", systemImage: "quote.bubble")
+                             }
+ 
+                             Button {
+                                 analyticsProviderOverride = .webAI
+                                 isShowingAnalytics = true
+                             } label: {
+-                                Label("Deep Analysis", systemImage: "arrow.up.forward.app")
++                                Label("Deep Analysis", systemImage: "quote.bubble")
+                             }
+                         }
+                     }
+-- 
+2.54.0 (Apple Git-157)
+

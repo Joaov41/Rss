@@ -1,0 +1,199 @@
+From 77afbe2a54e8ce3bdc3563bcb90e745fed2654aa Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 11:56:13 +0100
+Subject: [PATCH] Summary polish: heading rhythm, readable width, header stats
+ row, softer bottom fade
+
+---
+ RSSReaderApp/Views/AskAIUtilities.swift   | 22 ++++++--
+ RSSReaderApp/Views/ContentView.swift      |  2 +
+ RSSReaderApp/Views/RedditDetailView.swift | 65 ++++++++++++++---------
+ 3 files changed, 59 insertions(+), 30 deletions(-)
+
+diff --git a/RSSReaderApp/Views/AskAIUtilities.swift b/RSSReaderApp/Views/AskAIUtilities.swift
+index fc6df55..6f7f122 100644
+--- a/RSSReaderApp/Views/AskAIUtilities.swift
++++ b/RSSReaderApp/Views/AskAIUtilities.swift
+@@ -1346,14 +1346,19 @@ final class AskAITextView: UITextView, UITextViewDelegate {
+         let baseFont = font ?? UIFont.preferredFont(forTextStyle: .body)
+         let boldDescriptor = baseFont.fontDescriptor.withSymbolicTraits(.traitBold) ?? baseFont.fontDescriptor
+         let labelFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize)
+-        let headingFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize + 2)
++        let headingFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize + 4)
++        // The blank line after a heading is drawn short so the heading sits closer to the
++        // text it introduces than to the paragraph above it. Only attributes change.
++        let tightBlankLineFont = UIFont.systemFont(ofSize: max(4, baseFont.pointSize * 0.35))
+ 
+         var paragraphRanges: [NSRange] = []
++        var enclosingRanges: [NSRange] = []
+         source.enumerateSubstrings(
+             in: NSRange(location: 0, length: source.length),
+             options: [.byParagraphs, .substringNotRequired]
+-        ) { _, range, _, _ in
++        ) { _, range, enclosingRange, _ in
+             paragraphRanges.append(range)
++            enclosingRanges.append(enclosingRange)
+         }
+         let contentParagraphCount = paragraphRanges.filter {
+             !source.substring(with: $0).trimmingCharacters(in: .whitespaces).isEmpty
+@@ -1364,15 +1369,24 @@ final class AskAITextView: UITextView, UITextViewDelegate {
+         let bulletIndent = (bulletPrefix as NSString).size(withAttributes: [.font: baseFont]).width
+ 
+         storage.beginEditing()
+-        for range in paragraphRanges {
++        var previousWasHeading = false
++        for (index, range) in paragraphRanges.enumerated() {
+             let paragraph = source.substring(with: range)
+             let trimmed = paragraph.trimmingCharacters(in: .whitespaces)
+-            guard !trimmed.isEmpty else { continue }
++            guard !trimmed.isEmpty else {
++                if previousWasHeading {
++                    storage.addAttribute(.font, value: tightBlankLineFont, range: enclosingRanges[index])
++                }
++                previousWasHeading = false
++                continue
++            }
+ 
+             if Self.isSummaryHeading(trimmed) {
+                 storage.addAttribute(.font, value: headingFont, range: range)
++                previousWasHeading = true
+                 continue
+             }
++            previousWasHeading = false
+ 
+             var labelSearchStart = 0
+             if paragraph.hasPrefix(bulletPrefix) {
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 568b40e..f3a73ea 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -16545,6 +16545,8 @@ private struct ArticleGlassySummaryContent: View {
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                 }
+             }
++            .frame(maxWidth: summaryReadableWidth, alignment: .leading)
++            .frame(maxWidth: .infinity, alignment: .leading)
+             .padding(.top, 8)
+             .padding(.bottom, 16)
+             .padding(.horizontal, 20)
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index ab433fb..9408af1 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -4070,8 +4070,24 @@ struct GlassyCommentSummary: View {
+     
+     var body: some View {
+ VStack(alignment: .leading, spacing: 14) {
+-            // Remove duplicate "Comment Summary" title since it's already shown in the main section
++            // Remove duplicate "Comment Summary" title since it's already shown in the main section.
++            // The row pairs the summary's basis (sentiment, comment count) with its controls,
++            // so the controls don't leave an empty band above the text.
+             HStack(spacing: 12) {
++                HStack(spacing: 10) {
++                    Text(summary.sentiment.rawValue.capitalized)
++                        .font(.subheadline.weight(.semibold))
++                        .foregroundColor(sentimentColor(summary.sentiment))
++                        .padding(.horizontal, 10)
++                        .padding(.vertical, 4)
++                        .background(sentimentColor(summary.sentiment).opacity(0.15), in: Capsule())
++                        .accessibilityLabel("Sentiment: \(summary.sentiment.rawValue)")
++
++                    Text("\(summary.commentCount) comments")
++                        .font(.subheadline)
++                        .foregroundColor(.secondary)
++                }
++
+                 Spacer()
+ 
+                 // Mac voice picker removed (avoids cross-scope state). TTS uses current system voice.
+@@ -4130,6 +4146,8 @@ VStack(alignment: .leading, spacing: 14) {
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                 }
+             }
++            .frame(maxWidth: summaryReadableWidth, alignment: .leading)
++            .frame(maxWidth: .infinity, alignment: .leading)
+             .padding(.top, 8)
+             .padding(.bottom, 16)
+             .padding(.horizontal, 20)
+@@ -4174,31 +4192,21 @@ VStack(alignment: .leading, spacing: 14) {
+                     .padding(.horizontal, 20)
+             }
+             
+-            // Stats section
+-            VStack(alignment: .leading, spacing: 10) {
+-                // Add comment count indicator first
+-                Text("Summary based on \(summary.commentCount) comments")
+-                    .font(.caption)
+-                    .foregroundColor(.secondary)
+-                
+-                HStack {
+-                    Text("Sentiment: ")
+-                        .fontWeight(.semibold)
+-                    Text(summary.sentiment.rawValue.capitalized)
+-                        .foregroundColor(sentimentColor(summary.sentiment))
+-                        .fontWeight(.bold)
+-                }
+-                if !summary.topCommenters.isEmpty {
+-                    Text("Top commenters: \(summary.topCommenters.joined(separator: ", "))")
+-                        .font(.subheadline)
+-                }
+-                if !summary.mainTopics.isEmpty {
+-                    Text("Main topics: \(summary.mainTopics.joined(separator: ", "))")
+-                        .font(.subheadline)
++            // Sentiment and comment count moved to the header row; the rest stays here.
++            if !summary.topCommenters.isEmpty || !summary.mainTopics.isEmpty {
++                VStack(alignment: .leading, spacing: 10) {
++                    if !summary.topCommenters.isEmpty {
++                        Text("Top commenters: \(summary.topCommenters.joined(separator: ", "))")
++                            .font(.subheadline)
++                    }
++                    if !summary.mainTopics.isEmpty {
++                        Text("Main topics: \(summary.mainTopics.joined(separator: ", "))")
++                            .font(.subheadline)
++                    }
+                 }
++                .padding(.horizontal, 20)
++                .padding(.bottom, 16)
+             }
+-            .padding(.horizontal, 20)
+-            .padding(.bottom, 16)
+         }
+         .modifier(GlassyBackgroundModifier())
+         .onAppear {
+@@ -4717,6 +4725,8 @@ VStack(alignment: .leading) {
+                         .frame(maxWidth: .infinity, alignment: .leading)
+                 }
+             }
++            .frame(maxWidth: summaryReadableWidth, alignment: .leading)
++            .frame(maxWidth: .infinity, alignment: .leading)
+             .padding(.top, 8)
+             .padding(.bottom, 16)
+             .padding(.horizontal, 20)
+@@ -5254,7 +5264,7 @@ struct ClickablePostImage: View {
+ private struct OverlayBarScrollEdgeFade: ViewModifier {
+     /// Space kept below the last content so it can scroll clear of the bottom toolbar pill.
+     static let bottomToolbarClearance: CGFloat = 88
+-    private static let bottomFadeHeight: CGFloat = 72
++    private static let bottomFadeHeight: CGFloat = 40
+ 
+     let height: CGFloat
+     let isEnabled: Bool
+@@ -5276,7 +5286,7 @@ private struct OverlayBarScrollEdgeFade: ViewModifier {
+                     Color.black
+                     // Soften text passing under the floating bottom toolbar pill.
+                     LinearGradient(
+-                        colors: [.black, .black.opacity(0.15)],
++                        colors: [.black, .black.opacity(0.45)],
+                         startPoint: .top,
+                         endPoint: .bottom
+                     )
+@@ -5289,3 +5299,6 @@ private struct OverlayBarScrollEdgeFade: ViewModifier {
+     }
+ }
+ #endif
++
++/// Comfortable reading width (~75 characters of body text) for summary text columns.
++let summaryReadableWidth: CGFloat = 700
+-- 
+2.54.0 (Apple Git-157)
+

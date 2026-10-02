@@ -1,5 +1,74 @@
 import Foundation
 import SwiftUI
+
+/// True only on an iPhone, never on an iPad (even in a narrow Split View or Stage Manager window).
+/// Use it for phone-only layout adjustments that must leave the iPad layout untouched.
+@MainActor var isPhoneDevice: Bool {
+    #if os(iOS)
+    return UIDevice.current.userInterfaceIdiom == .phone
+    #else
+    return false
+    #endif
+}
+
+/// Horizontal inset for text inside summary and answer cards; tighter on iPhone so lines aren't squeezed.
+@MainActor var summaryCardTextInset: CGFloat { isPhoneDevice ? 14 : 20 }
+
+/// Tracks whether the open article is being scrolled, so floating controls can step aside.
+@MainActor final class ArticleScrollActivity: ObservableObject {
+    static let shared = ArticleScrollActivity()
+    @Published private(set) var isScrolling = false
+    private var idleWork: DispatchWorkItem?
+
+    /// A scroll event from a view that doesn't report phases; counts as scrolling until it goes quiet.
+    func noteScroll() {
+        setScrolling(true)
+        setScrolling(false)
+    }
+
+    /// `false` waits briefly before revealing controls again, so they don't flicker between flicks.
+    func setScrolling(_ scrolling: Bool) {
+        idleWork?.cancel()
+        if scrolling {
+            if !isScrolling { isScrolling = true }
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in self?.isScrolling = false }
+        idleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+}
+
+/// Fades its content out while the article scrolls and back in once scrolling stops.
+struct HidesWhileArticleScrolls<Content: View>: View {
+    @ViewBuilder var content: Content
+    @ObservedObject private var activity = ArticleScrollActivity.shared
+
+    var body: some View {
+        content
+            .opacity(activity.isScrolling ? 0 : 1)
+            .scaleEffect(activity.isScrolling ? 0.9 : 1)
+            .allowsHitTesting(!activity.isScrolling)
+            .animation(.easeInOut(duration: 0.2), value: activity.isScrolling)
+    }
+}
+
+/// Shows its content only after a short delay, so quick loads never flash a spinner.
+struct DelayedReveal<Content: View>: View {
+    let delay: Double
+    @ViewBuilder var content: Content
+    @State private var isVisible = false
+
+    var body: some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .animation(.easeIn(duration: 0.2), value: isVisible)
+            .task {
+                try? await Task.sleep(for: .seconds(delay))
+                isVisible = true
+            }
+    }
+}
 #if os(iOS)
 import UIKit
 import WebKit
@@ -210,8 +279,20 @@ func cleanMarkdownArtifactsForDisplay(_ input: String) -> String {
     value = value.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
     value = value.replacingOccurrences(of: "(?m)(^\\s*[-•]?\\s*)#{1,6}\\s*", with: "$1", options: .regularExpression)
     value = value.replacingOccurrences(of: "(?m)^\\s*\\*\\s+", with: "• ", options: .regularExpression)
+    value = value.replacingOccurrences(of: "(?m)^[ \\t]*[-–][ \\t]+", with: "• ", options: .regularExpression)
+    value = removingRepeatedZeroTimestamps(value)
     value = value.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
     return value.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Models without real timing data sometimes cite "[0:00]" after nearly every sentence.
+/// A lone [0:00] can be a genuine citation of the opening, so only repeated ones are dropped.
+private func removingRepeatedZeroTimestamps(_ input: String) -> String {
+    let pattern = #"[ \t]?\[0?0:00\]"#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return input }
+    let range = NSRange(input.startIndex..., in: input)
+    guard regex.numberOfMatches(in: input, range: range) >= 3 else { return input }
+    return regex.stringByReplacingMatches(in: input, range: range, withTemplate: "")
 }
 
 func cleanAndFormatCommentSummaryForDisplay(_ input: String) -> String {
@@ -426,7 +507,8 @@ func buildAskAISelectionPrompt(
     selectedText: String,
     extractedContext: String,
     sourceContext: String,
-    sourceLabel: String = "Original source"
+    sourceLabel: String = "Original source",
+    explainSelection: Bool = false
 ) -> String {
     func normalized(_ value: String, maxCharacters: Int) -> String {
         var normalized = value
@@ -449,6 +531,30 @@ func buildAskAISelectionPrompt(
 
     guard !selected.isEmpty else {
         return ""
+    }
+
+    // Opt in only for Settings-model Ask AI; preserve the existing Web prompt.
+    if explainSelection {
+        return """
+        Explain what the selected passage means in its context. Do not merely repeat or paraphrase the surrounding summary or Q&A answer.
+
+        Rules:
+        - Start with a direct explanation of the selected words or idea, not a recap of what commenters or articles discussed.
+        - Use the supplied source and nearby context to resolve references, wordplay, contrasts, and implied relationships. Make those relationships explicit in your answer.
+        - Distinguish a source author's claim from an established fact. Do not invent motives, background facts, or details absent from the supplied material.
+        - Explain what the supplied material supports even if there is no further detail. State only the specific uncertainty that remains; do not replace a supported explanation with an unavailable-information response.
+        - If a reference is genuinely ambiguous, say what is unclear rather than guessing.
+        - Return concise plain text in short paragraphs, without Markdown symbols, headings, bullets, or code fences.
+
+        Selected text:
+        \(selected)
+
+        Nearby rendered context:
+        \(context.isEmpty ? "(No nearby rendered context was captured.)" : context)
+
+        \(label.isEmpty ? "Original source" : label):
+        \(source.isEmpty ? "(No original source was captured; explain only what the selection and nearby context support.)" : source)
+        """
     }
 
     if !source.isEmpty {
@@ -512,6 +618,21 @@ func buildAskAISelectionPrompt(
 
     Extracted context:
     \(context)
+    """
+}
+
+/// Used only by Settings-model batch Q&A, never by Web or individual Q&A.
+func buildSettingsBatchQAPrompt(_ prompt: String) -> String {
+    """
+    \(prompt)
+
+    Answering guidance:
+    - Answer the user's actual question directly; do not just repeat the saved summaries or produce another general summary.
+    - Questions about the theme, main topic, meaning, central idea, or main argument ask for grounded synthesis. Derive the answer from the supplied material even if it does not use those exact words.
+    - Resolve clear references and equivalent terms from context. Explain the connection or distinction the question asks about, rather than copying related sentences.
+    - Read all supplied items before deciding information is unavailable. Use relevant items to support the answer and distinguish different discussions where necessary.
+    - Do not invent facts or assume access to omitted articles or comments. Give any supported partial answer and identify the specific missing detail or genuine ambiguity.
+    - Return concise plain text in short paragraphs.
     """
 }
 
@@ -757,7 +878,8 @@ struct AskAIResponseSheet: View {
                 sourceLabel: "Current Ask AI answer",
                 sourceText: answer
             )).boundedSource(additionalAnswer: answer),
-            sourceLabel: (selectionOrigin?.promptSourceLabel ?? "Current Ask AI answer")
+            sourceLabel: (selectionOrigin?.promptSourceLabel ?? "Current Ask AI answer"),
+            explainSelection: !useWebAI && appState.settings.selectedSummaryProvider != .webAI
         )
         guard !prompt.isEmpty else { return }
 
@@ -968,7 +1090,7 @@ struct SelectableTextPrewarm: UIViewRepresentable {
 }
 
 private final class TextSelectionIntentGestureRecognizer: UIGestureRecognizer {
-    var onTouchBegan: (() -> Void)?
+    var onTouchBegan: ((UITouch) -> Void)?
     var onTouchEnded: (() -> Void)?
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -976,7 +1098,9 @@ private final class TextSelectionIntentGestureRecognizer: UIGestureRecognizer {
             state = .failed
             return
         }
-        onTouchBegan?()
+        if let touch = touches.first {
+            onTouchBegan?(touch)
+        }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -1012,11 +1136,38 @@ final class AskAITextView: UITextView, UITextViewDelegate {
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredSize: CGSize = .zero
     private static weak var currentTextTouchView: AskAITextView?
+    private static let attachedTextViews = NSHashTable<AskAITextView>.weakObjects()
+
+    static var hasSelectedText: Bool {
+        // Read the actual selection, not just a recent delegate notification.
+        // Selection handles can receive touches outside the text view itself.
+        attachedTextViews.allObjects.contains { $0.hasVisibleSelection }
+    }
+
+    private var hasVisibleSelection: Bool {
+        guard let window, isSelectable,
+              selectedRange.location != NSNotFound, selectedRange.length > 0,
+              convert(bounds, to: window).intersects(window.bounds) else { return false }
+        var ancestor: UIView? = self
+        while let view = ancestor {
+            guard !view.isHidden, view.alpha > 0.01 else { return false }
+            ancestor = view.superview
+        }
+        return true
+    }
+
+    static var hasActivePointerTextInteraction: Bool {
+        currentTextTouchView?.isCurrentTextTouchPointer == true
+    }
     static var didActiveTextTouchChangeSelection: Bool {
-        currentTextTouchView?.didSelectionChangeDuringCurrentTouch == true
+        // Keep Back blocked for the whole selection, including subsequent handle
+        // drags. The existing per-touch guard also catches a newly created selection.
+        hasSelectedText || hasActivePointerTextInteraction
+            || currentTextTouchView?.didSelectionChangeDuringCurrentTouch == true
     }
 
     private var isTrackingCurrentTextTouch = false
+    private var isCurrentTextTouchPointer = false
     private var didSelectionChangeDuringCurrentTouch = false
     private var textSelectionIntentRecognizer: TextSelectionIntentGestureRecognizer?
     private var textSelectionGestureResetWorkItem: DispatchWorkItem?
@@ -1036,6 +1187,11 @@ final class AskAITextView: UITextView, UITextViewDelegate {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window != nil {
+            Self.attachedTextViews.add(self)
+        } else {
+            Self.attachedTextViews.remove(self)
+        }
         installAskAIMenuItem()
         installTextSelectionIntentObserver()
     }
@@ -1110,8 +1266,8 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         recognizer.cancelsTouchesInView = false
         recognizer.delaysTouchesBegan = false
         recognizer.delaysTouchesEnded = false
-        recognizer.onTouchBegan = { [weak self] in
-            self?.beginTextTouch()
+        recognizer.onTouchBegan = { [weak self] touch in
+            self?.beginTextTouch(touch)
         }
         recognizer.onTouchEnded = { [weak self] in
             self?.endTextTouch()
@@ -1120,11 +1276,12 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         textSelectionIntentRecognizer = recognizer
     }
 
-    private func beginTextTouch() {
+    private func beginTextTouch(_ touch: UITouch) {
         textSelectionGestureResetWorkItem?.cancel()
         textSelectionGestureResetWorkItem = nil
         isTrackingCurrentTextTouch = true
-        didSelectionChangeDuringCurrentTouch = false
+        isCurrentTextTouchPointer = touch.type == .indirectPointer
+        didSelectionChangeDuringCurrentTouch = selectedRange.location != NSNotFound && selectedRange.length > 0
         Self.currentTextTouchView = self
     }
 
@@ -1133,6 +1290,7 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.isTrackingCurrentTextTouch = false
+            self.isCurrentTextTouchPointer = false
             self.didSelectionChangeDuringCurrentTouch = false
             if Self.currentTextTouchView === self {
                 Self.currentTextTouchView = nil
@@ -1246,6 +1404,106 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         return TimeInterval(values[0] * 3_600 + values[1] * 60 + values[2])
     }
 
+    /// Gives plain-text summaries visual structure without changing a single character:
+    /// standalone short lines become headings, a leading "Label:" becomes bold, and
+    /// "• " bullets get a hanging indent. Copy, TTS and Ask AI keep reading the same text.
+    private func applySummaryStructureStyling() {
+        let storage = textStorage
+        let source = storage.string as NSString
+        guard source.length > 0 else { return }
+
+        let baseFont = font ?? UIFont.preferredFont(forTextStyle: .body)
+        let boldDescriptor = baseFont.fontDescriptor.withSymbolicTraits(.traitBold) ?? baseFont.fontDescriptor
+        let labelFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize)
+        let headingFont = UIFont(descriptor: boldDescriptor, size: baseFont.pointSize + 4)
+        // The blank line after a heading is drawn short so the heading sits closer to the
+        // text it introduces than to the paragraph above it. Only attributes change.
+        let tightBlankLineFont = UIFont.systemFont(ofSize: max(4, baseFont.pointSize * 0.35))
+
+        var paragraphRanges: [NSRange] = []
+        var enclosingRanges: [NSRange] = []
+        source.enumerateSubstrings(
+            in: NSRange(location: 0, length: source.length),
+            options: [.byParagraphs, .substringNotRequired]
+        ) { _, range, enclosingRange, _ in
+            paragraphRanges.append(range)
+            enclosingRanges.append(enclosingRange)
+        }
+        let contentParagraphCount = paragraphRanges.filter {
+            !source.substring(with: $0).trimmingCharacters(in: .whitespaces).isEmpty
+        }.count
+        guard contentParagraphCount > 1 else { return }
+
+        let bulletPrefix = "• "
+        let bulletIndent = (bulletPrefix as NSString).size(withAttributes: [.font: baseFont]).width
+
+        storage.beginEditing()
+        var previousWasHeading = false
+        for (index, range) in paragraphRanges.enumerated() {
+            let paragraph = source.substring(with: range)
+            let trimmed = paragraph.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else {
+                if previousWasHeading {
+                    storage.addAttribute(.font, value: tightBlankLineFont, range: enclosingRanges[index])
+                }
+                previousWasHeading = false
+                continue
+            }
+
+            if Self.isSummaryHeading(trimmed) {
+                storage.addAttribute(.font, value: headingFont, range: range)
+                previousWasHeading = true
+                continue
+            }
+            previousWasHeading = false
+
+            var labelSearchStart = 0
+            if paragraph.hasPrefix(bulletPrefix) {
+                let style = NSMutableParagraphStyle()
+                style.headIndent = bulletIndent
+                storage.addAttribute(.paragraphStyle, value: style, range: range)
+                labelSearchStart = (bulletPrefix as NSString).length
+            }
+
+            if let labelLength = Self.summaryLabelLength(in: paragraph, from: labelSearchStart) {
+                storage.addAttribute(
+                    .font,
+                    value: labelFont,
+                    range: NSRange(location: range.location + labelSearchStart, length: labelLength)
+                )
+            }
+        }
+        storage.endEditing()
+    }
+
+    /// A heading is a short standalone line that does not read like a sentence.
+    private static func isSummaryHeading(_ line: String) -> Bool {
+        guard line.count <= 70,
+              let first = line.unicodeScalars.first,
+              CharacterSet.uppercaseLetters.contains(first) || CharacterSet.decimalDigits.contains(first),
+              !line.hasPrefix("• ") else { return false }
+        let words = line.split(whereSeparator: { $0.isWhitespace })
+        guard (1...9).contains(words.count) else { return false }
+        if line.hasSuffix(":") { return !line.dropLast().contains(":") }
+        guard let last = line.last, !".!?,;:\"”".contains(last) else { return false }
+        return !line.contains(": ")
+    }
+
+    /// Length (in UTF-16 units, including the colon) of a leading "Short Label:" to embolden.
+    private static func summaryLabelLength(in paragraph: String, from offset: Int) -> Int? {
+        let text = paragraph as NSString
+        guard offset < text.length else { return nil }
+        let body = text.substring(from: offset)
+        guard let match = body.range(
+            of: "^[A-Z0-9][A-Za-z0-9&/'’()\\- ]{0,48}:(?=\\s)",
+            options: .regularExpression
+        ) else { return nil }
+        let label = body[match]
+        guard label.split(separator: " ").count <= 6,
+              body[match.upperBound...].trimmingCharacters(in: .whitespaces).count > 0 else { return nil }
+        return (String(label) as NSString).length
+    }
+
     private func applySummaryReferenceLinks(maximumReference: Int) {
         let fullRange = NSRange(location: 0, length: textStorage.length)
         if fullRange.length > 0 {
@@ -1259,6 +1517,7 @@ final class AskAITextView: UITextView, UITextViewDelegate {
                     ],
                     range: fullRange
                 )
+                applySummaryStructureStyling()
             }
         }
         applyDetectedURLLinks()
@@ -1464,6 +1723,19 @@ final class AskAITextView: UITextView, UITextViewDelegate {
         let end = min(nsText.length, NSMaxRange(range) + window)
         let contextRange = NSRange(location: start, length: max(0, end - start))
         let context = nsText.substring(with: contextRange)
+
+        // The action has consumed the selection. Release it before presenting
+        // the answer so dismissing Ask AI does not leave swipe-Back blocked.
+        textSelectionGestureResetWorkItem?.cancel()
+        textSelectionGestureResetWorkItem = nil
+        isTrackingCurrentTextTouch = false
+        isCurrentTextTouchPointer = false
+        didSelectionChangeDuringCurrentTouch = false
+        if Self.currentTextTouchView === self {
+            Self.currentTextTouchView = nil
+        }
+        selectedRange = NSRange(location: range.location, length: 0)
+        resignFirstResponder()
 
         onAskAISelection?(action, selected, context)
     }

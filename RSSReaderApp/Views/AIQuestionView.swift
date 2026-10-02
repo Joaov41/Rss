@@ -97,10 +97,10 @@ struct AIQuestionView: View {
                     let throughput = appState.mlxLastThroughput
                     if !throughput.isEmpty,
 	                       (appState.settings.selectedSummaryProvider == .appleLocal ||
-	                        appState.settings.selectedSummaryProvider == .mlxLocal ||
 	                        appState.settings.selectedSummaryProvider == .coreAIMLXLocal ||
 	                        appState.settings.selectedSummaryProvider == .applePCCGateway ||
-	                        appState.settings.selectedSummaryProvider == .summarizeDaemon) {
+	                        appState.settings.selectedSummaryProvider == .summarizeDaemon ||
+	                        appState.settings.selectedSummaryProvider == .chatGPT) {
                         HStack(spacing: 4) {
                             Image(systemName: "cpu")
                                 .font(.caption2)

@@ -1,0 +1,44 @@
+From 755ad669563e19346a9525c7caf11b7dacd046ca Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 00:00:04 +0100
+Subject: [PATCH] iPad only: web articles run edge to edge inside the article
+ card
+
+---
+ RSSReaderApp/Views/ContentView.swift | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 503ea26..800e33b 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -11629,6 +11629,17 @@ struct ArticleDetailView: View {
+         #endif
+     }
+ 
++    /// iPad web articles run edge to edge inside the card; the reader page supplies its own text margins.
++    /// Podcasts and YouTube keep the regular padding around their players.
++    private func articlePrimaryHorizontalPadding(for article: Article) -> CGFloat {
++        #if os(iOS)
++        if UIDevice.current.userInterfaceIdiom == .pad && !article.isPodcastEpisode && !article.isYouTubeVideo {
++            return 0
++        }
++        #endif
++        return articleContentHorizontalPadding
++    }
++
+     private var articleCardOuterHorizontalPadding: CGFloat {
+         #if os(iOS)
+         return usesPhoneArticleLayout ? 0 : 16
+@@ -12053,7 +12064,7 @@ struct ArticleDetailView: View {
+                 articlePrimaryContent(article: article, viewportHeight: viewportHeight)
+                     .id(article.id)
+                     .padding(.top, 8)
+-                    .padding(.horizontal, articleContentHorizontalPadding)
++                    .padding(.horizontal, articlePrimaryHorizontalPadding(for: article))
+ 
+                 Spacer()
+                     .frame(height: 40)
+-- 
+2.54.0 (Apple Git-157)
+

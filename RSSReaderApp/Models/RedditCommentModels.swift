@@ -166,61 +166,94 @@ struct RedditCommentModel: Identifiable {
         return urls
     }
 
-    private static func extractDisplayLinks(from body: String, excludingImageURLs imageURLs: [URL]) -> [RedditCommentLink] {
+    /// Reddit escapes underscores (and a few other characters) inside URLs, e.g. `nothing\_loads`.
+    /// Undo that inside URLs only, so links parse and match their unescaped duplicates.
+    private static func unescapingRedditURLs(in text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "https?://[^\\s\\[\\]()<>\"]*[^\\s\\[\\]()<>\".,;:!?']") else { return text }
+        let nsText = text as NSString
+        var result = ""
+        var last = 0
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            result += nsText.substring(with: NSRange(location: last, length: match.range.location - last))
+            result += nsText.substring(with: match.range).replacingOccurrences(of: "\\", with: "")
+            last = match.range.location + match.range.length
+        }
+        result += nsText.substring(from: last)
+        return result
+    }
+
+    /// Compares links regardless of a trailing slash, case or percent-encoding.
+    private static func linkKey(_ url: URL) -> String {
+        var key = (url.absoluteString.removingPercentEncoding ?? url.absoluteString).lowercased()
+        while key.hasSuffix("/") { key.removeLast() }
+        return key
+    }
+
+    private static func extractDisplayLinks(from rawBody: String, excludingImageURLs imageURLs: [URL]) -> [RedditCommentLink] {
+        let body = unescapingRedditURLs(in: decodeHTMLEntities(rawBody))
         var links = [RedditCommentLink]()
+        var seen = Set<String>()
 
-        let markdownPattern = "\\[([^\\]]+)\\]\\(([^\\)]+)\\)"
-        if let regex = try? NSRegularExpression(pattern: markdownPattern) {
-            let range = NSRange(body.startIndex..., in: body)
-            let matches = regex.matches(in: body, options: [], range: range)
+        func add(_ urlString: String, text: String) {
+            var cleaned = urlString
+            while let last = cleaned.last, ".,;:!?'\"".contains(last) { cleaned.removeLast() }
+            guard let url = URL(string: cleaned),
+                  !imageURLs.contains(url),
+                  !isImageURLString(url.absoluteString) else { return }
+            let key = linkKey(url)
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            links.append(RedditCommentLink(id: "\(links.count)-\(url.absoluteString)", text: text, url: url))
+        }
 
-            for match in matches {
-                if match.numberOfRanges >= 3,
-                   let textRange = Range(match.range(at: 1), in: body),
-                   let urlRange = Range(match.range(at: 2), in: body) {
-                    let urlString = decodeHTMLEntities(String(body[urlRange]))
-                    guard let url = URL(string: urlString) else { continue }
-
-                    let linkText = String(body[textRange])
-                    if imageURLs.contains(url) || isImageURLString(url.absoluteString) {
-                        continue
-                    }
-
-                    links.append(RedditCommentLink(
-                        id: "\(links.count)-\(url.absoluteString)-\(linkText)",
-                        text: linkText,
-                        url: url
-                    ))
-                }
+        // Links written with real words keep those words as the chip label.
+        if let regex = try? NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\((https?://[^\\s()<>\"]+)\\)") {
+            let nsBody = body as NSString
+            for match in regex.matches(in: body, range: NSRange(location: 0, length: nsBody.length)) {
+                let text = nsBody.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                let isURLText = text.lowercased().hasPrefix("http")
+                add(nsBody.substring(with: match.range(at: 2)), text: isURLText ? "" : text)
             }
         }
 
-        let urlPattern = "(?i)(https?://[^\\s]+)(?![^\\(\\)]*\\))(?![!\\[])"
-        if let regex = try? NSRegularExpression(pattern: urlPattern) {
-            let range = NSRange(body.startIndex..., in: body)
-            let matches = regex.matches(in: body, options: [], range: range)
-
-            for match in matches {
-                if let urlRange = Range(match.range, in: body) {
-                    let urlString = decodeHTMLEntities(String(body[urlRange]))
-                    guard let url = URL(string: urlString) else { continue }
-
-                    if imageURLs.contains(url) || isImageURLString(url.absoluteString) {
-                        continue
-                    }
-
-                    if !links.contains(where: { $0.url == url }) {
-                        links.append(RedditCommentLink(
-                            id: "\(links.count)-\(url.absoluteString)",
-                            text: "",
-                            url: url
-                        ))
-                    }
-                }
+        // Every other URL, stopping at brackets and parentheses so markdown around it isn't swallowed.
+        if let regex = try? NSRegularExpression(pattern: "https?://[^\\s\\[\\]()<>\"]*[^\\s\\[\\]()<>\".,;:!?']") {
+            let nsBody = body as NSString
+            for match in regex.matches(in: body, range: NSRange(location: 0, length: nsBody.length)) {
+                add(nsBody.substring(with: match.range), text: "")
             }
         }
 
         return links
+    }
+
+    /// Links are listed as chips under the comment, so the text keeps only links written with real
+    /// words ("[my thread](url)" stays as a tappable "my thread"); bare URLs and links whose text is
+    /// itself a URL are removed instead of being shown twice.
+    private static func removingRawURLs(from text: String) -> String {
+        var result = text
+        let steps: [(String, String)] = [
+            // [https://…](https://…) and nested variants Reddit's editor produces
+            ("\\[\\s*https?://[^\\]]*\\]\\([^)]*\\)(?:\\([^)]*\\))?", ""),
+            // any leftover "(https://…)" and "[https://…]" (but not the "(url)" of a "[words](url)" link)
+            ("(?<!\\])\\(\\s*https?://[^)]*\\)", ""),
+            ("\\[\\s*https?://[^\\]]*\\]", ""),
+            // bare URLs (not the target of a "[words](url)" link)
+            ("(?<!\\]\\()https?://[^\\s\\[\\]()<>\"]*[^\\s\\[\\]()<>\".,;:!?']", ""),
+            // brackets and punctuation left dangling by a removed link, e.g. "about it a few days ago - )"
+            ("(?<=[\\s\\-–—])[)\\]]+", ""),
+            ("[ \\t]+([.,;:!?])", "$1"),
+            ("[ \\t]*[-–—][ \\t]*$", ""),
+            ("\\(\\s*\\)|\\[\\s*\\]", ""),
+            ("[ \\t]{2,}", " ")
+        ]
+        for (pattern, replacement) in steps {
+            result = result.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        return result
+            .components(separatedBy: "\n")
+            .map { $0.replacingOccurrences(of: "[ \\t]*[-–—][ \\t]*$", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
+            .joined(separator: "\n")
     }
 
     private static func formatBodyBlocks(from body: String) -> [AttributedString] {
@@ -251,12 +284,10 @@ struct RedditCommentModel: Identifiable {
             .replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "[ \\t]*\\n[ \\t]*\\n[ \\t]*", with: "\n\n", options: .regularExpression)
             .replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
-            .replacingOccurrences(of: "(?i)(https?://[^\\s]+)(?![^\\(\\)]*\\))(?![!\\[])",
-                                  with: "[$1]($1)",
-                                  options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let withoutRawURLs = removingRawURLs(from: unescapingRedditURLs(in: markdownContent))
 
-        let blocks = markdownContent
+        let blocks = withoutRawURLs
             .components(separatedBy: CharacterSet.newlines)
             .reduce(into: [String]()) { partialResult, line in
                 let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)

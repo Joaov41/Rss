@@ -1,0 +1,111 @@
+From 599c26f4e49cffae8beb3906854c4ef29617ad05 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 00:54:54 +0100
+Subject: [PATCH] iPad article: scroll-to-top button hides while scrolling,
+ returns when scrolling stops
+
+---
+ RSSReaderApp/Views/AskAIUtilities.swift | 39 +++++++++++++++++++++++++
+ RSSReaderApp/Views/ContentView.swift    | 21 +++++++++----
+ 2 files changed, 54 insertions(+), 6 deletions(-)
+
+diff --git a/RSSReaderApp/Views/AskAIUtilities.swift b/RSSReaderApp/Views/AskAIUtilities.swift
+index 6c0dcb0..9109661 100644
+--- a/RSSReaderApp/Views/AskAIUtilities.swift
++++ b/RSSReaderApp/Views/AskAIUtilities.swift
+@@ -14,6 +14,45 @@ import SwiftUI
+ /// Horizontal inset for text inside summary and answer cards; tighter on iPhone so lines aren't squeezed.
+ @MainActor var summaryCardTextInset: CGFloat { isPhoneDevice ? 14 : 20 }
+ 
++/// Tracks whether the open article is being scrolled, so floating controls can step aside.
++@MainActor final class ArticleScrollActivity: ObservableObject {
++    static let shared = ArticleScrollActivity()
++    @Published private(set) var isScrolling = false
++    private var idleWork: DispatchWorkItem?
++
++    /// A scroll event from a view that doesn't report phases; counts as scrolling until it goes quiet.
++    func noteScroll() {
++        setScrolling(true)
++        setScrolling(false)
++    }
++
++    /// `false` waits briefly before revealing controls again, so they don't flicker between flicks.
++    func setScrolling(_ scrolling: Bool) {
++        idleWork?.cancel()
++        if scrolling {
++            if !isScrolling { isScrolling = true }
++            return
++        }
++        let work = DispatchWorkItem { [weak self] in self?.isScrolling = false }
++        idleWork = work
++        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
++    }
++}
++
++/// Fades its content out while the article scrolls and back in once scrolling stops.
++struct HidesWhileArticleScrolls<Content: View>: View {
++    @ViewBuilder var content: Content
++    @ObservedObject private var activity = ArticleScrollActivity.shared
++
++    var body: some View {
++        content
++            .opacity(activity.isScrolling ? 0 : 1)
++            .scaleEffect(activity.isScrolling ? 0.9 : 1)
++            .allowsHitTesting(!activity.isScrolling)
++            .animation(.easeInOut(duration: 0.2), value: activity.isScrolling)
++    }
++}
++
+ /// Shows its content only after a short delay, so quick loads never flash a spinner.
+ struct DelayedReveal<Content: View>: View {
+     let delay: Double
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index dfec94c..bf0df0b 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -11989,13 +11989,15 @@ struct ArticleDetailView: View {
+     private func scrollToTopOverlay(proxy: ScrollViewProxy) -> some View {
+         #if os(iOS)
+         if !usesPhoneArticleLayout {
+-            IOSArticleActionCapsule {
+-                Button(action: {
+-                    scrollArticleToTop(proxy: proxy)
+-                }) {
+-                    Image(systemName: "arrow.up.circle.fill")
++            HidesWhileArticleScrolls {
++                IOSArticleActionCapsule {
++                    Button(action: {
++                        scrollArticleToTop(proxy: proxy)
++                    }) {
++                        Image(systemName: "arrow.up.circle.fill")
++                    }
++                    .buttonStyle(IOSArticleChromeIconButtonStyle())
+                 }
+-                .buttonStyle(IOSArticleChromeIconButtonStyle())
+             }
+             .padding(.trailing, 24)
+             .padding(.bottom, 24)
+@@ -12079,6 +12081,9 @@ struct ArticleDetailView: View {
+             #endif
+         }
+         #if os(iOS)
++        .onScrollPhaseChange { _, phase in
++            ArticleScrollActivity.shared.setScrolling(phase != .idle)
++        }
+         .coordinateSpace(name: articleScrollCoordinateSpace)
+         .background(ArticleOuterScrollViewResolver().frame(width: 0, height: 0))
+         .onPreferenceChange(ArticleDetailScrollOffsetPreferenceKey.self, perform: handlePhoneArticleScrollOffsetChange)
+@@ -15294,6 +15299,10 @@ struct ArticleReaderWebView: UIViewRepresentable {
+             let normalizedOffset = max(0, scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+             let isAtTop = normalizedOffset < 8
+             parent.onScrollActivity(isAtTop)
++            // Only the reader's own drags and flings count, not programmatic inset/offset changes.
++            if scrollView.isDragging || scrollView.isDecelerating {
++                ArticleScrollActivity.shared.noteScroll()
++            }
+         }
+     }
+ }
+-- 
+2.54.0 (Apple Git-157)
+

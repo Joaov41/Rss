@@ -1,0 +1,37 @@
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/fonts/geist-latin.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("/fonts/geist-mono-latin.woff2") format("woff2"); }
+:root {
+  color-scheme: dark;
+  --bg: #111318;
+  --bg-raised: #181b21;
+  --panel: #22262e;
+  --ink: #f6f7f9;
+  --muted: #b3bac6;
+  --faint: #99a3b1;
+  --line: #ffffff22;
+  --line-strong: #ffffff4a;
+  --accent: #ff9561;
+  --accent-ink: #211b17;
+  --glass: rgba(215, 226, 240, .09);
+  --glass-line: rgba(255, 255, 255, .5);
+  --glass-shadow: 0 10px 28px #0003, inset 0 2px 1px #ffffff70, inset 0 -1px 1px #ffffff30;
+  --sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+  --display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+* { box-sizing: border-box; letter-spacing: 0; }
+html { scroll-behavior: smooth; scroll-padding-top: 90px; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; line-height: 1.6; }
+button, input, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button { color: inherit; cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+img, video { display: block; max-width: 100%; }
+h1, h2, h3, h4 { line-height: 1.15; text-wrap: balance; font-weight: 550; }
+p { text-wrap: pretty; }
+a, button { transition: color 160ms, background-color 160ms, border-color 160ms; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+::selection { color: var(--accent-ink); background: var(--accent); }
+.skip-link { position: fixed; z-index: 100; top: 8px; left: 8px; padding: 12px 18px; background: var(--accent); color: var(--accent-ink); transform: translateY(-160%); }
+.skip-link:focus { transform: none; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

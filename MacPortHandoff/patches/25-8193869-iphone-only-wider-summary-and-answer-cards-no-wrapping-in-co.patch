@@ -1,0 +1,297 @@
+From 8193869db57b61ae73107f9d68201ed6a49c0917 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 22:49:03 +0100
+Subject: [PATCH] iPhone only: wider summary and answer cards, no wrapping in
+ comment summary header
+
+---
+ RSSReaderApp/Views/AskAIUtilities.swift   | 13 +++++++++
+ RSSReaderApp/Views/ContentView.swift      | 26 +++++++++---------
+ RSSReaderApp/Views/RedditDetailView.swift | 32 +++++++++++++++--------
+ 3 files changed, 48 insertions(+), 23 deletions(-)
+
+diff --git a/RSSReaderApp/Views/AskAIUtilities.swift b/RSSReaderApp/Views/AskAIUtilities.swift
+index 6f7f122..19b1fef 100644
+--- a/RSSReaderApp/Views/AskAIUtilities.swift
++++ b/RSSReaderApp/Views/AskAIUtilities.swift
+@@ -1,5 +1,18 @@
+ import Foundation
+ import SwiftUI
++
++/// True only on an iPhone, never on an iPad (even in a narrow Split View or Stage Manager window).
++/// Use it for phone-only layout adjustments that must leave the iPad layout untouched.
++@MainActor var isPhoneDevice: Bool {
++    #if os(iOS)
++    return UIDevice.current.userInterfaceIdiom == .phone
++    #else
++    return false
++    #endif
++}
++
++/// Horizontal inset for text inside summary and answer cards; tighter on iPhone so lines aren't squeezed.
++@MainActor var summaryCardTextInset: CGFloat { isPhoneDevice ? 14 : 20 }
+ #if os(iOS)
+ import UIKit
+ import WebKit
+diff --git a/RSSReaderApp/Views/ContentView.swift b/RSSReaderApp/Views/ContentView.swift
+index 2132567..600bd80 100644
+--- a/RSSReaderApp/Views/ContentView.swift
++++ b/RSSReaderApp/Views/ContentView.swift
+@@ -12474,7 +12474,7 @@ struct ArticleDetailView: View {
+             summarySection(article: article)
+             qaSection(article: article)
+         }
+-        .padding(.horizontal, 24)
++        .padding(.horizontal, isPhoneDevice ? 10 : 24)
+         .padding(.top, articleSummaryToolbarClearance(for: article))
+     }
+ 
+@@ -12572,7 +12572,7 @@ struct ArticleDetailView: View {
+                             qaUtilityButtons()
+                         }
+                     }
+-                    .padding(8)
++                    .padding(isPhoneDevice ? 4 : 8)
+                     .background(
+                         RoundedRectangle(cornerRadius: 16, style: .continuous)
+                             .fill(Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.035))
+@@ -12659,7 +12659,7 @@ struct ArticleDetailView: View {
+                     .font(.body)
+                     .foregroundColor(.primary)
+                     .padding(.vertical, 16)
+-                    .padding(.horizontal, 20)
++                    .padding(.horizontal, summaryCardTextInset)
+                     .frame(maxWidth: .infinity, alignment: .leading)
+             } else {
+                 VStack(spacing: 8) {
+@@ -12695,7 +12695,7 @@ struct ArticleDetailView: View {
+             )
+             .fixedSize(horizontal: false, vertical: true)
+             .padding(.vertical, 16)
+-            .padding(.horizontal, 20)
++            .padding(.horizontal, summaryCardTextInset)
+             .frame(maxWidth: .infinity, alignment: .leading)
+         }
+     }
+@@ -15899,7 +15899,9 @@ struct ArticleGlassyBackgroundModifier: ViewModifier {
+     
+     func body(content: Content) -> some View {
+         content
+-            .padding()
++            // iPhone: no extra side padding; the content already carries its own text inset.
++            .padding(.vertical, isPhoneDevice ? 10 : 16)
++            .padding(.horizontal, isPhoneDevice ? 0 : 16)
+             .background(
+                 RoundedRectangle(cornerRadius: 16)
+                     .fill(backgroundFillColor)
+@@ -16524,7 +16526,7 @@ private struct ArticleGlassySummaryContent: View {
+                     localHelp: "Read aloud (Local)"
+                 )
+             }
+-            .padding(.horizontal, 20)
++            .padding(.horizontal, summaryCardTextInset)
+             .padding(.top, 12)
+ 
+             Group {
+@@ -16550,7 +16552,7 @@ private struct ArticleGlassySummaryContent: View {
+             }
+             .padding(.top, 8)
+             .padding(.bottom, 16)
+-            .padding(.horizontal, 20)
++            .padding(.horizontal, summaryCardTextInset)
+ 
+             if isSynthesizingSpeech {
+                 HStack {
+@@ -16561,7 +16563,7 @@ private struct ArticleGlassySummaryContent: View {
+                         .font(.caption)
+                         .foregroundColor(.secondary)
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+                 .padding(.bottom, 12)
+             } else if isPreparingLocalTTS {
+                 HStack {
+@@ -16572,7 +16574,7 @@ private struct ArticleGlassySummaryContent: View {
+                         .font(.caption)
+                         .foregroundColor(.secondary)
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+                 .padding(.bottom, 12)
+             } else if isSpeakingLocally {
+                 HStack {
+@@ -16583,7 +16585,7 @@ private struct ArticleGlassySummaryContent: View {
+                         .font(.caption)
+                         .foregroundColor(.secondary)
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+                 .padding(.bottom, 12)
+             }
+ 
+@@ -16593,7 +16595,7 @@ private struct ArticleGlassySummaryContent: View {
+                     Text(throughputText).font(.caption2).monospacedDigit()
+                 }
+                 .foregroundStyle(.secondary)
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+                 .padding(.bottom, 6)
+             }
+ 
+@@ -16601,7 +16603,7 @@ private struct ArticleGlassySummaryContent: View {
+                 Text(speechSynthesisError)
+                     .font(.caption)
+                     .foregroundColor(.red)
+-                    .padding(.horizontal, 20)
++                    .padding(.horizontal, summaryCardTextInset)
+                     .padding(.bottom, 12)
+             }
+         }
+diff --git a/RSSReaderApp/Views/RedditDetailView.swift b/RSSReaderApp/Views/RedditDetailView.swift
+index df717b1..dc0ad08 100644
+--- a/RSSReaderApp/Views/RedditDetailView.swift
++++ b/RSSReaderApp/Views/RedditDetailView.swift
+@@ -758,6 +758,8 @@ struct RedditDetailView: View {
+                         HStack {
+                             Text("Comment Summary")
+                                 .font(.headline)
++                                .lineLimit(isPhoneDevice ? 1 : nil)
++                                .fixedSize(horizontal: isPhoneDevice, vertical: false)
+                             summaryProviderBadge(webAIProviderOverride: commentSummaryWebAIProviderOverride)
+                             Spacer()
+                         }
+@@ -778,6 +780,8 @@ struct RedditDetailView: View {
+                         HStack {
+                             Text("Comment Summary")
+                                 .font(.headline)
++                                .lineLimit(isPhoneDevice ? 1 : nil)
++                                .fixedSize(horizontal: isPhoneDevice, vertical: false)
+                             summaryProviderBadge(webAIProviderOverride: commentSummaryWebAIProviderOverride)
+                             Spacer()
+                         }
+@@ -798,6 +802,8 @@ struct RedditDetailView: View {
+                         HStack {
+                             Text("Comment Summary")
+                                 .font(.headline)
++                                .lineLimit(isPhoneDevice ? 1 : nil)
++                                .fixedSize(horizontal: isPhoneDevice, vertical: false)
+                             summaryProviderBadge(webAIProviderOverride: commentSummaryWebAIProviderOverride)
+                             Spacer()
+                             Button(action: {
+@@ -1250,7 +1256,7 @@ struct RedditDetailView: View {
+                         redditQAUtilityButtons()
+                     }
+                 }
+-                .padding(8)
++                .padding(isPhoneDevice ? 4 : 8)
+                 .background(
+                     RoundedRectangle(cornerRadius: 16, style: .continuous)
+                         .fill(Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.035))
+@@ -1280,7 +1286,7 @@ struct RedditDetailView: View {
+                     .font(.body)
+                     .foregroundColor(.primary)
+                     .padding(.vertical, 16)
+-                    .padding(.horizontal, 20)
++                    .padding(.horizontal, summaryCardTextInset)
+                     .frame(maxWidth: .infinity, alignment: .leading)
+             } else {
+                 HStack(spacing: 12) {
+@@ -1290,7 +1296,7 @@ struct RedditDetailView: View {
+                         .foregroundColor(.secondary)
+                 }
+                 .padding(.vertical, 16)
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+                 .frame(maxWidth: .infinity, alignment: .leading)
+             }
+         } else if !qaAnswerUnavailable {
+@@ -1303,7 +1309,7 @@ struct RedditDetailView: View {
+             )
+             .fixedSize(horizontal: false, vertical: true)
+             .padding(.vertical, 16)
+-            .padding(.horizontal, 20)
++            .padding(.horizontal, summaryCardTextInset)
+             .frame(maxWidth: .infinity, alignment: .leading)
+         }
+     }
+@@ -3991,11 +3997,15 @@ VStack(alignment: .leading, spacing: 14) {
+                         .padding(.horizontal, 10)
+                         .padding(.vertical, 4)
+                         .background(sentimentColor(summary.sentiment).opacity(0.15), in: Capsule())
++                        .lineLimit(isPhoneDevice ? 1 : nil)
++                        .fixedSize(horizontal: isPhoneDevice, vertical: false)
+                         .accessibilityLabel("Sentiment: \(summary.sentiment.rawValue)")
+ 
+                     Text("\(summary.commentCount) comments")
+                         .font(.subheadline)
+                         .foregroundColor(.secondary)
++                        .lineLimit(isPhoneDevice ? 1 : nil)
++                        .minimumScaleFactor(isPhoneDevice ? 0.8 : 1)
+                 }
+ 
+                 Spacer()
+@@ -4034,7 +4044,7 @@ VStack(alignment: .leading, spacing: 14) {
+                         )
+                 }
+             }
+-            .padding(.horizontal, 20)
++            .padding(.horizontal, summaryCardTextInset)
+             .padding(.top, 12)
+             
+             Group {
+@@ -4056,7 +4066,7 @@ VStack(alignment: .leading, spacing: 14) {
+             }
+             .padding(.top, 8)
+             .padding(.bottom, 16)
+-            .padding(.horizontal, 20)
++            .padding(.horizontal, summaryCardTextInset)
+             
+             // TTS status indicators
+             if isSynthesizingSpeech {
+@@ -4068,7 +4078,7 @@ VStack(alignment: .leading, spacing: 14) {
+                         .font(.caption)
+                         .foregroundColor(.secondary)
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+             } else if isPreparingLocalTTS {
+                 HStack {
+                     ProgressView()
+@@ -4078,7 +4088,7 @@ VStack(alignment: .leading, spacing: 14) {
+                         .font(.caption)
+                         .foregroundColor(.secondary)
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+             } else if isSpeakingLocally {
+                 HStack {
+                     ProgressView()
+@@ -4088,14 +4098,14 @@ VStack(alignment: .leading, spacing: 14) {
+                         .font(.caption)
+                         .foregroundColor(.secondary)
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+             }
+             
+             if let error = speechSynthesisError {
+                 Text(error)
+                     .font(.caption)
+                     .foregroundColor(.red)
+-                    .padding(.horizontal, 20)
++                    .padding(.horizontal, summaryCardTextInset)
+             }
+             
+             // Sentiment and comment count moved to the header row; the rest stays here.
+@@ -4110,7 +4120,7 @@ VStack(alignment: .leading, spacing: 14) {
+                             .font(.subheadline)
+                     }
+                 }
+-                .padding(.horizontal, 20)
++                .padding(.horizontal, summaryCardTextInset)
+                 .padding(.bottom, 16)
+             }
+         }
+-- 
+2.54.0 (Apple Git-157)
+
