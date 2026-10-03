@@ -5775,6 +5775,8 @@ struct DraggableGlobalSummaryView: View {
     @State private var showQuestionReliabilityWarning = false
     @State private var pendingQuestionUsesWebAI = false
     @State private var isSummaryContentScrolling = false
+    /// Height of the floating summary toolbar (plus Ask field when open), reserved above the text.
+    @State private var summaryChromeHeight: CGFloat = 0
     @State private var summaryChromeReturnTask: Task<Void, Never>?
     @State private var isSummaryScrollActive = false
     @State private var hasCapturedSummarySnapshot = false
@@ -6153,350 +6155,10 @@ struct DraggableGlobalSummaryView: View {
         #endif
 
         VStack(alignment: .leading, spacing: 12) {
-            // Hide surrounding controls while the summary itself is scrolling.
-            if !isSummaryContentScrolling {
-                HStack(spacing: isPhoneSummaryToolbar ? 4 : 8) {
-                if !isPhoneSummaryToolbar {
-                    Image(systemName: "line.3.horizontal")
-                        .foregroundColor(.secondary)
-                }
-                if !isPhoneSummaryToolbar {
-                    Spacer()
-                }
-
-                if !parsedSummaries.isEmpty && formattedAggregateSummary == nil {
-                    Button {
-                        requestAggregateSummary {
-                            appState.generateCombinedGlobalSummary(force: false)
-                        }
-                    } label: {
-                        Image(systemName: "text.quote")
-                            .foregroundColor(appState.isGeneratingAggregateSummary ? .gray : .secondary)
-                    }
-                    .disabled(appState.isGeneratingAggregateSummary || appState.isLoading)
-                    .help("Generate overall summary")
-                }
-
-                if formattedAggregateSummary != nil {
-                    Button {
-                        scrollToOverallSummary()
-                    } label: {
-                        Image(systemName: "house.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .disabled(summaryScrollProxy == nil)
-                    .accessibilityLabel("Back to overall summary")
-                    .help("Back to overall summary")
-
-                    SummaryToolbarSeparator()
-                }
-
-                if appState.lastGlobalSummaryContext != nil {
-                    Button {
-                        appState.retryLastGlobalSummary()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundColor(.secondary)
-                    }
-                    .disabled(appState.isLoading)
-                    .accessibilityLabel("Retry summary")
-                    .help("Retry summary")
-                }
-
-                Button {
-                    copySummaryToClipboard()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .foregroundColor(.secondary)
-                }
-                .disabled(!canCopySummary)
-                .accessibilityLabel("Copy summary")
-                .help("Copy summary overview")
-
-                SummaryToolbarSeparator()
-
-                Button {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                        if showQAInterface {
-                            resetQAState()
-                        } else {
-                            showQAInterface = true
-                        }
-                    }
-                } label: {
-                    if isPhoneSummaryToolbar {
-                        Image(systemName: "questionmark.circle")
-                    } else {
-                        Label("Ask", systemImage: "questionmark.circle")
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-                }
-                .foregroundColor(showQAInterface ? .accentColor : .secondary)
-                .disabled(!hasSummaryContent)
-                .accessibilityLabel("Ask about this overview")
-                .help("Ask a question about this overview")
-
-                // Whiteboard, infographic and podcast all turn the overview into
-                // something new, so they share one labelled menu.
-                Menu {
-                    Button {
-                        generateWhiteboard()
-                    } label: {
-                        Label("Whiteboard", systemImage: "square.grid.3x3")
-                    }
-                    .disabled(isGeneratingWhiteboard || !hasSummaryContent)
-
-                    Button {
-                        generateInfographic()
-                    } label: {
-                        Label("Infographic", systemImage: "chart.bar.doc.horizontal")
-                    }
-                    .disabled(isGeneratingInfographic || !hasSummaryContent)
-
-#if os(iOS)
-                    Button {
-                        appState.presentBatchPodcast()
-                    } label: {
-                        Label("Podcast", systemImage: "waveform.badge.mic")
-                    }
-                    .disabled(!hasSummaryContent)
-#endif
-                } label: {
-                    if isGeneratingWhiteboard || isGeneratingInfographic {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                    } else if isPhoneSummaryToolbar {
-                        Image(systemName: "wand.and.stars")
-                            .foregroundColor(.secondary)
-                    } else {
-                        Label("Create", systemImage: "wand.and.stars")
-                            .lineLimit(1)
-                            .fixedSize()
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .frame(maxWidth: isPhoneSummaryToolbar ? .infinity : nil, minHeight: isPhoneSummaryToolbar ? 40 : nil)
-                .disabled(!hasSummaryContent)
-                .accessibilityLabel("Create whiteboard, infographic or podcast")
-                .help("Create a whiteboard, infographic or podcast")
-
-                if shouldShowExplicitWebAIControls {
-                    // Separates the Settings-model actions from the web-model menu.
-                    SummaryToolbarSeparator()
-
-                    Menu {
-                        Button("Generate Overall Summary with \(appState.settings.selectedWebAIProvider.displayName)") {
-                            requestAggregateSummary {
-                                appState.requestWebCombinedGlobalSummary(force: true)
-                            }
-                        }
-                        .disabled(!hasSummaryContent)
-
-                        Button("Send Whiteboard Prompt") {
-                            sendWhiteboardToWebAI()
-                        }
-                        .disabled(!hasSummaryContent)
-
-                        Button("Send Infographic Prompt") {
-                            sendInfographicToWebAI()
-                        }
-                        .disabled(!hasSummaryContent)
-                    } label: {
-                        Image(systemName: "quote.bubble")
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: isPhoneSummaryToolbar ? .infinity : nil, minHeight: isPhoneSummaryToolbar ? 40 : nil)
-                    .disabled(!hasSummaryContent)
-                    .accessibilityLabel("Send to \(appState.settings.selectedWebAIProvider.displayName)")
-                    .help("Web actions for \(appState.settings.selectedWebAIProvider.displayName)")
-                }
-
-                SummaryToolbarSeparator()
-
-                Button {
-                    appState.showGlobalSummary = false
-                    appState.resumeDeferredFeedRefreshAfterGlobalSummary()
-                } label: {
-                    Image(systemName: "minus.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .accessibilityLabel("Minimize")
-                .help("Minimize")
-
-                Button {
-                    appState.dismissGlobalSummaryAndClearContext()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .accessibilityLabel("Close")
-                .help("Close")
-                }
-                .modifier(SummaryToolbarLayoutModifier(compact: isPhoneSummaryToolbar))
-                .padding(.horizontal, isPhoneSummaryToolbar ? 8 : 16)
-                .padding(.vertical, isPhoneSummaryToolbar ? 8 : 16)
-                .background(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(.ultraThinMaterial)
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.2),
-                                Color.clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .cornerRadius(12)
-                        .blendMode(.overlay)
-                    }
-                )
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 16)
-                        .onChanged { value in
-                            let horizontal = abs(value.translation.width)
-                            let vertical = abs(value.translation.height)
-                            guard horizontal > vertical * 1.2 || vertical > horizontal * 1.2 else { return }
-                            isDragging = true
-                            offset = CGSize(
-                                width: value.translation.width + value.startLocation.x - 200,
-                                height: value.translation.height + value.startLocation.y - 100
-                            )
-                        }
-                        .onEnded { _ in
-                            isDragging = false
-                        }
-                )
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            if showQAInterface && !isSummaryContentScrolling {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Ask a question about these \(isRedditContent ? "Reddit discussions" : "articles")")
-                        .font(.headline)
-                    
-                    TextField("Type your question...", text: $qaQuestionText)
-                        .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(cornerRadius: 12, tintColor: .blue.opacity(0.25)))
-                        .disabled(isProcessingQA || appState.isWaitingForGlobalQA)
-                        .onSubmit {
-                            askGlobalSummaryQuestion()
-                        }
-                    
-                    HStack(spacing: 8) {
-                        HStack(spacing: 4) {
-                            Button {
-                                askGlobalSummaryQuestion()
-                            } label: {
-                                Image(systemName: "questionmark.circle")
-                                    .font(.subheadline)
-                            }
-                            .accessibilityLabel("Ask")
-                            .buttonStyle(.plain)
-                            .frame(width: 38, height: 38)
-                            .contentShape(Circle())
-                            .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
-
-                            if shouldShowExplicitWebAIControls {
-                                Button {
-                                    askGlobalSummaryWebQuestion()
-                                } label: {
-                                    Image(systemName: "quote.bubble")
-                                        .font(.subheadline)
-                                }
-                                .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
-                                .buttonStyle(.plain)
-                                .frame(width: 38, height: 38)
-                                .contentShape(Circle())
-                                .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
-                            }
-
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    resetQAState()
-                                }
-                            } label: {
-                                Image(systemName: "xmark.circle")
-                                    .font(.subheadline)
-                            }
-                            .accessibilityLabel("Close")
-                            .buttonStyle(.plain)
-                            .frame(width: 38, height: 38)
-                            .contentShape(Circle())
-                            .disabled(isProcessingQA || appState.isWaitingForGlobalQA)
-                        }
-                        .padding(5)
-                        .redditSummaryScopeGlass(
-                            in: Capsule(style: .continuous),
-                            tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.22),
-                            interactive: true
-                        )
-
-                        Spacer()
-                    }
-                    
-                    if let inlineError = qaInlineError {
-                        Text(inlineError)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                    
-                    if isProcessingQA || appState.isWaitingForGlobalQA {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text(appState.globalQAWaitProgress.isEmpty ? "Thinking..." : appState.globalQAWaitProgress)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    } else if !qaAnswerText.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Answer")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            
-                            HStack {
-                                HStack(spacing: 4) {
-                                    Button {
-                                        showAnswerSheet = true
-                                    } label: {
-                                        Label("Open Answer", systemImage: "arrow.up.left.and.arrow.down.right")
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.horizontal, 10)
-                                    .frame(minHeight: 38)
-
-                                    Button {
-                                        copySummaryToClipboard(text: qaAnswerText)
-                                    } label: {
-                                        Label("Copy", systemImage: "doc.on.doc")
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.horizontal, 10)
-                                    .frame(minHeight: 38)
-                                }
-                                .padding(5)
-                                .redditSummaryScopeGlass(
-                                    in: Capsule(style: .continuous),
-                                    tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.22),
-                                    interactive: true
-                                )
-
-                                Spacer()
-                            }
-                        }
-                        .transition(.opacity.combined(with: .slide))
-                    }
-                }
-                .padding()
-                .redditSummaryScopeGlass(
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
-                    tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.20)
-                )
-                .padding(.horizontal)
-            }
-
+            // The toolbar (and the Ask field) float over the summary instead of sitting above it, so hiding
+            // them while scrolling and bringing them back never resizes the scroll view: the text stays
+            // exactly where the reader stopped, and the view no longer re-anchors onto the next summary.
+            ZStack(alignment: .top) {
             ScrollViewReader { scrollProxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
@@ -6716,7 +6378,7 @@ struct DraggableGlobalSummaryView: View {
                         isSummaryScrollActive = true
                         summaryChromeReturnTask?.cancel()
                         summaryChromeReturnTask = nil
-                        withAnimation(.easeInOut(duration: 0.18)) {
+                        withAnimation(.easeOut(duration: 0.25)) {
                             isSummaryContentScrolling = true
                         }
                     } else {
@@ -6732,6 +6394,362 @@ struct DraggableGlobalSummaryView: View {
                     summaryChromeReturnTask?.cancel()
                     summaryChromeReturnTask = nil
                 }
+            }
+                .contentMargins(.top, summaryChromeHeight, for: .scrollContent)
+
+                VStack(alignment: .leading, spacing: 12) {
+            Group {
+                HStack(spacing: isPhoneSummaryToolbar ? 4 : 8) {
+                if !isPhoneSummaryToolbar {
+                    Image(systemName: "line.3.horizontal")
+                        .foregroundColor(.secondary)
+                }
+                if !isPhoneSummaryToolbar {
+                    Spacer()
+                }
+
+                if !parsedSummaries.isEmpty && formattedAggregateSummary == nil {
+                    Button {
+                        requestAggregateSummary {
+                            appState.generateCombinedGlobalSummary(force: false)
+                        }
+                    } label: {
+                        Image(systemName: "text.quote")
+                            .foregroundColor(appState.isGeneratingAggregateSummary ? .gray : .secondary)
+                    }
+                    .disabled(appState.isGeneratingAggregateSummary || appState.isLoading)
+                    .help("Generate overall summary")
+                }
+
+                if formattedAggregateSummary != nil {
+                    Button {
+                        scrollToOverallSummary()
+                    } label: {
+                        Image(systemName: "house.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .disabled(summaryScrollProxy == nil)
+                    .accessibilityLabel("Back to overall summary")
+                    .help("Back to overall summary")
+
+                    SummaryToolbarSeparator()
+                }
+
+                if appState.lastGlobalSummaryContext != nil {
+                    Button {
+                        appState.retryLastGlobalSummary()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(.secondary)
+                    }
+                    .disabled(appState.isLoading)
+                    .accessibilityLabel("Retry summary")
+                    .help("Retry summary")
+                }
+
+                Button {
+                    copySummaryToClipboard()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundColor(.secondary)
+                }
+                .disabled(!canCopySummary)
+                .accessibilityLabel("Copy summary")
+                .help("Copy summary overview")
+
+                SummaryToolbarSeparator()
+
+                Button {
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                        if showQAInterface {
+                            resetQAState()
+                        } else {
+                            showQAInterface = true
+                        }
+                    }
+                } label: {
+                    if isPhoneSummaryToolbar {
+                        Image(systemName: "questionmark.circle")
+                    } else {
+                        Label("Ask", systemImage: "questionmark.circle")
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                .foregroundColor(showQAInterface ? .accentColor : .secondary)
+                .disabled(!hasSummaryContent)
+                .accessibilityLabel("Ask about this overview")
+                .help("Ask a question about this overview")
+
+                // Whiteboard, infographic and podcast all turn the overview into
+                // something new, so they share one labelled menu.
+                Menu {
+                    Button {
+                        generateWhiteboard()
+                    } label: {
+                        Label("Whiteboard", systemImage: "square.grid.3x3")
+                    }
+                    .disabled(isGeneratingWhiteboard || !hasSummaryContent)
+
+                    Button {
+                        generateInfographic()
+                    } label: {
+                        Label("Infographic", systemImage: "chart.bar.doc.horizontal")
+                    }
+                    .disabled(isGeneratingInfographic || !hasSummaryContent)
+
+#if os(iOS)
+                    Button {
+                        appState.presentBatchPodcast()
+                    } label: {
+                        Label("Podcast", systemImage: "waveform.badge.mic")
+                    }
+                    .disabled(!hasSummaryContent)
+#endif
+                } label: {
+                    if isGeneratingWhiteboard || isGeneratingInfographic {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    } else if isPhoneSummaryToolbar {
+                        Image(systemName: "wand.and.stars")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Label("Create", systemImage: "wand.and.stars")
+                            .lineLimit(1)
+                            .fixedSize()
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: isPhoneSummaryToolbar ? .infinity : nil, minHeight: isPhoneSummaryToolbar ? 40 : nil)
+                .disabled(!hasSummaryContent)
+                .accessibilityLabel("Create whiteboard, infographic or podcast")
+                .help("Create a whiteboard, infographic or podcast")
+
+                if shouldShowExplicitWebAIControls {
+                    // Separates the Settings-model actions from the web-model menu.
+                    SummaryToolbarSeparator()
+
+                    Menu {
+                        Button("Generate Overall Summary with \(appState.settings.selectedWebAIProvider.displayName)") {
+                            requestAggregateSummary {
+                                appState.requestWebCombinedGlobalSummary(force: true)
+                            }
+                        }
+                        .disabled(!hasSummaryContent)
+
+                        Button("Send Whiteboard Prompt") {
+                            sendWhiteboardToWebAI()
+                        }
+                        .disabled(!hasSummaryContent)
+
+                        Button("Send Infographic Prompt") {
+                            sendInfographicToWebAI()
+                        }
+                        .disabled(!hasSummaryContent)
+                    } label: {
+                        Image(systemName: "quote.bubble")
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: isPhoneSummaryToolbar ? .infinity : nil, minHeight: isPhoneSummaryToolbar ? 40 : nil)
+                    .disabled(!hasSummaryContent)
+                    .accessibilityLabel("Send to \(appState.settings.selectedWebAIProvider.displayName)")
+                    .help("Web actions for \(appState.settings.selectedWebAIProvider.displayName)")
+                }
+
+                SummaryToolbarSeparator()
+
+                Button {
+                    appState.showGlobalSummary = false
+                    appState.resumeDeferredFeedRefreshAfterGlobalSummary()
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .accessibilityLabel("Minimize")
+                .help("Minimize")
+
+                Button {
+                    appState.dismissGlobalSummaryAndClearContext()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .accessibilityLabel("Close")
+                .help("Close")
+                }
+                .modifier(SummaryToolbarLayoutModifier(compact: isPhoneSummaryToolbar))
+                .padding(.horizontal, isPhoneSummaryToolbar ? 8 : 16)
+                .padding(.vertical, isPhoneSummaryToolbar ? 8 : 16)
+                .background(
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.ultraThinMaterial)
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.2),
+                                Color.clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .cornerRadius(12)
+                        .blendMode(.overlay)
+                    }
+                )
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 16)
+                        .onChanged { value in
+                            let horizontal = abs(value.translation.width)
+                            let vertical = abs(value.translation.height)
+                            guard horizontal > vertical * 1.2 || vertical > horizontal * 1.2 else { return }
+                            isDragging = true
+                            offset = CGSize(
+                                width: value.translation.width + value.startLocation.x - 200,
+                                height: value.translation.height + value.startLocation.y - 100
+                            )
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                        }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if showQAInterface {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Ask a question about these \(isRedditContent ? "Reddit discussions" : "articles")")
+                        .font(.headline)
+                    
+                    TextField("Type your question...", text: $qaQuestionText)
+                        .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(cornerRadius: 12, tintColor: .blue.opacity(0.25)))
+                        .disabled(isProcessingQA || appState.isWaitingForGlobalQA)
+                        .onSubmit {
+                            askGlobalSummaryQuestion()
+                        }
+                    
+                    HStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Button {
+                                askGlobalSummaryQuestion()
+                            } label: {
+                                Image(systemName: "questionmark.circle")
+                                    .font(.subheadline)
+                            }
+                            .accessibilityLabel("Ask")
+                            .buttonStyle(.plain)
+                            .frame(width: 38, height: 38)
+                            .contentShape(Circle())
+                            .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
+
+                            if shouldShowExplicitWebAIControls {
+                                Button {
+                                    askGlobalSummaryWebQuestion()
+                                } label: {
+                                    Image(systemName: "quote.bubble")
+                                        .font(.subheadline)
+                                }
+                                .accessibilityLabel(appState.settings.selectedWebAIProvider.displayName)
+                                .buttonStyle(.plain)
+                                .frame(width: 38, height: 38)
+                                .contentShape(Circle())
+                                .disabled(qaQuestionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessingQA || appState.isWaitingForGlobalQA)
+                            }
+
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    resetQAState()
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                                    .font(.subheadline)
+                            }
+                            .accessibilityLabel("Close")
+                            .buttonStyle(.plain)
+                            .frame(width: 38, height: 38)
+                            .contentShape(Circle())
+                            .disabled(isProcessingQA || appState.isWaitingForGlobalQA)
+                        }
+                        .padding(5)
+                        .redditSummaryScopeGlass(
+                            in: Capsule(style: .continuous),
+                            tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.22),
+                            interactive: true
+                        )
+
+                        Spacer()
+                    }
+                    
+                    if let inlineError = qaInlineError {
+                        Text(inlineError)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                    
+                    if isProcessingQA || appState.isWaitingForGlobalQA {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text(appState.globalQAWaitProgress.isEmpty ? "Thinking..." : appState.globalQAWaitProgress)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    } else if !qaAnswerText.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Answer")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            
+                            HStack {
+                                HStack(spacing: 4) {
+                                    Button {
+                                        showAnswerSheet = true
+                                    } label: {
+                                        Label("Open Answer", systemImage: "arrow.up.left.and.arrow.down.right")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 10)
+                                    .frame(minHeight: 38)
+
+                                    Button {
+                                        copySummaryToClipboard(text: qaAnswerText)
+                                    } label: {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 10)
+                                    .frame(minHeight: 38)
+                                }
+                                .padding(5)
+                                .redditSummaryScopeGlass(
+                                    in: Capsule(style: .continuous),
+                                    tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.22),
+                                    interactive: true
+                                )
+
+                                Spacer()
+                            }
+                        }
+                        .transition(.opacity.combined(with: .slide))
+                    }
+                }
+                .padding()
+                .redditSummaryScopeGlass(
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                    tint: Color(red: 0.30, green: 0.40, blue: 0.54).opacity(0.20)
+                )
+                .padding(.horizontal)
+            }
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    // Measured while visible only, so the reserved space does not change mid-scroll.
+                    if !isSummaryContentScrolling {
+                        summaryChromeHeight = height + 12
+                    }
+                }
+                .offset(y: isSummaryContentScrolling ? -(summaryChromeHeight + 24) : 0)
+                .opacity(isSummaryContentScrolling ? 0 : 1)
+                .allowsHitTesting(!isSummaryContentScrolling)
             }
         }
         .background(
@@ -6985,7 +7003,8 @@ struct DraggableGlobalSummaryView: View {
             try? await Task.sleep(nanoseconds: summaryChromeReturnDelay)
             guard !Task.isCancelled else { return }
 
-            withAnimation(.easeInOut(duration: 0.18)) {
+            // A soft, slightly slower return so the toolbar glides back in.
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.92)) {
                 isSummaryContentScrolling = false
             }
             summaryChromeReturnTask = nil
