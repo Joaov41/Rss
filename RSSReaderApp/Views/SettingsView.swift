@@ -259,9 +259,6 @@ struct SettingsView: View {
     @State private var isExporting = false
 
     // Read-history migration (legacy → v2 sharded keys)
-    @State private var isMigratingReadHistory = false
-    @State private var deleteLegacyReadHistoryAfterMigration = true
-    @State private var showReadHistoryMigrationConfirm = false
     @State private var resultAlertTitle: String = "Import Result"
     
     // TTS Settings
@@ -587,8 +584,6 @@ struct SettingsView: View {
                 }
 
                 Section("Cloud Sync") {
-                    let persistenceManager = PersistenceManager.shared
-
                     Button {
                         appState.manualCloudRefresh()
                     } label: {
@@ -614,109 +609,32 @@ struct SettingsView: View {
                             .foregroundColor(.green)
                     }
 
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        Toggle("Delete legacy read history after migration (recommended)", isOn: $deleteLegacyReadHistoryAfterMigration)
-                            .font(.subheadline)
+                    Text("Read states, favorites and subscriptions sync automatically across your devices signed in to the same iCloud account.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
 
-                        Button {
-                            showReadHistoryMigrationConfirm = true
-                        } label: {
-                            if isMigratingReadHistory {
-                                Label("Migrating…", systemImage: "arrow.triangle.2.circlepath.icloud")
-                            } else {
-                                Label("Migrate Read History", systemImage: "arrow.triangle.2.circlepath.icloud")
+                    #if os(iOS)
+                    // Plain sync status for everyone; the technical details stay collapsed for troubleshooting.
+                    TimelineView(.periodic(from: .now, by: 3)) { _ in
+                        let status = CloudKitSyncManager.shared.friendlyStatus()
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(status.text, systemImage: status.systemImage)
+                                .font(.subheadline)
+                                .foregroundColor(status.isProblem ? .orange : .secondary)
+
+                            DisclosureGroup("Sync Details") {
+                                Text(CloudKitSyncManager.shared.statusSummary())
+                                    .font(.caption2.monospaced())
+                                    .foregroundColor(.secondary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                        }
-                        .buttonStyle(SettingsCapsuleButtonStyle())
-                        .tint(.purple)
-                        .disabled(isMigratingReadHistory)
-
-                        if isMigratingReadHistory {
-                            ProgressView()
-                                .frame(maxWidth: .infinity, alignment: .center)
-                        }
-
-                        Text("One-time: seeds the new sync format so unread badge counts match across devices.")
                             .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("If unread badge counts differ, run “Migrate Read History” on your primary device once.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        }
                     }
+                    #endif
                 }
 
-                Section("Primary Device for Subscriptions") {
-                    let persistenceManager = PersistenceManager.shared
-
-                    if persistenceManager.isThisDevicePrimaryForSubscriptions {
-                        // This device is primary
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            VStack(alignment: .leading) {
-                                Text("This device is primary")
-                                    .font(.headline)
-                                Text(persistenceManager.thisDeviceName)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        Text("Subscription changes made here sync to all your devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else if let primaryName = persistenceManager.primaryDeviceNameForSubscriptions {
-                        // Another device is primary
-                        HStack {
-                            Image(systemName: "icloud.fill")
-                                .foregroundColor(.blue)
-                            VStack(alignment: .leading) {
-                                Text("Syncing from:")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(primaryName)
-                                    .font(.headline)
-                            }
-                        }
-
-                        Text("Subscriptions are managed by the primary device. Changes made here won't sync to other devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button {
-                            persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
-                            // Force UI refresh
-                            appState.objectWillChange.send()
-                        } label: {
-                            Label("Make this device primary", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .buttonStyle(SettingsCapsuleButtonStyle())
-                        .tint(.orange)
-                    } else {
-                        // No primary device set
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text("No primary device set")
-                                .font(.headline)
-                        }
-
-                        Text("Set a primary device to prevent subscription duplicates across your devices.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button {
-                            persistenceManager.setThisDeviceAsPrimaryForSubscriptions()
-                            // Force UI refresh
-                            appState.objectWillChange.send()
-                        } label: {
-                            Label("Make this device primary", systemImage: "checkmark.circle")
-                        }
-                        .buttonStyle(SettingsCapsuleButtonStyle(prominent: true))
-                        .tint(.green)
-                    }
-                }
-                    
                     Section("API Keys") {
                         SecureField("Gemini API Key", text: $geminiApiKey)
                             .textFieldStyle(AdaptiveLiquidGlassTextFieldStyle(
@@ -1317,16 +1235,6 @@ struct SettingsView: View {
             } message: {
                 Text(importResult ?? "")
             }
-            .confirmationDialog("Migrate Read History", isPresented: $showReadHistoryMigrationConfirm, titleVisibility: .visible) {
-                Button("Cancel", role: .cancel) {}
-                Button(deleteLegacyReadHistoryAfterMigration ? "Migrate & Delete Legacy Keys" : "Migrate", role: deleteLegacyReadHistoryAfterMigration ? .destructive : nil) {
-                    startReadHistoryMigration()
-                }
-            } message: {
-                Text(deleteLegacyReadHistoryAfterMigration
-	                     ? "This will copy legacy read history into the new sync format and then delete the legacy keys. Make sure all your devices are updated before doing this."
-	                     : "This will copy legacy read history into the new sync format. You can delete the legacy keys later to free iCloud KVS space.")
-            }
             .confirmationDialog("Delete Local Model", isPresented: $showModelStorageDeleteConfirm, titleVisibility: .visible, presenting: pendingModelStorageDelete) { item in
                 Button("Delete \(item.name)", role: .destructive) {
                     deleteModelStorageItem(item)
@@ -1437,32 +1345,6 @@ struct SettingsView: View {
         }
     }
 
-    private func startReadHistoryMigration() {
-        guard !isMigratingReadHistory else { return }
-        isMigratingReadHistory = true
-        let deleteLegacy = deleteLegacyReadHistoryAfterMigration
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = CloudSyncManager.shared.migrateLegacyReadHistoryToV2(deleteLegacyKeys: deleteLegacy)
-            DispatchQueue.main.async {
-                isMigratingReadHistory = false
-
-                if result.migrated {
-                    importResult = """
-                    Legacy: \(result.legacyArticlesCount) articles, \(result.legacyRedditCount) Reddit.
-                    Seeded v2: +\(result.articlesAdded) articles, +\(result.redditAdded) Reddit.
-                    Deleted legacy keys: \(result.deletedLegacyKeys ? "Yes" : "No").
-                    """
-                } else {
-                    importResult = "Migration skipped. Run this on the primary device."
-                }
-
-                resultAlertTitle = "Read History Migration"
-                showingImportResult = true
-            }
-        }
-    }
-    
     private func checkTTSHealth() {
         isCheckingHealth = true
 

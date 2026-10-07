@@ -10,6 +10,14 @@ import UIKit
 import AppKit
 #endif
 
+/// Sync diagnostics, in debug builds only: messages can include article links, which are
+/// the user's reading history and must not end up in a published app's device logs.
+func syncLog(_ message: @autoclosure () -> String) {
+    #if DEBUG
+    print(message())
+    #endif
+}
+
 /// CloudSyncManager handles syncing read/favorite states across devices using iCloud Key-Value Store.
 /// This uses NSUbiquitousKeyValueStore which automatically syncs data across all devices
 /// signed into the same iCloud account (iPhone, iPad, Mac).
@@ -21,7 +29,7 @@ final class CloudSyncManager {
 
     private let cloudStore = NSUbiquitousKeyValueStore.default
     private let localDefaults = UserDefaults.standard
-    private var hasCompletedInitialSync: Bool = false
+    private(set) var hasCompletedInitialSync: Bool = false
     private var pendingReadArticles: Set<String> = []
     private var pendingReadRedditPosts: Set<String> = []
     private var lastQuotaCompactionAttempt: Date?
@@ -35,6 +43,8 @@ final class CloudSyncManager {
         static let favoriteRedditPosts = "cloud_favoriteRedditPosts"
         static let subscriptions = "cloud_subscriptions"
         static let podcastSubscriptionRecordPrefix = "pcv1_"
+        /// One record per RSS/Reddit/YouTube subscription, like podcasts. Older builds ignore it.
+        static let subscriptionRecordPrefix = "sbv1_"
         static let lastSyncTimestamp = "cloud_lastSyncTimestamp"
         // Primary device tracking
         static let primaryDeviceID = "cloud_primaryDeviceID"
@@ -51,6 +61,10 @@ final class CloudSyncManager {
         static let readRedditPostsDeviceIndexKey = "cloud_v2_readRedditPosts_devices"
         static let quotaMaxArticles = 2_500
         static let quotaMaxRedditPosts = 12_000
+        /// Per-device favorite changes ("favorited/unfavorited at time T"); the latest change wins.
+        /// Older builds keep using the shared favorites list, which is still updated alongside.
+        static let favoriteArticleEventsPrefix = "cloud_v2_favArticles_"
+        static let favoriteRedditEventsPrefix = "cloud_v2_favReddit_"
     }
 
     // Local keys (not synced to cloud)
@@ -77,41 +91,6 @@ final class CloudSyncManager {
         #else
         return "Unknown Device"
         #endif
-    }
-
-    /// Check if this device is the primary device for subscriptions
-    var isThisDevicePrimary: Bool {
-        guard let primaryID = cloudStore.string(forKey: Keys.primaryDeviceID) else {
-            // No primary set yet
-            return false
-        }
-        return primaryID == thisDeviceID
-    }
-
-    /// Get the name of the current primary device (if any)
-    var primaryDeviceName: String? {
-        return cloudStore.string(forKey: Keys.primaryDeviceName)
-    }
-
-    /// Check if any device is set as primary
-    var hasPrimaryDevice: Bool {
-        return cloudStore.string(forKey: Keys.primaryDeviceID) != nil
-    }
-
-    /// Set this device as the primary device for subscriptions
-    func setThisDeviceAsPrimary() {
-        cloudStore.set(thisDeviceID, forKey: Keys.primaryDeviceID)
-        cloudStore.set(thisDeviceName, forKey: Keys.primaryDeviceName)
-        cloudStore.synchronize()
-        print("☁️ CloudSyncManager: This device is now primary for subscriptions: \(thisDeviceName)")
-    }
-
-    /// Clear primary device (no device is primary)
-    func clearPrimaryDevice() {
-        cloudStore.removeObject(forKey: Keys.primaryDeviceID)
-        cloudStore.removeObject(forKey: Keys.primaryDeviceName)
-        cloudStore.synchronize()
-        print("☁️ CloudSyncManager: Primary device cleared")
     }
 
     // Snapshot of all read/favorite states for replay to late subscribers
@@ -163,7 +142,7 @@ final class CloudSyncManager {
         // as changes will sync when iCloud becomes available
         let syncStarted = cloudStore.synchronize()
         // Always log for diagnostics
-        print("☁️ CloudSyncManager: Initial sync started = \(syncStarted) [mainThread=\(Thread.isMainThread)]")
+        syncLog("☁️ CloudSyncManager: Initial sync started = \(syncStarted) [mainThread=\(Thread.isMainThread)]")
 
         if syncStarted {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
@@ -177,25 +156,25 @@ final class CloudSyncManager {
 
         // Print app identifiers to verify the app is pointed at the correct KVS bucket
         if let bundleID = Bundle.main.bundleIdentifier {
-            print("☁️ CloudSyncManager: Bundle ID = \(bundleID)")
+            syncLog("☁️ CloudSyncManager: Bundle ID = \(bundleID)")
         }
 
         let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         if shortVersion != nil || buildVersion != nil {
-            print("☁️ CloudSyncManager: App Version = \(shortVersion ?? "?") (\(buildVersion ?? "?"))")
+            syncLog("☁️ CloudSyncManager: App Version = \(shortVersion ?? "?") (\(buildVersion ?? "?"))")
         }
 
         #if os(iOS)
         if let entitlements = provisioningProfileEntitlements() {
             if let applicationIdentifier = entitlements["application-identifier"] {
-                print("☁️ CloudSyncManager: application-identifier = \(applicationIdentifier)")
+                syncLog("☁️ CloudSyncManager: application-identifier = \(applicationIdentifier)")
             }
             if let teamIdentifier = entitlements["com.apple.developer.team-identifier"] {
-                print("☁️ CloudSyncManager: team-identifier = \(teamIdentifier)")
+                syncLog("☁️ CloudSyncManager: team-identifier = \(teamIdentifier)")
             }
             if let kvsIdentifier = entitlements["com.apple.developer.ubiquity-kvstore-identifier"] {
-                print("☁️ CloudSyncManager: kvstore-identifier = \(kvsIdentifier)")
+                syncLog("☁️ CloudSyncManager: kvstore-identifier = \(kvsIdentifier)")
             }
         }
         #elseif os(macOS)
@@ -204,25 +183,25 @@ final class CloudSyncManager {
             let teamIdentifier = SecTaskCopyValueForEntitlement(task, "com.apple.developer.team-identifier" as CFString, nil)
             let kvsIdentifier = SecTaskCopyValueForEntitlement(task, "com.apple.developer.ubiquity-kvstore-identifier" as CFString, nil)
             if applicationIdentifier != nil {
-                print("☁️ CloudSyncManager: application-identifier = \(String(describing: applicationIdentifier))")
+                syncLog("☁️ CloudSyncManager: application-identifier = \(String(describing: applicationIdentifier))")
             }
             if teamIdentifier != nil {
-                print("☁️ CloudSyncManager: team-identifier = \(String(describing: teamIdentifier))")
+                syncLog("☁️ CloudSyncManager: team-identifier = \(String(describing: teamIdentifier))")
             }
             if kvsIdentifier != nil {
-                print("☁️ CloudSyncManager: kvstore-identifier = \(String(describing: kvsIdentifier))")
+                syncLog("☁️ CloudSyncManager: kvstore-identifier = \(String(describing: kvsIdentifier))")
             }
         }
         #endif
 
         let readArticles = getCloudReadArticles()
         let readPosts = getCloudReadRedditPosts()
-        print("☁️ CloudSyncManager: Current cloud state - Articles: \(readArticles.count), Reddit: \(readPosts.count)")
+        syncLog("☁️ CloudSyncManager: Current cloud state - Articles: \(readArticles.count), Reddit: \(readPosts.count)")
         if !readArticles.isEmpty {
-            print("☁️ CloudSyncManager: Sample article IDs: \(Array(readArticles.prefix(3)))")
+            syncLog("☁️ CloudSyncManager: Sample article IDs: \(Array(readArticles.prefix(3)))")
         }
         if !readPosts.isEmpty {
-            print("☁️ CloudSyncManager: Sample Reddit IDs: \(Array(readPosts.prefix(3)))")
+            syncLog("☁️ CloudSyncManager: Sample Reddit IDs: \(Array(readPosts.prefix(3)))")
         }
 
         // Log KVS usage for diagnostics (do not prune automatically; pruning drops read history).
@@ -249,13 +228,13 @@ final class CloudSyncManager {
         default:
             reasonString = "Unknown (\(reasonValue))"
         }
-        print("☁️ CloudSyncManager: Remote change detected - \(reasonString) [mainThread=\(Thread.isMainThread)]")
+        syncLog("☁️ CloudSyncManager: Remote change detected - \(reasonString) [mainThread=\(Thread.isMainThread)]")
 
         // Log changed keys for diagnostic
         if let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] {
-            print("🔍 DIAGNOSTIC: changedKeys = \(changedKeys)")
+            syncLog("🔍 DIAGNOSTIC: changedKeys = \(changedKeys)")
         } else {
-            print("🔍 DIAGNOSTIC: changedKeys = nil (no keys in notification)")
+            syncLog("🔍 DIAGNOSTIC: changedKeys = nil (no keys in notification)")
         }
 
         if reasonValue == NSUbiquitousKeyValueStoreInitialSyncChange || reasonValue == NSUbiquitousKeyValueStoreServerChange {
@@ -267,7 +246,7 @@ final class CloudSyncManager {
 
         // Handle quota violation
         if reasonValue == NSUbiquitousKeyValueStoreQuotaViolationChange {
-            print("⚠️ CloudSyncManager: iCloud storage quota exceeded!")
+            syncLog("⚠️ CloudSyncManager: iCloud storage quota exceeded!")
             logTotalDataSize()
             compactReadStateForQuotaIfNeeded()
             return
@@ -283,31 +262,40 @@ final class CloudSyncManager {
                 switch key {
                 case Keys.readArticles:
                     let ids = getCloudReadArticles()
-                    print("☁️ CloudSyncManager: Received \(ids.count) read articles from cloud")
+                    syncLog("☁️ CloudSyncManager: Received \(ids.count) read articles from cloud")
                     remoteChangesPublisher.send(.readArticles(ids))
 
                 case Keys.favoriteArticles:
-                    let ids = getStringSet(forKey: Keys.favoriteArticles)
-                    print("☁️ CloudSyncManager: Received \(ids.count) favorite articles from cloud")
+                    let ids = effectiveFavorites(.articles, local: [])
+                    syncLog("☁️ CloudSyncManager: Received \(ids.count) favorite articles from cloud")
                     remoteChangesPublisher.send(.favoriteArticles(ids))
 
                 case Keys.readRedditPosts:
                     let ids = getCloudReadRedditPosts()
-                    print("☁️ CloudSyncManager: Received \(ids.count) read Reddit posts from cloud")
+                    syncLog("☁️ CloudSyncManager: Received \(ids.count) read Reddit posts from cloud")
                     remoteChangesPublisher.send(.readRedditPosts(ids))
 
                 case Keys.favoriteRedditPosts:
-                    let ids = getStringSet(forKey: Keys.favoriteRedditPosts)
-                    print("☁️ CloudSyncManager: Received \(ids.count) favorite Reddit posts from cloud")
+                    let ids = effectiveFavorites(.redditPosts, local: [])
+                    syncLog("☁️ CloudSyncManager: Received \(ids.count) favorite Reddit posts from cloud")
                     remoteChangesPublisher.send(.favoriteRedditPosts(ids))
 
                 case Keys.subscriptions:
                     let subs = getCloudSubscriptions()
-                    print("☁️ CloudSyncManager: Received \(subs.count) subscriptions from cloud")
+                    syncLog("☁️ CloudSyncManager: Received \(subs.count) subscriptions from cloud")
                     remoteChangesPublisher.send(.subscriptions(subs))
 
                 case let podcastKey where podcastKey.hasPrefix(Keys.podcastSubscriptionRecordPrefix):
                     sawPodcastSubscriptionChange = true
+
+                case let recordKey where recordKey.hasPrefix(Keys.subscriptionRecordPrefix):
+                    sawPodcastSubscriptionChange = true
+
+                case let eventsKey where eventsKey.hasPrefix(V2Keys.favoriteArticleEventsPrefix):
+                    remoteChangesPublisher.send(.favoriteArticles(effectiveFavorites(.articles, local: [])))
+
+                case let eventsKey where eventsKey.hasPrefix(V2Keys.favoriteRedditEventsPrefix):
+                    remoteChangesPublisher.send(.favoriteRedditPosts(effectiveFavorites(.redditPosts, local: [])))
 
                 case let shardKey where shardKey.hasPrefix(V2Keys.readArticlesShardPrefix):
                     sawV2ReadArticlesChange = true
@@ -328,12 +316,12 @@ final class CloudSyncManager {
 
             if sawV2ReadArticlesChange {
                 let ids = getCloudReadArticles()
-                print("☁️ CloudSyncManager: Received \(ids.count) read articles from cloud (v2 shards)")
+                syncLog("☁️ CloudSyncManager: Received \(ids.count) read articles from cloud (v2 shards)")
             }
 
             if sawV2ReadRedditChange {
                 let ids = getCloudReadRedditPosts()
-                print("☁️ CloudSyncManager: Received \(ids.count) read Reddit posts from cloud (v2 shards)")
+                syncLog("☁️ CloudSyncManager: Received \(ids.count) read Reddit posts from cloud (v2 shards)")
             }
 
             if sawV2ReadArticlesChange || sawV2ReadRedditChange {
@@ -346,7 +334,7 @@ final class CloudSyncManager {
 
             if sawPodcastSubscriptionChange {
                 let subscriptions = getCloudSubscriptions()
-                print("☁️ CloudSyncManager: Received podcast subscription change")
+                syncLog("☁️ CloudSyncManager: Received podcast subscription change")
                 remoteChangesPublisher.send(.subscriptions(subscriptions))
             }
         }
@@ -357,10 +345,11 @@ final class CloudSyncManager {
     func syncReadArticles(_ ids: Set<String>) {
         let normalized = Set(ids.map { ArticleIDNormalizer.normalize($0) })
         guard !normalized.isEmpty else { return }
+        ReadRecencyStore.shared.noteSeen(normalized)
         pendingReadArticles.formUnion(normalized)
-        print("🔍 DIAGNOSTIC: syncReadArticles called - hasCompletedInitialSync=\(hasCompletedInitialSync), ids.count=\(ids.count), pending=\(pendingReadArticles.count)")
+        syncLog("🔍 DIAGNOSTIC: syncReadArticles called - hasCompletedInitialSync=\(hasCompletedInitialSync), ids.count=\(ids.count), pending=\(pendingReadArticles.count)")
         guard hasCompletedInitialSync else {
-            print("🔍 DIAGNOSTIC: Initial sync not complete, queued \(normalized.count) articles")
+            syncLog("🔍 DIAGNOSTIC: Initial sync not complete, queued \(normalized.count) articles")
             return
         }
         flushPendingReadStateWritesIfPossible()
@@ -369,19 +358,15 @@ final class CloudSyncManager {
     func getCloudReadArticles() -> Set<String> {
         let legacy = getStringSet(forKey: Keys.readArticles)
         let v2 = getV2ShardedSet(prefix: V2Keys.readArticlesShardPrefix)
-        return legacy.union(v2)
+        let all = legacy.union(v2)
+        ReadRecencyStore.shared.noteSeen(all)
+        return all
     }
 
     // MARK: - Favorite Articles
 
-    func syncFavoriteArticles(_ ids: Set<String>) {
-        let normalized = Set(ids.map { ArticleIDNormalizer.normalize($0) })
-        setStringSet(normalized, forKey: Keys.favoriteArticles)
-        updateSyncTimestamp()
-    }
-
     func getCloudFavoriteArticles() -> Set<String> {
-        return getStringSet(forKey: Keys.favoriteArticles)
+        effectiveFavorites(.articles, local: [])
     }
 
     // MARK: - Read Reddit Posts
@@ -390,10 +375,11 @@ final class CloudSyncManager {
         let normalized = Set(ids.map { ArticleIDNormalizer.normalize($0) })
         let compacted = compactToCanonicalRedditIDs(normalized)
         guard !compacted.isEmpty else { return }
+        ReadRecencyStore.shared.noteSeen(compacted)
         pendingReadRedditPosts.formUnion(compacted)
-        print("🔍 DIAGNOSTIC: syncReadRedditPosts called - hasCompletedInitialSync=\(hasCompletedInitialSync), ids.count=\(ids.count), compacted=\(compacted.count), pending=\(pendingReadRedditPosts.count)")
+        syncLog("🔍 DIAGNOSTIC: syncReadRedditPosts called - hasCompletedInitialSync=\(hasCompletedInitialSync), ids.count=\(ids.count), compacted=\(compacted.count), pending=\(pendingReadRedditPosts.count)")
         guard hasCompletedInitialSync else {
-            print("🔍 DIAGNOSTIC: Initial sync not complete, queued \(compacted.count) Reddit posts")
+            syncLog("🔍 DIAGNOSTIC: Initial sync not complete, queued \(compacted.count) Reddit posts")
             return
         }
         flushPendingReadStateWritesIfPossible()
@@ -402,44 +388,134 @@ final class CloudSyncManager {
     func getCloudReadRedditPosts() -> Set<String> {
         let legacy = getStringSet(forKey: Keys.readRedditPosts)
         let v2 = getV2ShardedSet(prefix: V2Keys.readRedditPostsShardPrefix)
-        return compactToCanonicalRedditIDs(legacy.union(v2))
+        let all = compactToCanonicalRedditIDs(legacy.union(v2))
+        ReadRecencyStore.shared.noteSeen(all)
+        return all
     }
 
     // MARK: - Favorite Reddit Posts
 
-    func syncFavoriteRedditPosts(_ ids: Set<String>) {
-        let normalized = Set(ids.map { ArticleIDNormalizer.normalize($0) })
-        setStringSet(normalized, forKey: Keys.favoriteRedditPosts)
-        updateSyncTimestamp()
+    func getCloudFavoriteRedditPosts() -> Set<String> {
+        effectiveFavorites(.redditPosts, local: [])
     }
 
-    func getCloudFavoriteRedditPosts() -> Set<String> {
-        return getStringSet(forKey: Keys.favoriteRedditPosts)
+    // MARK: - Favorites (v2 change records)
+
+    enum FavoriteKind {
+        case articles
+        case redditPosts
+
+        fileprivate var legacyKey: String {
+            self == .articles ? Keys.favoriteArticles : Keys.favoriteRedditPosts
+        }
+
+        fileprivate var eventsPrefix: String {
+            self == .articles ? V2Keys.favoriteArticleEventsPrefix : V2Keys.favoriteRedditEventsPrefix
+        }
+    }
+
+    private struct FavoriteEvent: Codable {
+        /// Seconds since 1970 when the change was made.
+        let time: Double
+        let isFavorite: Bool
+    }
+
+    private static let favoriteEventsPerDeviceLimit = 2_000
+
+    /// Records one favorite/unfavorite on this device and mirrors it into the shared list older
+    /// builds read. The shared list is edited, never rebuilt, so a device with an incomplete
+    /// view cannot drop favorites made elsewhere.
+    func recordFavorite(_ rawID: String, isFavorite: Bool, kind: FavoriteKind) {
+        let id = ArticleIDNormalizer.normalize(rawID)
+        guard !id.isEmpty else { return }
+
+        let key = kind.eventsPrefix + thisDeviceID
+        var events = favoriteEvents(forKey: key)
+        events[id] = FavoriteEvent(time: Date().timeIntervalSince1970, isFavorite: isFavorite)
+        if events.count > Self.favoriteEventsPerDeviceLimit {
+            // Drop the oldest changes; the shared list still carries the favorites themselves.
+            let overflow = events.count - Self.favoriteEventsPerDeviceLimit
+            for staleID in events.sorted(by: { $0.value.time < $1.value.time }).prefix(overflow).map(\.key) {
+                events.removeValue(forKey: staleID)
+            }
+        }
+        setFavoriteEvents(events, forKey: key)
+
+        var legacy = getStringSet(forKey: kind.legacyKey)
+        if isFavorite {
+            legacy.insert(id)
+        } else {
+            legacy.remove(id)
+        }
+        setStringSet(legacy, forKey: kind.legacyKey)
+        updateSyncTimestamp()
+        _ = cloudStore.synchronize()
+    }
+
+    /// Records "favorited" for local favorites no device has a change record for yet, so
+    /// favorites lost from the shared list by an earlier overwrite are restored everywhere.
+    func seedFavoriteRecords(local: Set<String>, kind: FavoriteKind) {
+        let known = mergedFavoriteEvents(kind)
+        let key = kind.eventsPrefix + thisDeviceID
+        var events = favoriteEvents(forKey: key)
+        var added = 0
+        for id in local.map({ ArticleIDNormalizer.normalize($0) }) where !id.isEmpty && known[id] == nil {
+            // Dated 1970 so any real change made on another device wins.
+            events[id] = FavoriteEvent(time: 0, isFavorite: true)
+            added += 1
+        }
+        guard added > 0 else { return }
+        setFavoriteEvents(events, forKey: key)
+        syncLog("☁️ CloudSyncManager: Seeded \(added) favorite record(s)")
+    }
+
+    /// Favorites as all devices see them: the shared list plus local favorites, with every
+    /// recorded change applied (the latest change per item wins, so removals stick).
+    func effectiveFavorites(_ kind: FavoriteKind, local: Set<String>) -> Set<String> {
+        var result = getStringSet(forKey: kind.legacyKey)
+            .union(local)
+        result = Set(result.map { ArticleIDNormalizer.normalize($0) })
+        for (id, event) in mergedFavoriteEvents(kind) {
+            if event.isFavorite {
+                result.insert(id)
+            } else {
+                result.remove(id)
+            }
+        }
+        return result
+    }
+
+    /// Items an updated device has recorded a favorite change for. Those devices also sync
+    /// through CloudKit; items without a record were changed by older versions only.
+    func favoriteIDsWithChangeRecords(_ kind: FavoriteKind) -> Set<String> {
+        Set(mergedFavoriteEvents(kind).keys)
+    }
+
+    private func mergedFavoriteEvents(_ kind: FavoriteKind) -> [String: FavoriteEvent] {
+        var merged: [String: FavoriteEvent] = [:]
+        for key in cloudStore.dictionaryRepresentation.keys where key.hasPrefix(kind.eventsPrefix) {
+            for (id, event) in favoriteEvents(forKey: key) {
+                if let existing = merged[id], existing.time >= event.time { continue }
+                merged[id] = event
+            }
+        }
+        return merged
+    }
+
+    private func favoriteEvents(forKey key: String) -> [String: FavoriteEvent] {
+        guard let data = cloudStore.data(forKey: key),
+              let events = try? JSONDecoder().decode([String: FavoriteEvent].self, from: data) else {
+            return [:]
+        }
+        return events
+    }
+
+    private func setFavoriteEvents(_ events: [String: FavoriteEvent], forKey key: String) {
+        guard let data = try? JSONEncoder().encode(events) else { return }
+        cloudStore.set(data, forKey: key)
     }
 
     // MARK: - Subscriptions
-
-    /// Syncs subscriptions to cloud. Only works if this device is the primary device.
-    /// Returns true if sync was performed, false if skipped (not primary).
-    @discardableResult
-    func syncSubscriptions(_ subscriptions: [Subscription]) -> Bool {
-        guard isThisDevicePrimary else {
-            print("☁️ CloudSyncManager: Skipping subscription sync - this device is not primary")
-            return false
-        }
-        setSubscriptions(subscriptions, forKey: Keys.subscriptions)
-        updateSyncTimestamp()
-        print("☁️ CloudSyncManager: Synced \(subscriptions.count) subscriptions to cloud (primary device)")
-        return true
-    }
-
-    /// Force sync subscriptions to cloud regardless of primary status.
-    /// Use this when setting this device as primary and pushing initial subscriptions.
-    func forceSyncSubscriptions(_ subscriptions: [Subscription]) {
-        setSubscriptions(subscriptions, forKey: Keys.subscriptions)
-        updateSyncTimestamp()
-        print("☁️ CloudSyncManager: Force synced \(subscriptions.count) subscriptions to cloud")
-    }
 
     func getCloudSubscriptions() -> [Subscription] {
         reconcilePodcastSubscriptions(
@@ -518,6 +594,132 @@ final class CloudSyncManager {
         return reconciled
     }
 
+    // MARK: - Subscription records (every subscription, like podcasts)
+
+    /// Records added, changed and removed RSS/Reddit/YouTube subscriptions, one iCloud key per
+    /// feed, then writes the full list to the shared key older builds read. Podcasts keep
+    /// their own records. Any device can change subscriptions; there is no primary device.
+    func recordSubscriptionChanges(from old: [Subscription], to new: [Subscription]) {
+        let oldByKey = Dictionary(old.filter { !$0.isPodcast }.map { ($0.canonicalKey, $0) }, uniquingKeysWith: { first, _ in first })
+        let newByKey = Dictionary(new.filter { !$0.isPodcast }.map { ($0.canonicalKey, $0) }, uniquingKeysWith: { first, _ in first })
+        let now = Date()
+        var changes = 0
+
+        for (key, subscription) in newByKey where !Self.sameSubscriptionContent(oldByKey[key], subscription) {
+            setSubscriptionRecord(CloudPodcastSubscriptionRecord(subscription: subscription, isDeleted: false, modifiedAt: now))
+            changes += 1
+        }
+        for (key, subscription) in oldByKey where newByKey[key] == nil {
+            setSubscriptionRecord(CloudPodcastSubscriptionRecord(subscription: subscription, isDeleted: true, modifiedAt: now))
+            changes += 1
+        }
+
+        setSubscriptions(new, forKey: Keys.subscriptions)
+        updateSyncTimestamp()
+        _ = cloudStore.synchronize()
+        syncLog("☁️ CloudSyncManager: Recorded \(changes) subscription change(s)")
+    }
+
+    /// Creates records for local subscriptions no device has recorded yet (first launch of
+    /// this version on a device that already had subscriptions).
+    func seedSubscriptionRecords(from local: [Subscription]) {
+        let known = subscriptionRecords()
+        var added = 0
+        for subscription in local where !subscription.isPodcast && known[subscription.canonicalKey] == nil {
+            // Dated 1970 so any real change made on another device wins.
+            setSubscriptionRecord(CloudPodcastSubscriptionRecord(subscription: subscription, isDeleted: false, modifiedAt: Date(timeIntervalSince1970: 0)))
+            added += 1
+        }
+        guard added > 0 else { return }
+        updateSyncTimestamp()
+        _ = cloudStore.synchronize()
+        syncLog("☁️ CloudSyncManager: Seeded \(added) subscription record(s)")
+    }
+
+    /// Subscriptions as all devices see them, keeping the local order: local subscriptions
+    /// not removed elsewhere (with renames applied), then ones added on other devices, then
+    /// ones added by older builds that only write the shared list. Podcasts reconcile last.
+    func effectiveSubscriptions(local: [Subscription]) -> [Subscription] {
+        let records = subscriptionRecords()
+        var seen = Set<String>()
+        var result: [Subscription] = []
+
+        for subscription in local {
+            let key = subscription.canonicalKey
+            guard seen.insert(key).inserted else { continue }
+            if subscription.isPodcast {
+                result.append(subscription)
+            } else if let record = records[key] {
+                guard !record.isDeleted else { continue }
+                // Keep this device's ID (each device has its own); take changes made elsewhere.
+                result.append(Subscription(
+                    id: subscription.id,
+                    title: record.subscription.title,
+                    url: subscription.url,
+                    type: subscription.type,
+                    contentKind: record.subscription.contentKind
+                ))
+            } else {
+                result.append(subscription)
+            }
+        }
+
+        let addedElsewhere = records.values
+            .filter { !$0.isDeleted && !seen.contains($0.subscription.canonicalKey) }
+            .sorted { $0.modifiedAt < $1.modifiedAt }
+        for record in addedElsewhere {
+            seen.insert(record.subscription.canonicalKey)
+            result.append(record.subscription)
+        }
+
+        for subscription in getSubscriptions(forKey: Keys.subscriptions)
+        where !subscription.isPodcast && records[subscription.canonicalKey] == nil && seen.insert(subscription.canonicalKey).inserted {
+            result.append(subscription)
+        }
+
+        return reconcilePodcastSubscriptions(in: result)
+    }
+
+    /// Same feed, name and kind. Each device gives a feed its own ID, so IDs are not compared.
+    private static func sameSubscriptionContent(_ lhs: Subscription?, _ rhs: Subscription) -> Bool {
+        guard let lhs else { return false }
+        return lhs.canonicalKey == rhs.canonicalKey
+            && lhs.title == rhs.title
+            && lhs.contentKind == rhs.contentKind
+    }
+
+    /// Feeds an updated device has recorded (those devices also sync through CloudKit).
+    func subscriptionKeysWithRecords() -> Set<String> {
+        Set(subscriptionRecords().keys)
+    }
+
+    func hasCloudSubscriptionRecords() -> Bool {
+        cloudStore.dictionaryRepresentation.keys.contains { $0.hasPrefix(Keys.subscriptionRecordPrefix) }
+    }
+
+    private func subscriptionRecords() -> [String: CloudPodcastSubscriptionRecord] {
+        var records: [String: CloudPodcastSubscriptionRecord] = [:]
+        for (key, value) in cloudStore.dictionaryRepresentation where key.hasPrefix(Keys.subscriptionRecordPrefix) {
+            guard let data = value as? Data,
+                  let record = try? JSONDecoder().decode(CloudPodcastSubscriptionRecord.self, from: data) else {
+                continue
+            }
+            let canonicalKey = record.subscription.canonicalKey
+            if let existing = records[canonicalKey], existing.modifiedAt >= record.modifiedAt {
+                continue
+            }
+            records[canonicalKey] = record
+        }
+        return records
+    }
+
+    private func setSubscriptionRecord(_ record: CloudPodcastSubscriptionRecord) {
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        let digest = SHA256.hash(data: Data(record.subscription.canonicalKey.utf8))
+        let hash = digest.prefix(20).map { String(format: "%02x", $0) }.joined()
+        cloudStore.set(data, forKey: Keys.subscriptionRecordPrefix + hash)
+    }
+
     // MARK: - Merge Helpers
 
     /// Merges local and cloud sets, returning the union.
@@ -537,7 +739,7 @@ final class CloudSyncManager {
             let cloudArticles = Set(getCloudReadArticles().map { ArticleIDNormalizer.normalize($0) })
             pendingReadArticles.subtract(cloudArticles)
             if !pendingReadArticles.isEmpty {
-                print("⚠️ CloudSyncManager: \(pendingReadArticles.count) article read IDs still pending cloud sync")
+                syncLog("⚠️ CloudSyncManager: \(pendingReadArticles.count) article read IDs still pending cloud sync")
             }
         }
 
@@ -547,22 +749,22 @@ final class CloudSyncManager {
             let cloudReddit = compactToCanonicalRedditIDs(getCloudReadRedditPosts())
             pendingReadRedditPosts.subtract(cloudReddit)
             if !pendingReadRedditPosts.isEmpty {
-                print("⚠️ CloudSyncManager: \(pendingReadRedditPosts.count) Reddit read IDs still pending cloud sync")
+                syncLog("⚠️ CloudSyncManager: \(pendingReadRedditPosts.count) Reddit read IDs still pending cloud sync")
             }
         }
     }
 
     private func publishCurrentReadStateSnapshot(context: String) {
         let readArticles = getCloudReadArticles()
-        let favoriteArticles = getStringSet(forKey: Keys.favoriteArticles)
+        let favoriteArticles = effectiveFavorites(.articles, local: [])
         let readRedditPosts = getCloudReadRedditPosts()
-        let favoriteRedditPosts = getStringSet(forKey: Keys.favoriteRedditPosts)
+        let favoriteRedditPosts = effectiveFavorites(.redditPosts, local: [])
         let subscriptions = getCloudSubscriptions()
 
-        print("☁️ CloudSyncManager: Read-state snapshot after \(context) - Articles: \(readArticles.count), Reddit: \(readRedditPosts.count) [mainThread=\(Thread.isMainThread)]")
+        syncLog("☁️ CloudSyncManager: Read-state snapshot after \(context) - Articles: \(readArticles.count), Reddit: \(readRedditPosts.count) [mainThread=\(Thread.isMainThread)]")
         // Show sample IDs for debugging
         let sampleArticleIds = Array(readArticles.prefix(3))
-        print("   → Sample article IDs from iCloud: \(sampleArticleIds)")
+        syncLog("   → Sample article IDs from iCloud: \(sampleArticleIds)")
 
         // Publish to CurrentValueSubject for replay to late subscribers
         let snapshot = ReadStateSnapshot(
@@ -590,26 +792,26 @@ final class CloudSyncManager {
         // V2: add IDs to this device's sharded keys (grow-only).
         let result = addIDsToV2Shards(normalizedIDs, prefix: V2Keys.readArticlesShardPrefix)
         guard result.addedCount > 0 else {
-            print("🔍 DIAGNOSTIC: No new articles to sync (v2)")
+            syncLog("🔍 DIAGNOSTIC: No new articles to sync (v2)")
             return
         }
         updateSyncTimestamp()
         // Force immediate sync to ensure iPad→iPhone works reliably
         let syncResult = cloudStore.synchronize()
-        print("☁️ CloudSyncManager: Synced \(normalizedIDs.count) read articles to cloud (v2 add=\(result.addedCount), shards=\(result.changedShards)), synchronize()=\(syncResult)")
+        syncLog("☁️ CloudSyncManager: Synced \(normalizedIDs.count) read articles to cloud (v2 add=\(result.addedCount), shards=\(result.changedShards)), synchronize()=\(syncResult)")
     }
 
     private func syncReadRedditPostsToCloud(_ normalizedIDs: Set<String>) {
         // V2: add IDs to this device's sharded keys (grow-only).
         let result = addIDsToV2Shards(normalizedIDs, prefix: V2Keys.readRedditPostsShardPrefix)
         guard result.addedCount > 0 else {
-            print("🔍 DIAGNOSTIC: No new Reddit posts to sync (v2)")
+            syncLog("🔍 DIAGNOSTIC: No new Reddit posts to sync (v2)")
             return
         }
         updateSyncTimestamp()
         // Force immediate sync to ensure iPad→iPhone works reliably
         let syncResult = cloudStore.synchronize()
-        print("☁️ CloudSyncManager: Synced \(normalizedIDs.count) read Reddit posts to cloud (v2 add=\(result.addedCount), shards=\(result.changedShards)), synchronize()=\(syncResult)")
+        syncLog("☁️ CloudSyncManager: Synced \(normalizedIDs.count) read Reddit posts to cloud (v2 add=\(result.addedCount), shards=\(result.changedShards)), synchronize()=\(syncResult)")
     }
 
     private struct V2AddResult {
@@ -774,7 +976,7 @@ final class CloudSyncManager {
 
         updateSyncTimestamp()
         let syncResult = cloudStore.synchronize()
-        print("☁️ CloudSyncManager: Quota compaction rewritten v2 read-state - articles \(allArticles.count)→\(trimmedArticles.count), reddit \(allReddit.count)→\(trimmedReddit.count), articleShards=\(articleRewrite.shardsWritten), redditShards=\(redditRewrite.shardsWritten), removedLegacyArticles=\(hadLegacyArticles), removedLegacyReddit=\(hadLegacyReddit), synchronize()=\(syncResult)")
+        syncLog("☁️ CloudSyncManager: Quota compaction rewritten v2 read-state - articles \(allArticles.count)→\(trimmedArticles.count), reddit \(allReddit.count)→\(trimmedReddit.count), articleShards=\(articleRewrite.shardsWritten), redditShards=\(redditRewrite.shardsWritten), removedLegacyArticles=\(hadLegacyArticles), removedLegacyReddit=\(hadLegacyReddit), synchronize()=\(syncResult)")
         logTotalDataSize()
         flushPendingReadStateWritesIfPossible()
         publishCurrentReadStateSnapshot(context: "quota compaction")
@@ -820,8 +1022,9 @@ final class CloudSyncManager {
 
     private func trimForQuota(_ ids: Set<String>, maxEntries: Int) -> Set<String> {
         guard ids.count > maxEntries else { return ids }
-        // Deterministic trim to cap KVS usage while preserving a large recent-history window.
-        return Set(ids.sorted().suffix(maxEntries))
+        // Keep the most recently seen IDs. (Sorting the IDs themselves kept an alphabetical slice
+        // of links, which brought older-but-relevant articles back as unread on every device.)
+        return ReadRecencyStore.shared.newest(ids, limit: maxEntries)
     }
 
     private func cleanupRedundantLegacyReadKeysIfPossible() -> (removedArticles: Bool, removedReddit: Bool) {
@@ -1012,74 +1215,6 @@ final class CloudSyncManager {
         return syncStarted
     }
 
-    // MARK: - Read History Migration (Legacy → V2)
-
-    struct ReadHistoryMigrationResult {
-        let migrated: Bool
-        let legacyArticlesCount: Int
-        let legacyRedditCount: Int
-        let articlesAdded: Int
-        let redditAdded: Int
-        let deletedLegacyKeys: Bool
-    }
-
-    /// One-time migration to seed the legacy single-key read history into the v2 sharded keys.
-    /// Run this on the primary device to fix badge mismatches on other devices.
-    @discardableResult
-    func migrateLegacyReadHistoryToV2(deleteLegacyKeys: Bool) -> ReadHistoryMigrationResult {
-        // Only the primary device should migrate, to avoid secondary devices seeding incomplete history.
-        if hasPrimaryDevice && !isThisDevicePrimary {
-            print("☁️ CloudSyncManager: Skipping read-history migration (not primary)")
-            return ReadHistoryMigrationResult(
-                migrated: false,
-                legacyArticlesCount: 0,
-                legacyRedditCount: 0,
-                articlesAdded: 0,
-                redditAdded: 0,
-                deletedLegacyKeys: false
-            )
-        }
-
-        let syncStarted = cloudStore.synchronize()
-
-        // Read legacy keys only (do not include v2 union here).
-        let legacyArticlesRaw = getStringSet(forKey: Keys.readArticles)
-        let legacyRedditRaw = getStringSet(forKey: Keys.readRedditPosts)
-        let legacyArticles = Set(legacyArticlesRaw.map { ArticleIDNormalizer.normalize($0) })
-        let legacyReddit = Set(legacyRedditRaw.map { ArticleIDNormalizer.normalize($0) })
-
-        let articlesResult = addIDsToV2Shards(legacyArticles, prefix: V2Keys.readArticlesShardPrefix)
-        let redditResult = addIDsToV2Shards(legacyReddit, prefix: V2Keys.readRedditPostsShardPrefix)
-
-        updateSyncTimestamp()
-        let syncAfterWrite = cloudStore.synchronize()
-
-        var deleted = false
-        if deleteLegacyKeys {
-            cloudStore.removeObject(forKey: Keys.readArticles)
-            cloudStore.removeObject(forKey: Keys.readRedditPosts)
-            updateSyncTimestamp()
-            _ = cloudStore.synchronize()
-            deleted = true
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            self?.publishCurrentReadStateSnapshot(context: deleted ? "legacy migration + cleanup" : "legacy migration")
-        }
-
-        print("☁️ CloudSyncManager: Read-history migration to v2 complete - legacy articles=\(legacyArticles.count), legacy reddit=\(legacyReddit.count), v2 add articles=\(articlesResult.addedCount), v2 add reddit=\(redditResult.addedCount), deletedLegacy=\(deleted), syncStarted=\(syncStarted), syncAfterWrite=\(syncAfterWrite)")
-        logTotalDataSize()
-
-        return ReadHistoryMigrationResult(
-            migrated: true,
-            legacyArticlesCount: legacyArticles.count,
-            legacyRedditCount: legacyReddit.count,
-            articlesAdded: articlesResult.addedCount,
-            redditAdded: redditResult.addedCount,
-            deletedLegacyKeys: deleted
-        )
-    }
-
     // MARK: - Cleanup (for future use if quota exceeded)
 
     /// Removes old entries to stay within quota. Call this if quota violation occurs.
@@ -1098,7 +1233,7 @@ final class CloudSyncManager {
             updateSyncTimestamp()
             cloudStore.synchronize()
         }
-        print("☁️ CloudSyncManager: Pruned read history - articles \(readArticles.count)→\(trimmedArticles.count), reddit \(readPosts.count)→\(trimmedPosts.count)")
+        syncLog("☁️ CloudSyncManager: Pruned read history - articles \(readArticles.count)→\(trimmedArticles.count), reddit \(readPosts.count)→\(trimmedPosts.count)")
         logTotalDataSize()
     }
 
@@ -1118,9 +1253,9 @@ final class CloudSyncManager {
             }
         }
         
-        print("☁️ CloudSyncManager: Estimated total KVS usage: \(totalBytes) bytes (Limit: 1,048,576 bytes)")
+        syncLog("☁️ CloudSyncManager: Estimated total KVS usage: \(totalBytes) bytes (Limit: 1,048,576 bytes)")
         if totalBytes > 900_000 {
-            print("⚠️ CloudSyncManager: Approaching 1MB limit!")
+            syncLog("⚠️ CloudSyncManager: Approaching 1MB limit!")
         }
     }
 }
@@ -1215,5 +1350,83 @@ enum ArticleIDNormalizer {
         }
 
         return components.string ?? trimmed
+    }
+}
+
+/// Remembers when this device first saw each read ID (read here, or arrived from iCloud), so a
+/// quota cleanup can keep the most recent history. Local only: the shared iCloud format has no
+/// dates, and adding them there would break older builds.
+final class ReadRecencyStore {
+    static let shared = ReadRecencyStore()
+
+    private let lock = NSLock()
+    private var firstSeen: [String: Double] = [:]
+    private var isLoaded = false
+    private var pendingSave: DispatchWorkItem?
+    private static let entryLimit = 60_000
+
+    private var fileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("ReadRecency.json")
+    }
+
+    func noteSeen<S: Sequence>(_ ids: S) where S.Element == String {
+        lock.lock()
+        loadIfNeeded()
+        let now = Date().timeIntervalSince1970
+        var added = false
+        for id in ids where firstSeen[id] == nil {
+            firstSeen[id] = now
+            added = true
+        }
+        if added && firstSeen.count > Self.entryLimit {
+            let overflow = firstSeen.count - Self.entryLimit
+            for id in firstSeen.sorted(by: { $0.value < $1.value }).prefix(overflow).map(\.key) {
+                firstSeen.removeValue(forKey: id)
+            }
+        }
+        lock.unlock()
+        if added { scheduleSave() }
+    }
+
+    /// The `limit` most recently seen IDs. IDs never seen count as oldest; ties break by ID.
+    func newest(_ ids: Set<String>, limit: Int) -> Set<String> {
+        guard ids.count > limit else { return ids }
+        lock.lock()
+        loadIfNeeded()
+        let ranked = ids.sorted { lhs, rhs in
+            let l = firstSeen[lhs] ?? 0
+            let r = firstSeen[rhs] ?? 0
+            return l == r ? lhs > rhs : l > r
+        }
+        lock.unlock()
+        return Set(ranked.prefix(limit))
+    }
+
+    private func loadIfNeeded() {
+        guard !isLoaded else { return }
+        isLoaded = true
+        guard let url = fileURL,
+              let data = try? Data(contentsOf: url),
+              let stored = try? JSONDecoder().decode([String: Double].self, from: data) else { return }
+        firstSeen = stored
+    }
+
+    private func scheduleSave() {
+        let work = DispatchWorkItem { [weak self] in self?.save() }
+        lock.lock()
+        pendingSave?.cancel()
+        pendingSave = work
+        lock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    private func save() {
+        lock.lock()
+        let snapshot = firstSeen
+        lock.unlock()
+        guard let url = fileURL, let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 }

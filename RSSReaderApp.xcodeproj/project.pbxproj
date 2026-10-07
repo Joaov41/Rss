@@ -13,6 +13,8 @@
 		CHGP00000000000000000012 /* AppState+ChatGPTPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */; };
 		CHGP00000000000000000021 /* ChatGPTPlanSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */; };
 		CHGP00000000000000000022 /* ChatGPTPlanSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */; };
+		CKSM00000000000000000001 /* CloudKitSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CKSM00000000000000000003 /* CloudKitSyncManager.swift */; };
+		CKSM00000000000000000002 /* CloudKitSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CKSM00000000000000000003 /* CloudKitSyncManager.swift */; };
 		OACP00000000000000000001 /* OpenAICompatibleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000003 /* OpenAICompatibleService.swift */; };
 		OACP00000000000000000002 /* OpenAICompatibleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000003 /* OpenAICompatibleService.swift */; };
 		OACP00000000000000000011 /* AppState+OpenAICompatible.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000013 /* AppState+OpenAICompatible.swift */; };
@@ -170,6 +172,7 @@
 		CHGP00000000000000000003 /* ChatGPTPlanService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTPlanService.swift"; sourceTree = "<group>"; };
 		CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+ChatGPTPlan.swift"; sourceTree = "<group>"; };
 		CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTPlanSettingsView.swift"; sourceTree = "<group>"; };
+		CKSM00000000000000000003 /* CloudKitSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CloudKitSyncManager.swift"; sourceTree = "<group>"; };
 		OACP00000000000000000003 /* OpenAICompatibleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenAICompatibleService.swift"; sourceTree = "<group>"; };
 		OACP00000000000000000013 /* AppState+OpenAICompatible.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+OpenAICompatible.swift"; sourceTree = "<group>"; };
 		OACP00000000000000000023 /* OpenAICompatibleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenAICompatibleSettingsView.swift"; sourceTree = "<group>"; };
@@ -398,6 +401,7 @@
 					MLX0001000100010005 /* MLXJSONRepairUtils.swift */,
 				SUMM0001000100010003 /* SummarizeBridge.swift */,
 				CHGP00000000000000000003 /* ChatGPTPlanService.swift */,
+				CKSM00000000000000000003 /* CloudKitSyncManager.swift */,
 				OACP00000000000000000003 /* OpenAICompatibleService.swift */,
 				F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */,
 				YT0000000000000000000011 /* YouTubeService.swift */,
@@ -666,6 +670,7 @@
 				ASKAI0001000100010001 /* AskAIUtilities.swift in Sources */,
 				SUMM0001000100010001 /* SummarizeBridge.swift in Sources */,
 				CHGP00000000000000000001 /* ChatGPTPlanService.swift in Sources */,
+				CKSM00000000000000000001 /* CloudKitSyncManager.swift in Sources */,
 				OACP00000000000000000001 /* OpenAICompatibleService.swift in Sources */,
 				CHGP00000000000000000011 /* AppState+ChatGPTPlan.swift in Sources */,
 				OACP00000000000000000011 /* AppState+OpenAICompatible.swift in Sources */,
@@ -723,6 +728,7 @@
 				ASKAI0001000100010002 /* AskAIUtilities.swift in Sources */,
 				SUMM0001000100010002 /* SummarizeBridge.swift in Sources */,
 				CHGP00000000000000000002 /* ChatGPTPlanService.swift in Sources */,
+				CKSM00000000000000000002 /* CloudKitSyncManager.swift in Sources */,
 				OACP00000000000000000002 /* OpenAICompatibleService.swift in Sources */,
 				CHGP00000000000000000012 /* AppState+ChatGPTPlan.swift in Sources */,
 				OACP00000000000000000012 /* AppState+OpenAICompatible.swift in Sources */,

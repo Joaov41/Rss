@@ -168,7 +168,7 @@ struct RedditDetailView: View {
     private var iphoneDetailHorizontalInset: CGFloat { isPhoneDevice ? 10 : 16 }
 
     private var detailBackground: Color {
-        colorScheme == .dark ? .black : AppColors.redditBackground(for: colorScheme)
+        colorScheme == .dark ? Color(red: 17.0 / 255.0, green: 24.0 / 255.0, blue: 39.0 / 255.0) : AppColors.redditBackground(for: colorScheme)
     }
 
     private var shouldShowMaterialOverlay: Bool {
@@ -529,6 +529,18 @@ struct RedditDetailView: View {
                         .accessibilityLabel("Summarize post with \(appState.settings.selectedWebAIProvider.displayName)")
                         .accessibilityHint("Use \(appState.settings.selectedWebAIProvider.displayName) to summarize the Reddit post without comments")
                         .help("Summarize post with \(appState.settings.selectedWebAIProvider.displayName)")
+                        .buttonStyle(RedditCommentsChromeIconButtonStyle())
+                    }
+
+                    // The narrow (iPhone-style) layout has no top bar, so its favorite star lives here.
+                    if isCompactWidth {
+                        Button {
+                            appState.toggleRedditPostFavorite(post)
+                        } label: {
+                            Image(systemName: post.isFavorite ? "star.fill" : "star")
+                                .foregroundStyle(post.isFavorite ? Color.yellow : Color.primary)
+                        }
+                        .accessibilityLabel(post.isFavorite ? "Remove from Favorites" : "Add to Favorites")
                         .buttonStyle(RedditCommentsChromeIconButtonStyle())
                     }
                 }

@@ -2692,6 +2692,7 @@ class AppState: ObservableObject {
         manualCloudStateChanged = false
         manualCloudSyncStatusMessage = "Sync requested..."
         print("☁️ AppState: Manual iCloud sync requested")
+        CloudKitSyncManager.shared.syncNow()
         _ = CloudSyncManager.shared.forceSynchronize()
 
         // Run a second pull pass because KVS propagation can land slightly after synchronize().
@@ -2744,6 +2745,14 @@ class AppState: ObservableObject {
                 guard let self else { return }
                 print("☁️ AppState: Received snapshot - Articles: \(snapshot.readArticles.count), Reddit: \(snapshot.readRedditPosts.count) [instance=\(ObjectIdentifier(self))]")
                 self.handleSnapshotChange(snapshot)
+            }
+            .store(in: &cancellables)
+
+        // CloudKit: changes made on other updated devices.
+        CloudKitSyncManager.shared.changes
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] change in
+                self?.handleCloudKitChange(change)
             }
             .store(in: &cancellables)
 
@@ -2878,6 +2887,29 @@ class AppState: ObservableObject {
             }
         }
 
+        scheduleCloudUIUpdates(updateKinds)
+    }
+
+    private func handleCloudKitChange(_ change: CloudKitChange) {
+        var updateKinds: CloudUIUpdateKind = []
+        switch change {
+        case .reads(.article, let ids):
+            if persistenceManager.handleRemoteReadArticlesChange(ids) {
+                updateKinds.insert(.articleRead)
+            }
+        case .reads(.reddit, let ids):
+            if persistenceManager.handleRemoteReadRedditPostsChange(ids) {
+                updateKinds.insert(.redditRead)
+            }
+        case .favorites(let kind, let added, let removed, let removedRecordNames):
+            if persistenceManager.applyCloudKitFavorites(kind, added: added, removed: removed, removedRecordNames: removedRecordNames) {
+                updateKinds.insert(kind == .article ? .articleFavorite : .redditFavorite)
+            }
+        case .subscriptions(let upserted, let removedKeys, let removedRecordNames):
+            if persistenceManager.applyCloudKitSubscriptions(upserted: upserted, removedKeys: removedKeys, removedRecordNames: removedRecordNames) {
+                updateKinds.insert(.subscriptions)
+            }
+        }
         scheduleCloudUIUpdates(updateKinds)
     }
 
@@ -9014,6 +9046,70 @@ class AppState: ObservableObject {
         }
 
         print("📱 AppState: Marked \(articlesToPersist.count) articles and \(postsToPersist.count) Reddit posts as read")
+    }
+
+    /// Which items a sidebar library row covers, matching the filter its unread badge uses.
+    private func categoryFilters(_ category: FeedCategory) -> (articles: (Article) -> Bool, posts: (RedditPost) -> Bool) {
+        let calendar = Calendar.current
+        switch category {
+        case .reddit:
+            return ({ _ in false }, { _ in true })
+        case .all:
+            return ({ _ in true }, { _ in false })
+        case .unread:
+            return ({ _ in true }, { _ in true })
+        case .today:
+            return ({ calendar.isDateInToday($0.publishDate) }, { calendar.isDateInToday($0.publishDate) })
+        case .favorites:
+            return ({ _ in false }, { _ in false })
+        }
+    }
+
+    /// Unread items in a sidebar library row (Reddit, All, Unread, Today).
+    func unreadCount(in category: FeedCategory) -> Int {
+        let filters = categoryFilters(category)
+        let articles = feeds.flatMap(\.articles).filter { !$0.isRead && filters.articles($0) }.count
+        let posts = redditFeeds.flatMap(\.posts).filter { !$0.isRead && filters.posts($0) }.count
+        return articles + posts
+    }
+
+    /// Marks every unread item in a sidebar library row as read, in one save and one sync pass.
+    func markAllAsRead(in category: FeedCategory) {
+        let filters = categoryFilters(category)
+
+        var updatedFeeds = feeds
+        var articlesToPersist: [Article] = []
+        for feedIndex in updatedFeeds.indices {
+            for articleIndex in updatedFeeds[feedIndex].articles.indices {
+                let article = updatedFeeds[feedIndex].articles[articleIndex]
+                if !article.isRead && filters.articles(article) {
+                    updatedFeeds[feedIndex].articles[articleIndex].isRead = true
+                    articlesToPersist.append(updatedFeeds[feedIndex].articles[articleIndex])
+                }
+            }
+        }
+
+        var updatedRedditFeeds = redditFeeds
+        var postsToPersist: [RedditPost] = []
+        for feedIndex in updatedRedditFeeds.indices {
+            for postIndex in updatedRedditFeeds[feedIndex].posts.indices {
+                let post = updatedRedditFeeds[feedIndex].posts[postIndex]
+                if !post.isRead && filters.posts(post) {
+                    updatedRedditFeeds[feedIndex].posts[postIndex].isRead = true
+                    postsToPersist.append(updatedRedditFeeds[feedIndex].posts[postIndex])
+                }
+            }
+        }
+
+        if !articlesToPersist.isEmpty {
+            feeds = updatedFeeds
+            persistenceManager.markArticlesAsRead(articlesToPersist)
+        }
+        if !postsToPersist.isEmpty {
+            redditFeeds = updatedRedditFeeds
+            persistenceManager.markRedditPostsAsRead(postsToPersist)
+        }
+        print("📱 AppState: Marked \(articlesToPersist.count) articles and \(postsToPersist.count) Reddit posts as read (\(category.rawValue))")
     }
 
     func markAllArticlesAsRead(for feedURL: String) {

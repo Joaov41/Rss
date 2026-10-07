@@ -609,7 +609,7 @@ enum ReaderModeService {
               '<title>' + escapeHtml(title) + '</title>' +
               '<style>' +
               ':root { --bg-color: #f6f4ef; --text-color: #1e1e1e; --secondary-color: #6b6b6b; --link-color: #007AFF; }' +
-              '@media (prefers-color-scheme: dark) { :root { --bg-color: #101113; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
+              '@media (prefers-color-scheme: dark) { :root { --bg-color: #111827; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
               'body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; }' +
               '.reader-shell { max-width: \(readerMaxWidth); margin: 0 auto; padding: 32px \(readerSidePadding)px 60px; }' +
               '.reader-title { font-size: \(titleFontSize)px; line-height: 1.2; margin: 0 0 16px; font-weight: 700; }' +
@@ -1069,7 +1069,7 @@ enum ReaderModeService {
               '<title>' + escapeHtml(title) + '</title>' +
               '<style>' +
               ':root { --bg-color: #f6f4ef; --text-color: #1e1e1e; --secondary-color: #6b6b6b; --link-color: #007AFF; }' +
-              '@media (prefers-color-scheme: dark) { :root { --bg-color: #101113; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
+              '@media (prefers-color-scheme: dark) { :root { --bg-color: #111827; --text-color: #f2f2f2; --secondary-color: #a5a5a5; --link-color: #5AC8FA; } }' +
               'body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif; }' +
               '.reader-shell { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }' +
               '.reader-title { font-size: 30px; line-height: 1.2; margin: 0 0 16px; font-weight: 700; }' +
@@ -1415,7 +1415,7 @@ struct AppColors {
 
     static func feedListCardFill(for colorScheme: ColorScheme) -> Color {
         if colorScheme == .dark {
-            return Color(red: 0.075, green: 0.105, blue: 0.150).opacity(0.82)
+            return Color(red: 0.125, green: 0.172, blue: 0.243).opacity(0.85)
         }
         return systemGray6
     }
@@ -1445,29 +1445,19 @@ struct AppColors {
         )
     }
 
+    /// Dark mode middle column: soft deep-navy gradient, lighter under the toolbar and fading darker,
+    /// lightening a little as the list scrolls.
     private static func feedListDarkBackground(scrollOffset: CGFloat) -> LinearGradient {
         let progress = min(max(scrollOffset / 950, 0), 1)
 
         return LinearGradient(
             colors: [
-                interpolatedColor(
-                    from: (0.105, 0.205, 0.270),
-                    to: (0.310, 0.490, 0.585),
-                    progress: progress
-                ),
-                interpolatedColor(
-                    from: (0.175, 0.275, 0.375),
-                    to: (0.360, 0.485, 0.610),
-                    progress: progress
-                ),
-                interpolatedColor(
-                    from: (0.095, 0.105, 0.215),
-                    to: (0.175, 0.220, 0.345),
-                    progress: progress
-                )
+                interpolatedColor(from: (0.118, 0.176, 0.251), to: (0.165, 0.235, 0.325), progress: progress),
+                interpolatedColor(from: (0.086, 0.129, 0.192), to: (0.125, 0.180, 0.255), progress: progress),
+                interpolatedColor(from: (0.055, 0.075, 0.118), to: (0.085, 0.110, 0.165), progress: progress)
             ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
+            startPoint: .top,
+            endPoint: .bottom
         )
     }
 
@@ -3715,8 +3705,8 @@ struct ContentView: View {
             if colorScheme == .dark {
                 LinearGradient(
                     colors: [
-                        Color(red: 0.055, green: 0.058, blue: 0.095),
-                        Color(red: 0.025, green: 0.026, blue: 0.047)
+                        Color(red: 0.060, green: 0.077, blue: 0.118),
+                        Color(red: 0.032, green: 0.040, blue: 0.066)
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -3724,8 +3714,8 @@ struct ContentView: View {
                 .overlay {
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.035),
-                            Color(red: 0.35, green: 0.18, blue: 0.75).opacity(0.08),
+                            Color.white.opacity(0.03),
+                            Color(red: 0.20, green: 0.38, blue: 0.75).opacity(0.07),
                             Color.clear
                         ],
                         startPoint: .topLeading,
@@ -4044,6 +4034,7 @@ struct ContentView: View {
                     ) {
                         sidebarRedditIcon()
                     }
+                    .modifier(MarkAllReadMenu(appState: appState, category: .reddit))
                 }
                 .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
@@ -4077,6 +4068,7 @@ struct ContentView: View {
                     ) {
                         sidebarSystemIcon(FeedCategory.all.systemImageName, tint: Color(red: 0.64, green: 0.68, blue: 1.0))
                     }
+                    .modifier(MarkAllReadMenu(appState: appState, category: .all))
                 }
                 .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
@@ -4114,6 +4106,7 @@ struct ContentView: View {
                     ) {
                         sidebarSystemIcon(FeedCategory.unread.systemImageName, tint: Color(red: 0.52, green: 0.65, blue: 1.0))
                     }
+                    .modifier(MarkAllReadMenu(appState: appState, category: .unread))
                 }
                 .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
@@ -4191,6 +4184,7 @@ struct ContentView: View {
                     ) {
                         sidebarSystemIcon(FeedCategory.today.systemImageName, tint: Color(red: 0.58, green: 0.65, blue: 1.0))
                     }
+                    .modifier(MarkAllReadMenu(appState: appState, category: .today))
                 }
                 .buttonStyle(.plain)
                 .sidebarRowChrome(backgroundColor: isPhoneStyleLayout ? iPadShellBackground : .clear)
@@ -12085,7 +12079,7 @@ struct ArticleDetailView: View {
     }
 
     private var detailBackground: Color {
-        colorScheme == .dark ? Color(red: 0.02, green: 0.025, blue: 0.04) : AppColors.background
+        colorScheme == .dark ? Color(red: 17.0 / 255.0, green: 24.0 / 255.0, blue: 39.0 / 255.0) : AppColors.background
     }
 
     private var articleDetailTitleSize: CGFloat {
@@ -12296,7 +12290,7 @@ struct ArticleDetailView: View {
             if isFullBleedIpadReader(for: article) {
                 // Same colour as the reader page's --bg-color, so the pane and the page read as one surface.
                 colorScheme == .dark
-                    ? Color(red: 16.0 / 255.0, green: 17.0 / 255.0, blue: 19.0 / 255.0)
+                    ? Color(red: 17.0 / 255.0, green: 24.0 / 255.0, blue: 39.0 / 255.0)
                     : Color(red: 246.0 / 255.0, green: 244.0 / 255.0, blue: 239.0 / 255.0)
             } else {
                 detailBackground
@@ -15516,7 +15510,7 @@ struct ArticleReaderWebView: UIViewRepresentable {
             if isPad {
                 // iPad: match the reader page's --bg-color so the top inset above the page is not a lighter band.
                 return traits.userInterfaceStyle == .dark
-                    ? UIColor(red: 16.0 / 255.0, green: 17.0 / 255.0, blue: 19.0 / 255.0, alpha: 1)
+                    ? UIColor(red: 17.0 / 255.0, green: 24.0 / 255.0, blue: 39.0 / 255.0, alpha: 1)
                     : UIColor(red: 246.0 / 255.0, green: 244.0 / 255.0, blue: 239.0 / 255.0, alpha: 1)
             }
             return traits.userInterfaceStyle == .dark ? .black : .systemBackground
@@ -16024,6 +16018,57 @@ struct HTMLWebView: UIViewRepresentable {
 #endif
 
 // MARK: - Add Subscription View
+/// Long-press (right-click on Mac) menu on a sidebar library row: "Mark All as Read", with a
+/// confirmation, since read state can't be undone or synced back to unread.
+private struct MarkAllReadMenu: ViewModifier {
+    @ObservedObject var appState: AppState
+    let category: FeedCategory
+    @State private var isConfirming = false
+    @State private var confirmCount = 0
+    @State private var rowWidth: CGFloat = 0
+
+    private var itemName: String {
+        switch category {
+        case .reddit: return confirmCount == 1 ? "Reddit post" : "Reddit posts"
+        case .all: return confirmCount == 1 ? "article" : "articles"
+        case .today: return confirmCount == 1 ? "item from today" : "items from today"
+        default: return confirmCount == 1 ? "item" : "items"
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contextMenu {
+                Button {
+                    confirmCount = appState.unreadCount(in: category)
+                    isConfirming = true
+                } label: {
+                    Label("Mark All as Read", systemImage: "checkmark.circle")
+                }
+                .disabled(appState.unreadCount(in: category) == 0)
+            } preview: {
+                // The default lift lays the row out again at a wider width, so a selected row's
+                // highlight spilled out of the sidebar. Show it at its on-screen width instead.
+                content
+                    .frame(width: rowWidth > 0 ? rowWidth : nil)
+            }
+            .confirmationDialog(
+                "Mark \(confirmCount) \(itemName) as read?",
+                isPresented: $isConfirming,
+                titleVisibility: .visible
+            ) {
+                Button("Mark All as Read") {
+                    appState.markAllAsRead(in: category)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can't be undone.")
+            }
+    }
+}
+
 struct AddSubscriptionView: View {
     private enum SubscriptionSource: String, Hashable {
         case rss
@@ -16086,14 +16131,31 @@ struct AddSubscriptionView: View {
 
                 Form {
                     Section("Type") {
-                        // One row of equal pills across the panel; icons only when they fit, and the text
-                        // shrinks slightly instead of a pill being cut off.
-                        ViewThatFits(in: .horizontal) {
-                            SettingsPillPicker(options: sourceOptions, selection: $source, fillsWidth: true)
-                            SettingsPillPicker(options: sourceOptionsWithoutIcons, selection: $source, fillsWidth: true)
-                            SettingsPillPicker(options: sourceOptionsWithoutIcons, selection: $source, fillsWidth: true, compact: true)
+                        if SettingsLayout.isPhone {
+                            // A phone is too narrow for a row of pills at most text sizes: use a menu.
+                            Picker("Type", selection: $source) {
+                                ForEach(sourceOptions, id: \.value) { option in
+                                    if let systemImage = option.systemImage {
+                                        Label(option.title, systemImage: systemImage).tag(option.value)
+                                    } else {
+                                        Text(option.title).tag(option.value)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        } else {
+                            // One row of equal pills across the panel when it fits (with icons if there's
+                            // room); otherwise full labels in a row that scrolls sideways.
+                            ViewThatFits(in: .horizontal) {
+                                SettingsPillPicker(options: sourceOptions, selection: $source, fillsWidth: true)
+                                SettingsPillPicker(options: sourceOptionsWithoutIcons, selection: $source, fillsWidth: true)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    SettingsPillPicker(options: sourceOptions, selection: $source)
+                                        .padding(.vertical, 2)
+                                }
+                            }
+                            .padding(.vertical, 6)
                         }
-                        .padding(.vertical, 6)
                     }
                     .listRowBackground(SettingsPalette.panelFill(effectiveScheme))
 
@@ -16200,6 +16262,10 @@ struct AddSubscriptionView: View {
                 .animation(.easeInOut(duration: 0.15), value: source)
             }
             .navigationTitle("Add Subscription")
+            #if os(iOS)
+            // The large title doesn't fit a phone's width.
+            .navigationBarTitleDisplayMode(SettingsLayout.isPhone ? .inline : .automatic)
+            #endif
             #if os(macOS)
             .frame(minWidth: 400, minHeight: 300)
             .padding()

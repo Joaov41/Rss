@@ -1,8 +1,24 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 import Combine
+
+#if os(iOS)
+/// Registers for the silent pushes CloudKit sends when another device changes synced data.
+final class RSSReaderAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        application.registerForRemoteNotifications()
+        return true
+    }
+}
+#endif
 
 @main
 struct RSSReaderApp: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(RSSReaderAppDelegate.self) private var appDelegate
+    #endif
     @StateObject private var appState: AppState
     @AppStorage("appearanceMode") private var appearanceMode: Int = 0 // 0: System, 1: Light, 2: Dark
     
