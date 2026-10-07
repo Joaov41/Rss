@@ -100,7 +100,8 @@ struct AIQuestionView: View {
 	                        appState.settings.selectedSummaryProvider == .coreAIMLXLocal ||
 	                        appState.settings.selectedSummaryProvider == .applePCCGateway ||
 	                        appState.settings.selectedSummaryProvider == .summarizeDaemon ||
-	                        appState.settings.selectedSummaryProvider == .chatGPT) {
+	                        appState.settings.selectedSummaryProvider == .chatGPT ||
+	                        appState.settings.selectedSummaryProvider == .openAICompatible) {
                         HStack(spacing: 4) {
                             Image(systemName: "cpu")
                                 .font(.caption2)

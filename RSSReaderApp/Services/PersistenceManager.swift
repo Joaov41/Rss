@@ -882,6 +882,8 @@ final class PersistenceManager {
             keychainPCCToken ?? legacyPCCToken ?? hydrated.pccGatewayToken
         )
 
+        hydrated.openAICompatibleAPIKey = RSSSummarizeKeychain.string(for: RSSSummarizeKeychain.openAICompatibleAPIKeyKey) ?? ""
+
         return hydrated
     }
 
@@ -923,6 +925,8 @@ final class PersistenceManager {
             forKey: "pccGatewayPort"
         )
         userDefaults.set(AppSettings.normalizedPCCGatewayModel(settings.pccGatewayModel), forKey: "pccGatewayModel")
+
+        RSSSummarizeKeychain.set(settings.openAICompatibleAPIKey, for: RSSSummarizeKeychain.openAICompatibleAPIKeyKey)
     }
     
     // MARK: - Default Data

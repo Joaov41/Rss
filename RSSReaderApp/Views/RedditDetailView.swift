@@ -211,6 +211,8 @@ struct RedditDetailView: View {
             return "terminal"
         case .chatGPT:
             return "person.badge.key"
+        case .openAICompatible:
+            return "server.rack"
         }
     }
 
@@ -614,7 +616,7 @@ struct RedditDetailView: View {
                         )
                         // Throughput badge for on-device providers (summary)
                         let _redditSummaryProvider = appState.settings.selectedSummaryProvider
-                        if (_redditSummaryProvider == .coreAIMLXLocal || _redditSummaryProvider == .appleLocal || _redditSummaryProvider == .applePCCGateway || _redditSummaryProvider == .summarizeDaemon || _redditSummaryProvider == .chatGPT),
+                        if (_redditSummaryProvider == .coreAIMLXLocal || _redditSummaryProvider == .appleLocal || _redditSummaryProvider == .applePCCGateway || _redditSummaryProvider == .summarizeDaemon || _redditSummaryProvider == .chatGPT || _redditSummaryProvider == .openAICompatible),
                            !appState.mlxLastThroughput.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "cpu").font(.caption2)
@@ -827,7 +829,7 @@ struct RedditDetailView: View {
                         }
                         // Throughput badge for on-device providers (comment summary)
                         let _redditCommentSummaryProvider = appState.settings.selectedSummaryProvider
-                        if (_redditCommentSummaryProvider == .coreAIMLXLocal || _redditCommentSummaryProvider == .appleLocal || _redditCommentSummaryProvider == .applePCCGateway || _redditCommentSummaryProvider == .summarizeDaemon || _redditCommentSummaryProvider == .chatGPT),
+                        if (_redditCommentSummaryProvider == .coreAIMLXLocal || _redditCommentSummaryProvider == .appleLocal || _redditCommentSummaryProvider == .applePCCGateway || _redditCommentSummaryProvider == .summarizeDaemon || _redditCommentSummaryProvider == .chatGPT || _redditCommentSummaryProvider == .openAICompatible),
                            !appState.mlxLastThroughput.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "cpu").font(.caption2)
@@ -1415,7 +1417,7 @@ struct RedditDetailView: View {
         }
 
         let redditQAProvider = appState.settings.selectedSummaryProvider
-        if (redditQAProvider == .coreAIMLXLocal || redditQAProvider == .appleLocal || redditQAProvider == .applePCCGateway || redditQAProvider == .summarizeDaemon || redditQAProvider == .chatGPT),
+        if (redditQAProvider == .coreAIMLXLocal || redditQAProvider == .appleLocal || redditQAProvider == .applePCCGateway || redditQAProvider == .summarizeDaemon || redditQAProvider == .chatGPT || redditQAProvider == .openAICompatible),
            !appState.mlxLastQAThroughput.isEmpty,
            !isProcessingQuestion,
            answerText != "Ask a question about this post or its comments..." {
@@ -2184,6 +2186,34 @@ struct RedditDetailView: View {
             appState.performChatGPTSummaryPublic(prompt: prompt, taskName: "Reddit Comment Summary") { summaryText in
                 guard appState.selectedRedditPost?.id == post.id else {
                     print("⚠️ RedditDetailView: Post selection changed before ChatGPT Plan summary completed, discarding results")
+                    self.isLoadingComments = false
+                    return
+                }
+                let cleanedSummaryText = cleanAndFormatCommentSummaryForDisplay(summaryText)
+                self.commentSummary = CommentSummary(
+                    postId: post.id,
+                    subreddit: post.subreddit,
+                    summary: cleanedSummaryText,
+                    commentCount: promptCommentCount,
+                    topCommenters: [],
+                    mainTopics: [],
+                    sentiment: .neutral,
+                    createdDate: Date()
+                )
+                self.showCommentSummary = true
+                self.isLoadingComments = false
+            }
+            return
+        } else if appState.settings.selectedSummaryProvider == .openAICompatible {
+            print("⚡ RedditDetailView: Using Custom Server for comment summary")
+            let prompt = appState.commentSummaryPrompt(comments: comments)
+
+            isLoadingComments = true
+            self.commentsSentToLLMCount = promptCommentCount
+
+            appState.performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Reddit Comment Summary") { summaryText in
+                guard appState.selectedRedditPost?.id == post.id else {
+                    print("⚠️ RedditDetailView: Post selection changed before Custom Server summary completed, discarding results")
                     self.isLoadingComments = false
                     return
                 }
@@ -3540,7 +3570,7 @@ struct CommentAnalyticsViewIntegrated: View {
                     .padding(.horizontal)
                 // Throughput badge for on-device providers
                 let _deepAnalysisProvider = effectiveSummaryProvider
-                if (_deepAnalysisProvider == .coreAIMLXLocal || _deepAnalysisProvider == .appleLocal || _deepAnalysisProvider == .applePCCGateway || _deepAnalysisProvider == .summarizeDaemon || _deepAnalysisProvider == .chatGPT),
+                if (_deepAnalysisProvider == .coreAIMLXLocal || _deepAnalysisProvider == .appleLocal || _deepAnalysisProvider == .applePCCGateway || _deepAnalysisProvider == .summarizeDaemon || _deepAnalysisProvider == .chatGPT || _deepAnalysisProvider == .openAICompatible),
                    !appState.mlxLastThroughput.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "cpu").font(.caption2)
@@ -3709,7 +3739,7 @@ struct CommentAnalyticsViewIntegrated: View {
             let errorMessage: String?
             
             switch self.effectiveSummaryProvider {
-            case .appleLocal, .appleCloud, .applePCCGateway, .coreAIMLXLocal, .webAI, .summarizeDaemon, .chatGPT:
+            case .appleLocal, .appleCloud, .applePCCGateway, .coreAIMLXLocal, .webAI, .summarizeDaemon, .chatGPT, .openAICompatible:
                 // Apple providers and MLX Local don't need API keys
                 canProceed = true
                 errorMessage = nil
@@ -3874,6 +3904,16 @@ struct CommentAnalyticsViewIntegrated: View {
         } else if effectiveSummaryProvider == .chatGPT {
             print("⚡ CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using ChatGPT Plan.")
             appState.performChatGPTSummaryPublic(prompt: prompt, taskName: "Reddit Thematic Analysis") { analysisText in
+                DispatchQueue.main.async {
+                    self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
+                    self.thematicAnalysisError = nil
+                    self.isThematicAnalysisLoading = false
+                }
+            }
+            return
+        } else if effectiveSummaryProvider == .openAICompatible {
+            print("⚡ CommentAnalyticsViewIntegrated: Sending \(analyzedCommentCount) comments for thematic analysis using Custom Server.")
+            appState.performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Reddit Thematic Analysis") { analysisText in
                 DispatchQueue.main.async {
                     self.thematicAnalysis = cleanMarkdownArtifactsForDisplay(analysisText)
                     self.thematicAnalysisError = nil

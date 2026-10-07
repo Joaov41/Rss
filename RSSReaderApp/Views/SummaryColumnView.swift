@@ -817,6 +817,8 @@ struct SummaryColumnView: View {
             return "terminal"
         case .chatGPT:
             return "person.badge.key"
+        case .openAICompatible:
+            return "server.rack"
         }
     }
 
@@ -838,6 +840,8 @@ struct SummaryColumnView: View {
             return .indigo.opacity(0.14)
         case .chatGPT:
             return .green.opacity(0.12)
+        case .openAICompatible:
+            return .mint.opacity(0.14)
         }
     }
 }

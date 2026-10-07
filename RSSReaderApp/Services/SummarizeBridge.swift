@@ -176,6 +176,7 @@ enum RSSSummarizeKeychain {
     static let daemonTokenKey = "summarize_daemon_token"
     static let bridgeSecretKey = "summarize_bridge_secret"
     static let pccGatewayTokenKey = "pcc_gateway_token"
+    static let openAICompatibleAPIKeyKey = "openai_compatible_api_key"
 
     private static let service = "com.joaovalente.RSSReaderApp.summarize"
     private static let lock = NSLock()

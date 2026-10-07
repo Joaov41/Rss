@@ -145,7 +145,8 @@ final class GeminiBackgroundTaskManager {
 
         let handle: GeminiBackgroundTaskHandle = stateQueue.sync {
             let isRoot = self.activeHandle == nil
-            let newHandle = GeminiBackgroundTaskHandle(manager: self, totalUnitCount: 100, isRootHandle: isRoot)
+            // Fine-grained units so the heartbeat can keep advancing for a long time
+            let newHandle = GeminiBackgroundTaskHandle(manager: self, totalUnitCount: 10_000, isRootHandle: isRoot)
             newHandle.taskIdentifier = identifier
 
             if isRoot {
@@ -162,7 +163,8 @@ final class GeminiBackgroundTaskManager {
                 do {
                     try submitContinuedRequest(title: title, subtitle: "Background execution")
                     logger.info("✅ Submitted iOS 26+ continued processing task: \(title)")
-                    submitProcessingRequest(identifier: identifier, title: title)
+                    // No BGProcessingTaskRequest here: the work already runs in-process, and a
+                    // deferred processing launch expiring later used to cancel the live handle.
                     handle.notifyTaskStarted()
                 } catch {
                     handle.setRequiresSystemSignal(false)
@@ -263,8 +265,16 @@ final class GeminiBackgroundTaskManager {
     private func configureContinuedTask(task: BGTask) {
         logger.info("🔁 Continued processing task handler configured")
 
-        stateQueue.sync {
+        // The work may have finished before the system got around to launching the task;
+        // complete it right away instead of leaving a stale progress indicator up.
+        let handleAtLaunch: GeminiBackgroundTaskHandle? = stateQueue.sync {
+            guard let handle = self.activeHandle else { return nil }
             self.activeTask = task
+            return handle
+        }
+        guard let handleAtLaunch else {
+            task.setTaskCompleted(success: true)
+            return
         }
 
         task.expirationHandler = { [weak self] in
@@ -299,41 +309,23 @@ final class GeminiBackgroundTaskManager {
             }
         }
 
-        if let continuedTask = task as? BGContinuedProcessingTask,
-           let handle = stateQueue.sync(execute: { self.activeHandle }) {
-            continuedTask.progress.totalUnitCount = handle.progress.totalUnitCount
-            continuedTask.progress.completedUnitCount = handle.progress.completedUnitCount
-            handle.attach(taskProgress: continuedTask.progress)
-            handle.notifyTaskStarted(releaseBackgroundAssertion: true)
+        if let continuedTask = task as? BGContinuedProcessingTask {
+            continuedTask.progress.totalUnitCount = handleAtLaunch.progress.totalUnitCount
+            continuedTask.progress.completedUnitCount = handleAtLaunch.progress.completedUnitCount
+            handleAtLaunch.attach(taskProgress: continuedTask.progress)
+            handleAtLaunch.notifyTaskStarted(releaseBackgroundAssertion: true)
         }
     }
 
     private func configureProcessingTask(task: BGProcessingTask) {
-        logger.info("🔄 BGProcessingTask handler configured (works when locked)")
-
-        stateQueue.sync {
-            self.activeLongRunningTask = task
+        // Nothing is deferred to BGProcessingTask: user-initiated work runs in-process under the
+        // continued-processing task. A launch (e.g. a request left over from an older build) must
+        // not touch the live handle — its expiry used to cancel whatever summary was running.
+        logger.info("🔄 BGProcessingTask launched with no deferred work; completing")
+        task.expirationHandler = {
+            task.setTaskCompleted(success: false)
         }
-
-        task.expirationHandler = { [weak self] in
-            guard let self else { return }
-
-            self.logger.warning("⚠️ BGProcessingTask expired")
-            self.notifyAllHandlesOfCancellation()
-
-            self.stateQueue.sync {
-                self.activeLongRunningTask?.setTaskCompleted(success: false)
-                self.activeLongRunningTask = nil
-                self.activeHandle = nil
-                self.dependentHandles.removeAll()
-            }
-
-            self.scheduleWidgetRefreshIfIdle()
-        }
-
-        if let handle = stateQueue.sync(execute: { self.activeHandle }) {
-            handle.notifyTaskStarted(releaseBackgroundAssertion: true)
-        }
+        task.setTaskCompleted(success: true)
     }
 
     private func configureRefreshTask(task: BGAppRefreshTask) {
@@ -375,19 +367,6 @@ final class GeminiBackgroundTaskManager {
         logger.info("✅ Submitted continued processing task request")
     }
 
-    private func submitProcessingRequest(identifier: String, title: String) {
-        let request = BGProcessingTaskRequest(identifier: identifier)
-        request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
-        request.earliestBeginDate = Date()
-
-        do {
-            try BGTaskScheduler.shared.submit(request)
-            logger.info("✅ Submitted BGProcessingTask '\(identifier)'")
-        } catch {
-            logger.error("❌ Failed to submit BGProcessingTask: \(error.localizedDescription, privacy: .public)")
-        }
-    }
 
     /// Schedule a widget refresh, deferring until Gemini work is idle.
     func scheduleWidgetRefreshIfIdle(after interval: TimeInterval? = nil) {
@@ -589,13 +568,13 @@ final class GeminiBackgroundTaskManager {
     }
 }
 
-/// Handle object for tracking an in-flight Gemini task.
+/// Handle for tracking and controlling a background Gemini task
 final class GeminiBackgroundTaskHandle {
     fileprivate let progress: Progress
+    private var taskProgress: Progress?
     private weak var manager: GeminiBackgroundTaskManager?
     private let stateLock = NSLock()
 
-    private var taskProgress: Progress?
     private var cancellationHandlers: [() -> Void] = []
     private(set) var isCancelled = false
     private var finished = false
@@ -604,32 +583,90 @@ final class GeminiBackgroundTaskHandle {
     private var startContinuation: CheckedContinuation<Void, Never>?
     private var requiresSystemSignal = false
     private var backgroundReleaseWorkItem: DispatchWorkItem?
-
+    private var lastProgressDate = Date()
+    private var heartbeatTimer: DispatchSourceTimer?
     fileprivate let isRootHandle: Bool
+
+    /// BGContinuedProcessingTask is expired by the system when its progress stalls (~30 s).
+    /// A single LLM call (e.g. the overall summary) can run for minutes with no natural
+    /// progress points, so creep the system-facing progress forward while work is in flight.
+    private static let heartbeatInterval: TimeInterval = 5
+
+    // Track the task identifier for long-running tasks
     var taskIdentifier: String?
+
+    // Callback when background processing task actually starts
     var onTaskStarted: (() -> Void)?
 
     fileprivate init(manager: GeminiBackgroundTaskManager, totalUnitCount: Int64, isRootHandle: Bool) {
         self.manager = manager
         self.progress = Progress(totalUnitCount: totalUnitCount)
         self.isRootHandle = isRootHandle
-        beginBackgroundAssertion()
+        // Only root handles should create UIBackgroundTask assertions
+        // Dependent handles reuse the root's background protection to avoid conflicts
+        if isRootHandle {
+            beginBackgroundAssertion()
+        }
+    }
+
+    deinit {
+        heartbeatTimer?.cancel()
     }
 
     func reportProgress(fractionCompleted fraction: Double) {
-        stateLock.lock()
         let clampedFraction = max(0, min(1, fraction))
-        progress.completedUnitCount = Int64(Double(progress.totalUnitCount) * clampedFraction)
-        taskProgress?.completedUnitCount = progress.completedUnitCount
-        stateLock.unlock()
+        reportProgress(completedUnitCount: Int64(Double(progress.totalUnitCount) * clampedFraction))
     }
 
     func reportProgress(completedUnitCount: Int64) {
         stateLock.lock()
         let clamped = max(0, min(completedUnitCount, progress.totalUnitCount))
         progress.completedUnitCount = clamped
-        taskProgress?.completedUnitCount = clamped
+        // The system task only ever moves forward; the heartbeat may already be ahead of real progress
+        if let taskProgress, clamped > taskProgress.completedUnitCount {
+            taskProgress.completedUnitCount = clamped
+            lastProgressDate = Date()
+        }
         stateLock.unlock()
+    }
+
+    private func startHeartbeat() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + Self.heartbeatInterval, repeating: Self.heartbeatInterval)
+        timer.setEventHandler { [weak self] in
+            self?.heartbeat()
+        }
+
+        stateLock.lock()
+        heartbeatTimer?.cancel()
+        heartbeatTimer = timer
+        stateLock.unlock()
+
+        timer.resume()
+    }
+
+    private func stopHeartbeat() {
+        stateLock.lock()
+        let timer = heartbeatTimer
+        heartbeatTimer = nil
+        stateLock.unlock()
+        timer?.cancel()
+    }
+
+    private func heartbeat() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        guard !finished, !isCancelled, let taskProgress else { return }
+        // Small slack so timer jitter never skips a tick (worst-case gap stays well under 30 s)
+        guard Date().timeIntervalSince(lastProgressDate) >= Self.heartbeatInterval - 1 else { return }
+
+        // Approach 99% asymptotically so the bar never claims completion before the work does
+        let cap = taskProgress.totalUnitCount * 99 / 100
+        let current = taskProgress.completedUnitCount
+        guard current < cap else { return }
+        taskProgress.completedUnitCount = current + max(1, (cap - current) / 200)
+        lastProgressDate = Date()
     }
 
     func registerCancellationHandler(_ handler: @escaping () -> Void) {
@@ -657,8 +694,13 @@ final class GeminiBackgroundTaskHandle {
         }
         isCancelled = true
         let handlers = cancellationHandlers
+        let taskId = taskIdentifier ?? "unknown"
+        let isRoot = isRootHandle
         stateLock.unlock()
 
+        stopHeartbeat()
+
+        print("⚠️ [BackgroundTask] Cancellation triggered for \(isRoot ? "ROOT" : "dependent") handle (\(taskId)), calling \(handlers.count) handlers")
         handlers.forEach { $0() }
         resumePendingStartContinuation()
         endBackgroundAssertionIfNeeded()
@@ -666,9 +708,9 @@ final class GeminiBackgroundTaskHandle {
 
     var cancelled: Bool {
         stateLock.lock()
-        let value = isCancelled
+        let cancelled = isCancelled
         stateLock.unlock()
-        return value
+        return cancelled
     }
 
     func waitForTaskStartIfNeeded() async {
@@ -691,6 +733,8 @@ final class GeminiBackgroundTaskHandle {
                 stateLock.unlock()
             }
         }
+        #else
+        return
         #endif
     }
 
@@ -704,6 +748,8 @@ final class GeminiBackgroundTaskHandle {
         taskProgress = nil
         stateLock.unlock()
 
+        stopHeartbeat()
+
         if isRootHandle {
             manager?.complete(self, success: success)
         } else {
@@ -714,10 +760,17 @@ final class GeminiBackgroundTaskHandle {
 
     fileprivate func attach(taskProgress: Progress) {
         stateLock.lock()
+        guard !finished, !isCancelled else {
+            stateLock.unlock()
+            return
+        }
         taskProgress.totalUnitCount = progress.totalUnitCount
         taskProgress.completedUnitCount = progress.completedUnitCount
         self.taskProgress = taskProgress
+        lastProgressDate = Date()
         stateLock.unlock()
+
+        startHeartbeat()
     }
 
     fileprivate func notifyTaskStarted(releaseBackgroundAssertion: Bool = false) {
@@ -758,7 +811,8 @@ final class GeminiBackgroundTaskHandle {
 
             guard !alreadyActive else { return }
 
-            let identifier = UIApplication.shared.beginBackgroundTask(withName: "GeminiSummary") { [weak self] in
+            let application = UIApplication.shared
+            let identifier = application.beginBackgroundTask(withName: "GeminiSummary") { [weak self] in
                 self?.handleBackgroundTaskExpiration()
             }
 

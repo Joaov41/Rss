@@ -30,6 +30,12 @@ struct AppSettings: Codable {
     var pccGatewayPort: Int = AppSettings.defaultPCCGatewayPort
     var pccGatewayToken: String = ""
     var pccGatewayModel: String = AppSettings.defaultPCCGatewayModel
+    // Custom Server provider (oMLX, Ollama, LM Studio...). The API key lives in the Keychain.
+    var openAICompatibleBaseURL: String = ""
+    var openAICompatibleAPIKey: String = ""
+    var openAICompatibleModelID: String = ""
+    var openAICompatibleMaxTokens: Int = AppSettings.defaultOpenAICompatibleMaxTokens
+    var openAICompatibleDisableThinking: Bool = false
     var localTTSEngine: LocalTTSEngine = .system
     var kokoroVoice: String = KokoroVoice.defaultVoice.rawValue
     var kokoroSpeed: Double = 1.0
@@ -60,21 +66,28 @@ struct AppSettings: Codable {
         case summarizeDaemon = "Codex / Summarize"
         /// The user's own ChatGPT plan via Sign in with ChatGPT. Xcode builds only.
         case chatGPT = "ChatGPT Plan"
+        /// Any OpenAI-style server: oMLX, Ollama, LM Studio, llama.cpp...
+        case openAICompatible = "Custom Server"
 
         /// "MLX Local" was the stored value of the removed LiteRT provider; map it
         /// (and any other unknown value) to CoreAI MLX Local so settings still decode.
         init(from decoder: Decoder) throws {
             let rawValue = try decoder.singleValueContainer().decode(String.self)
             self = SummaryProvider(rawValue: rawValue) ?? .coreAIMLXLocal
-            // ChatGPT Plan is hidden outside Xcode builds; fall back to the default provider.
-            if self == .chatGPT && !ChatGPTPlanAvailability.isEnabled {
+            // Hidden providers (see selectableCases) fall back to the default provider.
+            if !SummaryProvider.selectableCases.contains(self) {
                 self = .appleCloud
             }
         }
 
+        /// Providers kept in code but not offered in Settings.
+        static let hiddenCases: Set<SummaryProvider> = [.summarizeDaemon, .applePCCGateway]
+
         /// Providers offered in pickers; ChatGPT Plan only in builds installed from Xcode.
         static var selectableCases: [SummaryProvider] {
-            allCases.filter { $0 != .chatGPT || ChatGPTPlanAvailability.isEnabled }
+            allCases.filter {
+                !hiddenCases.contains($0) && ($0 != .chatGPT || ChatGPTPlanAvailability.isEnabled)
+            }
         }
 
         var displayName: String {
@@ -134,6 +147,12 @@ struct AppSettings: Codable {
 
     static func sanitizedSummarizePort(_ rawValue: Int, fallback: Int) -> Int {
         (1...65_535).contains(rawValue) ? rawValue : fallback
+    }
+
+    static let defaultOpenAICompatibleMaxTokens = 4096
+
+    static func normalizedOpenAICompatibleMaxTokens(_ value: Int) -> Int {
+        min(max(value, 256), 32_768)
     }
 
     static func normalizedPCCGatewayModel(_ rawValue: String) -> String {
@@ -202,6 +221,10 @@ struct AppSettings: Codable {
         case pccGatewayPort
         case pccGatewayToken
         case pccGatewayModel
+        case openAICompatibleBaseURL
+        case openAICompatibleModelID
+        case openAICompatibleMaxTokens
+        case openAICompatibleDisableThinking
         case localTTSEngine
         case kokoroVoice
         case kokoroSpeed
@@ -247,6 +270,12 @@ struct AppSettings: Codable {
         pccGatewayPort = AppSettings.sanitizedSummarizePort(try container.decodeIfPresent(Int.self, forKey: .pccGatewayPort) ?? AppSettings.defaultPCCGatewayPort, fallback: AppSettings.defaultPCCGatewayPort)
         pccGatewayToken = AppSettings.sanitizedSummarizeSecret(try container.decodeIfPresent(String.self, forKey: .pccGatewayToken) ?? "")
         pccGatewayModel = AppSettings.normalizedPCCGatewayModel(try container.decodeIfPresent(String.self, forKey: .pccGatewayModel) ?? AppSettings.defaultPCCGatewayModel)
+        openAICompatibleBaseURL = try container.decodeIfPresent(String.self, forKey: .openAICompatibleBaseURL) ?? ""
+        openAICompatibleModelID = try container.decodeIfPresent(String.self, forKey: .openAICompatibleModelID) ?? ""
+        openAICompatibleMaxTokens = AppSettings.normalizedOpenAICompatibleMaxTokens(
+            try container.decodeIfPresent(Int.self, forKey: .openAICompatibleMaxTokens) ?? AppSettings.defaultOpenAICompatibleMaxTokens
+        )
+        openAICompatibleDisableThinking = try container.decodeIfPresent(Bool.self, forKey: .openAICompatibleDisableThinking) ?? false
         localTTSEngine = try container.decodeIfPresent(LocalTTSEngine.self, forKey: .localTTSEngine) ?? .system
         kokoroVoice = try container.decodeIfPresent(String.self, forKey: .kokoroVoice) ?? KokoroVoice.defaultVoice.rawValue
         kokoroSpeed = try container.decodeIfPresent(Double.self, forKey: .kokoroSpeed) ?? 1.0
@@ -293,6 +322,10 @@ struct AppSettings: Codable {
         try container.encode(pccGatewayHost, forKey: .pccGatewayHost)
         try container.encode(pccGatewayPort, forKey: .pccGatewayPort)
         try container.encode(pccGatewayModel, forKey: .pccGatewayModel)
+        try container.encode(openAICompatibleBaseURL, forKey: .openAICompatibleBaseURL)
+        try container.encode(openAICompatibleModelID, forKey: .openAICompatibleModelID)
+        try container.encode(openAICompatibleMaxTokens, forKey: .openAICompatibleMaxTokens)
+        try container.encode(openAICompatibleDisableThinking, forKey: .openAICompatibleDisableThinking)
         try container.encode(localTTSEngine, forKey: .localTTSEngine)
         try container.encode(kokoroVoice, forKey: .kokoroVoice)
         try container.encode(kokoroSpeed, forKey: .kokoroSpeed)
@@ -343,14 +376,15 @@ enum LocalRerouteProvider: String, CaseIterable, Identifiable {
     case applePCCGateway
     case summarizeDaemon
     case chatGPT
+    case openAICompatible
     case appleCloud
     case webAI
 
     var id: String { rawValue }
 
-    /// Reroute targets offered in the UI; ChatGPT Plan only in builds installed from Xcode.
+    /// Reroute targets offered in the UI: the same providers Settings offers.
     static var available: [LocalRerouteProvider] {
-        allCases.filter { $0 != .chatGPT || ChatGPTPlanAvailability.isEnabled }
+        allCases.filter { AppSettings.SummaryProvider.selectableCases.contains($0.summaryProvider) }
     }
 
     var displayName: String {
@@ -359,6 +393,7 @@ enum LocalRerouteProvider: String, CaseIterable, Identifiable {
         case .applePCCGateway: return "Apple PCC Gateway"
         case .summarizeDaemon: return "Codex / Summarize"
         case .chatGPT: return "ChatGPT Plan"
+        case .openAICompatible: return "Custom Server"
         case .appleCloud: return "Apple Cloud"
         case .webAI: return "Web AI"
         }
@@ -370,6 +405,7 @@ enum LocalRerouteProvider: String, CaseIterable, Identifiable {
         case .applePCCGateway: return .applePCCGateway
         case .summarizeDaemon: return .summarizeDaemon
         case .chatGPT: return .chatGPT
+        case .openAICompatible: return .openAICompatible
         case .appleCloud: return .appleCloud
         case .webAI: return .webAI
         }

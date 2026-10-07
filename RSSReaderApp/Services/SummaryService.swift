@@ -581,6 +581,12 @@ class SummaryService {
     /// Generic method to generate content using Gemini with a custom prompt
     /// Used for whiteboard generation and other LLM tasks
     func generateContentWithGemini(prompt: String) async throws -> String {
+        try await withAIBackgroundTask("Generating with Gemini") {
+            try await requestGeminiContent(prompt: prompt)
+        }
+    }
+
+    private func requestGeminiContent(prompt: String) async throws -> String {
         guard !apiKey.isEmpty else {
             throw SummaryServiceError.apiKeyMissing
         }
@@ -629,12 +635,14 @@ class SummaryService {
         timeout: TimeInterval = 300,
         onPartial: ((String) -> Void)? = nil
     ) async throws -> String {
-        try await RSSSummarizeProviderClient.generate(
-            prompt: prompt,
-            settings: settings,
-            timeout: timeout,
-            onPartial: onPartial
-        )
+        try await withAIBackgroundTask("Generating with Codex/Summarize") {
+            try await RSSSummarizeProviderClient.generate(
+                prompt: prompt,
+                settings: settings,
+                timeout: timeout,
+                onPartial: onPartial
+            )
+        }
     }
 
     func generateContentWithPCCGateway(
@@ -656,14 +664,17 @@ class SummaryService {
         let token = AppSettings.sanitizedSummarizeSecret(settings.pccGatewayToken)
         guard !token.isEmpty else { throw FMPCCGatewayError.missingToken }
 
-        return try await FMPCCGatewayClient(
+        let client = FMPCCGatewayClient(
             configuration: FMPCCGatewayConfiguration(
                 host: host,
                 port: port,
                 token: token,
                 model: AppSettings.normalizedPCCGatewayModel(settings.pccGatewayModel)
             )
-        ).generate(prompt: prompt)
+        )
+        return try await withAIBackgroundTask("Generating with Apple PCC Gateway") {
+            try await client.generate(prompt: prompt)
+        }
     }
 
     func summarizeWithSummarizePublisher(
@@ -2215,3 +2226,30 @@ extension ShortcutsTTS {
     }
 }
 #endif
+
+
+/// Runs one AI request under the iOS background task (joining the active session if there is one),
+/// so it keeps going when the app leaves the screen or the device locks. Every model entry point
+/// uses it, matching redapp, where all model calls share one protected path.
+func withAIBackgroundTask<T>(
+    _ title: String,
+    isolation: isolated (any Actor)? = #isolation,
+    _ operation: () async throws -> T
+) async throws -> T {
+    #if os(iOS)
+    let handle = GeminiBackgroundTaskManager.shared.beginLongRunningTask(
+        identifier: GeminiBackgroundTaskManager.shared.taskIdentifier(for: .processing),
+        title: title
+    )
+    do {
+        let result = try await operation()
+        handle.finish(success: true)
+        return result
+    } catch {
+        handle.finish(success: false)
+        throw error
+    }
+    #else
+    return try await operation()
+    #endif
+}

@@ -1713,8 +1713,10 @@ class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
     var isBackSwipeEnabled = true
     private var accumulatedX: CGFloat = 0
     private var accumulatedY: CGFloat = 0
-    private var hasTriggered = false
     private weak var gestureHostView: UIView?
+    /// Shared by every overlay: one swipe goes back one level, even when the screen
+    /// underneath has its own overlay waiting for the same scroll input.
+    private static var lastBackSwipeTime: CFTimeInterval = 0
 
     private lazy var trackpadPanGesture: UIPanGestureRecognizer = {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTrackpadPan(_:)))
@@ -1781,7 +1783,6 @@ class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
         case .began:
             accumulatedX = 0
             accumulatedY = 0
-            hasTriggered = false
 
         case .changed:
             let referenceView = gesture.view ?? self
@@ -1791,22 +1792,28 @@ class TrackpadGestureView: UIView, UIGestureRecognizerDelegate {
             accumulatedX += delta.x
             accumulatedY += delta.y
 
-            // Check for horizontal swipe right
+        case .ended:
+            // Go back when the fingers lift, as the touch swipe does. Going back mid-swipe
+            // let the rest of the same swipe reach the list underneath, which then went
+            // back a second time to the subscriptions.
             let isHorizontal = abs(accumulatedX) > abs(accumulatedY) * 1.3
-            let isRightSwipe = accumulatedX > 0
+            let isLongRightSwipe = accumulatedX > 60
+            let now = CACurrentMediaTime()
+            let isAfterPreviousSwipe = now - Self.lastBackSwipeTime > 0.4
+            accumulatedX = 0
+            accumulatedY = 0
 
-            if !hasTriggered && isHorizontal && isRightSwipe && accumulatedX > 60 {
-                hasTriggered = true
+            if isHorizontal && isLongRightSwipe && isAfterPreviousSwipe {
+                Self.lastBackSwipeTime = now
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 withAnimation(.easeOut(duration: 0.2)) {
                     onSwipeRight()
                 }
             }
 
-        case .ended, .cancelled:
+        case .cancelled:
             accumulatedX = 0
             accumulatedY = 0
-            hasTriggered = false
 
         default:
             break
@@ -6481,6 +6488,8 @@ struct DraggableGlobalSummaryView: View {
                 .accessibilityLabel("Ask about this overview")
                 .help("Ask a question about this overview")
 
+                SummaryToolbarSeparator()
+
                 // Whiteboard, infographic and podcast all turn the overview into
                 // something new, so they share one labelled menu.
                 Menu {
@@ -7472,6 +7481,9 @@ struct DraggableGlobalSummaryView: View {
         case .chatGPT:
             generateWhiteboardWithChatGPT(prompt: prompt)
 
+        case .openAICompatible:
+            generateWhiteboardWithOpenAICompatible(prompt: prompt)
+
         case .gemini:
             // Use Gemini API directly
             generateWhiteboardWithGemini(prompt: prompt)
@@ -7653,6 +7665,38 @@ struct DraggableGlobalSummaryView: View {
         Task {
             do {
                 let response = try await appState.performChatGPTRequestAsync(prompt: prompt, taskName: "Whiteboard")
+                guard let rawData = response.data(using: .utf8) else {
+                    throw NSError(domain: "Whiteboard", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not convert response to data."])
+                }
+                let payload: WhiteboardPayload
+                do {
+                    payload = try parseWhiteboardPayloadFromData(rawData)
+                } catch {
+                    let repairedData = try await repairInvalidJSON(kind: .whiteboard, rawOutput: response)
+                    payload = try parseWhiteboardPayloadFromData(repairedData)
+                }
+                let html = buildWhiteboardHTML(from: payload)
+                guard let htmlData = html.data(using: .utf8) else {
+                    throw NSError(domain: "Whiteboard", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to generate whiteboard HTML"])
+                }
+                await MainActor.run {
+                    self.whiteboardContent = htmlData
+                    self.isGeneratingWhiteboard = false
+                    self.showWhiteboard = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.whiteboardError = "Whiteboard failed: \(error.localizedDescription)"
+                    self.isGeneratingWhiteboard = false
+                }
+            }
+        }
+    }
+
+    private func generateWhiteboardWithOpenAICompatible(prompt: String) {
+        Task {
+            do {
+                let response = try await appState.performOpenAICompatibleRequestAsync(prompt: prompt, taskName: "Whiteboard")
                 guard let rawData = response.data(using: .utf8) else {
                     throw NSError(domain: "Whiteboard", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not convert response to data."])
                 }
@@ -8335,6 +8379,12 @@ struct DraggableGlobalSummaryView: View {
             )
         case .chatGPT:
             repaired = try await appState.performChatGPTRequestAsync(
+                prompt: repairPrompt,
+                taskName: kind == .whiteboard ? "Whiteboard JSON Repair" : "Infographic JSON Repair"
+            )
+
+        case .openAICompatible:
+            repaired = try await appState.performOpenAICompatibleRequestAsync(
                 prompt: repairPrompt,
                 taskName: kind == .whiteboard ? "Whiteboard JSON Repair" : "Infographic JSON Repair"
             )
@@ -9476,6 +9526,12 @@ struct DraggableGlobalSummaryView: View {
                         prompt: prompt,
                         taskName: "Infographic"
                     )
+
+                case .openAICompatible:
+                    rawResponse = try await appState.performOpenAICompatibleRequestAsync(
+                        prompt: prompt,
+                        taskName: "Infographic"
+                    )
                 }
 
                 let responseForParsing = (effectiveProvider == .appleCloud || effectiveProvider == .applePCCGateway)
@@ -9500,7 +9556,7 @@ struct DraggableGlobalSummaryView: View {
                     }
                 } catch {
                     // If parsing fails for local/cloud/Summarize providers, attempt JSON repair using the same provider.
-                    if effectiveProvider == .appleCloud || effectiveProvider == .applePCCGateway || effectiveProvider == .summarizeDaemon || effectiveProvider == .chatGPT {
+                    if effectiveProvider == .appleCloud || effectiveProvider == .applePCCGateway || effectiveProvider == .summarizeDaemon || effectiveProvider == .chatGPT || effectiveProvider == .openAICompatible {
                         print("⚠️ [Infographic] Initial JSON parsing failed for \(effectiveProvider.rawValue) output, attempting repair...")
                         do {
                             let repairedData = try await repairInvalidJSON(kind: .infographic, rawOutput: responseForParsing)
@@ -13321,7 +13377,7 @@ struct ArticleDetailView: View {
         }
 
         let qaProvider = appState.settings.selectedSummaryProvider
-        if (qaProvider == .coreAIMLXLocal || qaProvider == .appleLocal || qaProvider == .applePCCGateway || qaProvider == .summarizeDaemon || qaProvider == .chatGPT),
+        if (qaProvider == .coreAIMLXLocal || qaProvider == .appleLocal || qaProvider == .applePCCGateway || qaProvider == .summarizeDaemon || qaProvider == .chatGPT || qaProvider == .openAICompatible),
            !appState.mlxLastQAThroughput.isEmpty,
            !qaState.isProcessingQuestion,
            !qaAnswerUnavailable {
@@ -16784,7 +16840,7 @@ struct ArticleGlassySummary: View {
 
     private var throughputText: String? {
         let provider = appState.settings.selectedSummaryProvider
-        guard (provider == .coreAIMLXLocal || provider == .appleLocal || provider == .applePCCGateway || provider == .summarizeDaemon || provider == .chatGPT), !appState.mlxLastThroughput.isEmpty else {
+        guard (provider == .coreAIMLXLocal || provider == .appleLocal || provider == .applePCCGateway || provider == .summarizeDaemon || provider == .chatGPT || provider == .openAICompatible), !appState.mlxLastThroughput.isEmpty else {
             return nil
         }
         return appState.mlxLastThroughput

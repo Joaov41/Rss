@@ -16,6 +16,13 @@ final class WebAISessionManager {
 
     private init() {}
 
+    /// Runs a no-op script on each page; WebKit wakes a sleeping off-screen page to run it.
+    func keepWebViewsAwake() {
+        for webView in webViews.values {
+            webView.evaluateJavaScript("0", completionHandler: nil)
+        }
+    }
+
     func hasWebView(for provider: WebAIProvider) -> Bool {
         webViews[provider] != nil
     }

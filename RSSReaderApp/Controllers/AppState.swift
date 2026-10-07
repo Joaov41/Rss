@@ -140,6 +140,13 @@ private func resolveOverallSummaryProvider(
             effectiveProvider: .chatGPT,
             localFallbackProviderName: nil
         )
+
+    case .openAICompatible:
+        return OverallSummaryProviderResolution(
+            selectedProvider: provider,
+            effectiveProvider: .openAICompatible,
+            localFallbackProviderName: nil
+        )
     case .appleLocal:
         return OverallSummaryProviderResolution(
             selectedProvider: provider,
@@ -897,6 +904,30 @@ final class GlobalSummaryService {
                         let parsed = self.parseAppleCloudResponse(raw: raw, source: source, referenceIds: referenceIds)
                         if parsed.summaries.count < expectedCount {
                             print("⚠️ BATCH DEBUG: Missing \(expectedCount - parsed.summaries.count) summaries from ChatGPT Plan output.")
+                        }
+                        promise(.success(parsed))
+                    } catch {
+                        promise(.success(GlobalSummaryResult.errorResult(source: source, message: error.localizedDescription)))
+                    }
+                }
+            }
+            .eraseToAnyPublisher()
+
+        case .openAICompatible:
+            print("⚡ GlobalSummaryService: Using Custom Server for \(source) overall summary")
+            return Future<GlobalSummaryResult, Never> { promise in
+                Task(priority: .userInitiated) {
+                    do {
+                        let start = Date()
+                        let raw = try await OpenAICompatibleService.generate(prompt: prompt, settings: self.settingsProvider())
+                        let elapsed = max(0.001, Date().timeIntervalSince(start))
+                        let estimatedTokens = max(1, Int(Double(raw.split(separator: " ").count) * 1.3))
+                        let tokPerSec = Double(estimatedTokens) / elapsed
+                        self.throughputReporter?(String(format: "Custom Server · ~%.1f tok/s · ~%d tokens", tokPerSec, estimatedTokens))
+
+                        let parsed = self.parseAppleCloudResponse(raw: raw, source: source, referenceIds: referenceIds)
+                        if parsed.summaries.count < expectedCount {
+                            print("⚠️ BATCH DEBUG: Missing \(expectedCount - parsed.summaries.count) summaries from Custom Server output.")
                         }
                         promise(.success(parsed))
                     } catch {
@@ -2328,6 +2359,9 @@ class AppState: ObservableObject {
             return try await performSummarizeRequestAsync(prompt: prompt, taskName: title)
         case .chatGPT:
             return try await performChatGPTRequestAsync(prompt: prompt, taskName: title)
+
+        case .openAICompatible:
+            return try await performOpenAICompatibleRequestAsync(prompt: prompt, taskName: title)
         case .appleLocal:
 #if os(iOS)
             guard #available(iOS 26.0, *), LocalSummaryService.isAvailable() else {
@@ -2471,8 +2505,46 @@ class AppState: ObservableObject {
         var automaticRetryCount: Int
         var timeoutWorkItem: DispatchWorkItem?
     }
-    private var pendingWebAIRequests: [UUID: PendingWebAIRequest] = [:]
+    private var pendingWebAIRequests: [UUID: PendingWebAIRequest] = [:] {
+        didSet { syncWebAIBackgroundWork() }
+    }
     private let webAIRequestTimeoutSeconds: TimeInterval = 210
+    #if os(iOS)
+    /// One background task covers Web AI while any request is pending (a retry re-keys the
+    /// request, so the task follows the queue rather than a single request).
+    private var webAIBackgroundHandle: GeminiBackgroundTaskHandle?
+    private var webAIKeepAliveTimer: Timer?
+    #endif
+
+    private func syncWebAIBackgroundWork() {
+        #if os(iOS)
+        if pendingWebAIRequests.isEmpty {
+            webAIBackgroundHandle?.finish(success: true)
+            webAIBackgroundHandle = nil
+            webAIKeepAliveTimer?.invalidate()
+            webAIKeepAliveTimer = nil
+            return
+        }
+
+        if webAIBackgroundHandle == nil {
+            let title = pendingWebAIRequests.values.first?.title ?? "Web AI"
+            webAIBackgroundHandle = GeminiBackgroundTaskManager.shared.beginLongRunningTask(
+                identifier: GeminiBackgroundTaskManager.shared.taskIdentifier(for: .processing),
+                title: "\(settings.selectedWebAIProvider.displayName): \(title)"
+            )
+        }
+        if webAIKeepAliveTimer == nil {
+            // Off screen, WebKit puts the page to sleep and the reply stops streaming in.
+            // Each script call wakes it briefly, so ping it while a reply is pending.
+            webAIKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard UIApplication.shared.applicationState != .active else { return }
+                    WebAISessionManager.shared.keepWebViewsAwake()
+                }
+            }
+        }
+        #endif
+    }
 
     // MARK: - Initialization
     init(feedService: FeedService? = nil,
@@ -5929,6 +6001,23 @@ class AppState: ObservableObject {
                 }
                 self?.finishSummary(article: article, redditPost: redditPost)
             }
+        } else if settings.selectedSummaryProvider == .openAICompatible {
+            let textToSummarize = article.map(cleanedArticleContent)
+                ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
+                ?? ""
+            let prompt = article.map(articleSummaryPrompt(for:))
+                ?? redditPost.map { redditPostSummaryPrompt(post: $0, comments: redditComments) }
+                ?? ""
+            let taskName = article != nil ? "Article Summary" : "Reddit Post Summary"
+            performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: taskName) { [weak self] summary in
+                if let article = article {
+                    let constrained = self?.enforceArticleSummaryLength(summary, sourceText: textToSummarize) ?? summary
+                    self?.updateArticleSummaryFromCloud(article, summary: constrained)
+                } else if let post = redditPost {
+                    self?.updateRedditPostSummaryFromCloud(post, summary: summary)
+                }
+                self?.finishSummary(article: article, redditPost: redditPost)
+            }
         } else if settings.selectedSummaryProvider == .summarizeDaemon {
             let textToSummarize = article.map(cleanedArticleContent)
                 ?? redditPost.map { redditSummarySourceText(post: $0, comments: redditComments) }
@@ -6140,7 +6229,7 @@ class AppState: ObservableObject {
             return "Apple Local"
         case .coreAIMLXLocal:
             return "CoreAI MLX Local"
-        case .gemini, .appleCloud, .applePCCGateway, .webAI, .summarizeDaemon, .chatGPT:
+        case .gemini, .appleCloud, .applePCCGateway, .webAI, .summarizeDaemon, .chatGPT, .openAICompatible:
             return nil
         }
     }
@@ -7072,6 +7161,13 @@ class AppState: ObservableObject {
                         taskName: result.source == "reddit" ? "Combined Reddit Summary" : "Combined Article Summary"
                     )
 
+                case .openAICompatible:
+                    print("⚡ AppState.Aggregate: Using Custom Server for overall summary")
+                    summary = try await self.performOpenAICompatibleRequestAsync(
+                        prompt: prompt,
+                        taskName: result.source == "reddit" ? "Combined Reddit Summary" : "Combined Article Summary"
+                    )
+
                 case .appleLocal, .coreAIMLXLocal:
                     #if os(iOS)
                     let existingHandle: GeminiBackgroundTaskHandle? = aggregateContext.handle
@@ -7387,6 +7483,19 @@ class AppState: ObservableObject {
                 }
             }
             .eraseToAnyPublisher()
+
+        case .openAICompatible:
+            return Future<String, Never> { promise in
+                Task(priority: .userInitiated) {
+                    do {
+                        let output = try await self.performOpenAICompatibleRequestAsync(prompt: prompt, taskName: "Today Summary")
+                        promise(.success(output))
+                    } catch {
+                        promise(.success("Custom Server error: \(error.localizedDescription)"))
+                    }
+                }
+            }
+            .eraseToAnyPublisher()
         }
     }
 
@@ -7479,10 +7588,12 @@ class AppState: ObservableObject {
         }
 
         let session = LanguageModelSession(model: model)
-        let response = try await session.respond(
-            to: prompt,
-            contextOptions: ContextOptions(reasoningLevel: .moderate)
-        )
+        let response = try await withAIBackgroundTask("Generating with Apple Cloud") {
+            try await session.respond(
+                to: prompt,
+                contextOptions: ContextOptions(reasoningLevel: .moderate)
+            )
+        }
 
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -9158,6 +9269,11 @@ class AppState: ObservableObject {
                 completion(answer)
             }
 
+        case .openAICompatible:
+            performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Q&A", isQA: isQA) { answer in
+                completion(answer)
+            }
+
         case .appleCloud:
             isLoading = true
             launchCloudRequest(for: prompt, type: appleRequestType, completion: completion)
@@ -9196,11 +9312,13 @@ class AppState: ObservableObject {
         let session = LanguageModelSession()
         var output = ""
 
-        for try await snapshot in session.streamResponse(to: prompt) {
-            if Task.isCancelled { throw CancellationError() }
-            output = snapshot.content
-            await MainActor.run {
-                self.mlxStreamingText = output
+        try await withAIBackgroundTask("Generating with Apple Local") {
+            for try await snapshot in session.streamResponse(to: prompt) {
+                if Task.isCancelled { throw CancellationError() }
+                output = snapshot.content
+                await MainActor.run {
+                    self.mlxStreamingText = output
+                }
             }
         }
 
@@ -9821,6 +9939,9 @@ class AppState: ObservableObject {
         case .chatGPT:
             answerQuestion(question, context: context, provider: .chatGPT, completion: completion)
 
+        case .openAICompatible:
+            answerQuestion(question, context: context, provider: .openAICompatible, completion: completion)
+
         case .applePCCGateway:
             answerQuestion(question, context: context, provider: .applePCCGateway, completion: completion)
 
@@ -9858,6 +9979,13 @@ class AppState: ObservableObject {
 
         if provider == .chatGPT {
             performChatGPTSummaryPublic(prompt: prompt, taskName: "Ask AI", isQA: true, managesLoading: false) { answer in
+                completion(answer)
+            }
+            return
+        }
+
+        if provider == .openAICompatible {
+            performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Ask AI", isQA: true, managesLoading: false) { answer in
                 completion(answer)
             }
             return
@@ -10288,6 +10416,14 @@ class AppState: ObservableObject {
             return
         }
 
+        if settings.selectedSummaryProvider == .openAICompatible {
+            let prompt = articleQAPrompt(article: article, question: question)
+            performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Article Q&A", isQA: true) { answer in
+                cleanedCompletion(answer)
+            }
+            return
+        }
+
         if settings.selectedSummaryProvider == .summarizeDaemon {
             isLoading = true
             let prompt = articleQAPrompt(article: article, question: question)
@@ -10533,6 +10669,14 @@ class AppState: ObservableObject {
         if settings.selectedSummaryProvider == .chatGPT {
             let prompt = redditQAPrompt(post: post, comments: comments, question: question)
             performChatGPTSummaryPublic(prompt: prompt, taskName: "Reddit Q&A", isQA: true) { answer in
+                cleanedCompletion(answer)
+            }
+            return
+        }
+
+        if settings.selectedSummaryProvider == .openAICompatible {
+            let prompt = redditQAPrompt(post: post, comments: comments, question: question)
+            performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Reddit Q&A", isQA: true) { answer in
                 cleanedCompletion(answer)
             }
             return
@@ -11143,6 +11287,11 @@ class AppState: ObservableObject {
             performChatGPTSummaryPublic(prompt: prompt, taskName: "Global Summary Q&A", isQA: true, managesLoading: false) { answer in
                 cleanedCompletion(answer)
             }
+
+        case .openAICompatible:
+            performOpenAICompatibleSummaryPublic(prompt: prompt, taskName: "Global Summary Q&A", isQA: true, managesLoading: false) { answer in
+                cleanedCompletion(answer)
+            }
         default:
             summaryService.summarizeText("", customPrompt: prompt)
                 .receive(on: RunLoop.main)
@@ -11322,7 +11471,9 @@ class LocalSummaryService {
             do {
                 let session = LanguageModelSession()
                 let prompt = "Provide a one-paragraph summary (4-6 sentences) of the following text:\n\n\(text)"
-                let response = try await session.respond(to: prompt)
+                let response = try await withAIBackgroundTask("Generating with Apple Local") {
+                    try await session.respond(to: prompt)
+                }
                 
                 DispatchQueue.main.async {
                     completion(.success(response.content))
@@ -11351,7 +11502,9 @@ class LocalSummaryService {
                 If the answer cannot be determined from the text, please state that the information is not available.
                 """
                 
-                let response = try await session.respond(to: prompt)
+                let response = try await withAIBackgroundTask("Generating with Apple Local") {
+                    try await session.respond(to: prompt)
+                }
                 
                 DispatchQueue.main.async {
                     completion(.success(response.content))

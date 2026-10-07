@@ -45,7 +45,7 @@
 		<string>_rss-sum._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>RSSum connects to the Summarize bridge or Apple PCC Gateway running on your Mac for local AI summaries.</string>
+	<string>RSSum connects to AI servers on your local network, such as LM Studio, Ollama or oMLX on your Mac, for summaries.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>RSSum uses on-device speech recognition to create transcripts for podcast episodes when publishers do not provide one.</string>
 	<key>UIApplicationSceneManifest</key>

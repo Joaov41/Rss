@@ -83,7 +83,8 @@ final class PodcastBackgroundTaskManager {
                 handle.setRequiresSystemSignal(true)
                 do {
                     try submitContinuedRequest(title: title)
-                    submitProcessingRequest()
+                    // No BGProcessingTaskRequest: the work runs in-process, and a deferred
+                    // processing launch expiring later could cancel the live session.
                     handle.notifyTaskStarted()
                     logger.info("Submitted isolated podcast background work: \(title, privacy: .public)")
                 } catch {
@@ -169,19 +170,6 @@ final class PodcastBackgroundTaskManager {
         try BGTaskScheduler.shared.submit(request)
     }
 
-    private func submitProcessingRequest() {
-        let request = BGProcessingTaskRequest(identifier: processingTaskIdentifier)
-        request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
-        request.earliestBeginDate = Date()
-
-        do {
-            try BGTaskScheduler.shared.submit(request)
-        } catch {
-            logger.error("Could not submit podcast BGProcessingTask: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
     @available(iOS 26.0, *)
     private func configureContinuedTask(_ task: BGTask) {
         let configuration: (representative: PodcastBackgroundTaskHandle, root: PodcastBackgroundTaskHandle)? = stateQueue.sync {
@@ -195,7 +183,8 @@ final class PodcastBackgroundTaskManager {
         }
 
         guard let configuration else {
-            task.setTaskCompleted(success: false)
+            // The work finished before the system launched the task; clear its progress indicator.
+            task.setTaskCompleted(success: true)
             return
         }
 
@@ -213,26 +202,14 @@ final class PodcastBackgroundTaskManager {
     }
 
     private func configureProcessingTask(_ task: BGProcessingTask) {
-        let configuration: (representative: PodcastBackgroundTaskHandle, root: PodcastBackgroundTaskHandle)? = stateQueue.sync {
-            guard let root = activeHandle,
-                  let representative = representativeHandleLocked() else { return nil }
-            if let previousTask = activeProcessingTask, previousTask !== task {
-                previousTask.setTaskCompleted(success: false)
-            }
-            activeProcessingTask = task
-            return (representative, root)
-        }
-
-        guard let configuration else {
+        // Nothing is deferred to BGProcessingTask: podcast work runs in-process under the
+        // continued-processing task. A launch (e.g. a request left over from an older build)
+        // must not touch the live session, since its expiry would cancel it.
+        logger.info("Podcast BGProcessingTask launched with no deferred work; completing")
+        task.expirationHandler = {
             task.setTaskCompleted(success: false)
-            return
         }
-
-        task.expirationHandler = { [weak self, weak task, weak root = configuration.root] in
-            guard let self, let task, let root else { return }
-            self.cancelActiveSession(expectedRoot: root, expectedProcessingTask: task)
-        }
-        configuration.representative.notifyTaskStarted(releaseBackgroundAssertion: true)
+        task.setTaskCompleted(success: true)
     }
 
     fileprivate func complete(_ handle: PodcastBackgroundTaskHandle, success: Bool) {
@@ -321,19 +298,6 @@ final class PodcastBackgroundTaskManager {
         cancelledHandles?.forEach { $0.notifyCancellation() }
     }
 
-    private func cancelActiveSession(
-        expectedRoot: PodcastBackgroundTaskHandle,
-        expectedProcessingTask: BGProcessingTask
-    ) {
-        let cancelledHandles = stateQueue.sync {
-            detachActiveSessionLocked(
-                expectedRoot: expectedRoot,
-                expectedProcessingTask: expectedProcessingTask
-            )
-        }
-        cancelledHandles?.forEach { $0.notifyCancellation() }
-    }
-
     private func detachActiveSessionLocked(
         expectedRoot: PodcastBackgroundTaskHandle,
         expectedContinuedTask: BGTask? = nil,
@@ -369,8 +333,16 @@ final class PodcastBackgroundTaskManager {
 }
 
 final class PodcastBackgroundTaskHandle {
-    fileprivate let progress = Progress(totalUnitCount: 100)
+    // Fine-grained units so the heartbeat can keep advancing for a long time
+    fileprivate let progress = Progress(totalUnitCount: 10_000)
     fileprivate let isRootHandle: Bool
+
+    /// BGContinuedProcessingTask is expired by the system when its progress stalls (~30 s).
+    /// A single LLM call (e.g. the episode summary) can run for minutes with no natural
+    /// progress points, so creep the system-facing progress forward while work is in flight.
+    private static let heartbeatInterval: TimeInterval = 5
+    private var lastProgressDate = Date()
+    private var heartbeatTimer: DispatchSourceTimer?
 
     private weak var manager: PodcastBackgroundTaskManager?
     private let stateLock = NSLock()
@@ -390,6 +362,10 @@ final class PodcastBackgroundTaskHandle {
         beginBackgroundAssertion()
     }
 
+    deinit {
+        heartbeatTimer?.cancel()
+    }
+
     var cancelled: Bool {
         stateLock.withLock { isCancelled }
     }
@@ -403,8 +379,51 @@ final class PodcastBackgroundTaskHandle {
         stateLock.lock()
         let clamped = max(0, min(completedUnitCount, progress.totalUnitCount))
         progress.completedUnitCount = max(progress.completedUnitCount, clamped)
-        taskProgress?.completedUnitCount = progress.completedUnitCount
+        // The system task only ever moves forward; the heartbeat may already be ahead of real progress
+        if let taskProgress, progress.completedUnitCount > taskProgress.completedUnitCount {
+            taskProgress.completedUnitCount = progress.completedUnitCount
+            lastProgressDate = Date()
+        }
         stateLock.unlock()
+    }
+
+    private func startHeartbeat() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + Self.heartbeatInterval, repeating: Self.heartbeatInterval)
+        timer.setEventHandler { [weak self] in
+            self?.heartbeat()
+        }
+
+        stateLock.lock()
+        heartbeatTimer?.cancel()
+        heartbeatTimer = timer
+        stateLock.unlock()
+
+        timer.resume()
+    }
+
+    private func stopHeartbeat() {
+        stateLock.lock()
+        let timer = heartbeatTimer
+        heartbeatTimer = nil
+        stateLock.unlock()
+        timer?.cancel()
+    }
+
+    private func heartbeat() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        guard !finished, !isCancelled, let taskProgress else { return }
+        // Small slack so timer jitter never skips a tick (worst-case gap stays well under 30 s)
+        guard Date().timeIntervalSince(lastProgressDate) >= Self.heartbeatInterval - 1 else { return }
+
+        // Approach 99% asymptotically so the bar never claims completion before the work does
+        let cap = taskProgress.totalUnitCount * 99 / 100
+        let current = taskProgress.completedUnitCount
+        guard current < cap else { return }
+        taskProgress.completedUnitCount = current + max(1, (cap - current) / 200)
+        lastProgressDate = Date()
     }
 
     func registerCancellationHandler(_ handler: @escaping () -> Void) {
@@ -442,6 +461,8 @@ final class PodcastBackgroundTaskHandle {
         taskProgress = nil
         stateLock.unlock()
 
+        stopHeartbeat()
+
         if isRootHandle {
             manager?.complete(self, success: success)
         } else {
@@ -456,10 +477,17 @@ final class PodcastBackgroundTaskHandle {
 
     fileprivate func attach(taskProgress: Progress) {
         stateLock.lock()
+        guard !finished, !isCancelled else {
+            stateLock.unlock()
+            return
+        }
         taskProgress.totalUnitCount = progress.totalUnitCount
         taskProgress.completedUnitCount = progress.completedUnitCount
         self.taskProgress = taskProgress
+        lastProgressDate = Date()
         stateLock.unlock()
+
+        startHeartbeat()
     }
 
     fileprivate func notifyTaskStarted(releaseBackgroundAssertion: Bool = false) {
@@ -488,6 +516,8 @@ final class PodcastBackgroundTaskHandle {
         startContinuation = nil
         requiresSystemSignal = false
         stateLock.unlock()
+
+        stopHeartbeat()
 
         handlers.forEach { $0() }
         continuation?.resume()

@@ -13,6 +13,12 @@
 		CHGP00000000000000000012 /* AppState+ChatGPTPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */; };
 		CHGP00000000000000000021 /* ChatGPTPlanSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */; };
 		CHGP00000000000000000022 /* ChatGPTPlanSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */; };
+		OACP00000000000000000001 /* OpenAICompatibleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000003 /* OpenAICompatibleService.swift */; };
+		OACP00000000000000000002 /* OpenAICompatibleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000003 /* OpenAICompatibleService.swift */; };
+		OACP00000000000000000011 /* AppState+OpenAICompatible.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000013 /* AppState+OpenAICompatible.swift */; };
+		OACP00000000000000000012 /* AppState+OpenAICompatible.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000013 /* AppState+OpenAICompatible.swift */; };
+		OACP00000000000000000021 /* OpenAICompatibleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000023 /* OpenAICompatibleSettingsView.swift */; };
+		OACP00000000000000000022 /* OpenAICompatibleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = OACP00000000000000000023 /* OpenAICompatibleSettingsView.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* RSSReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F4 /* RSSReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */; };
@@ -164,6 +170,9 @@
 		CHGP00000000000000000003 /* ChatGPTPlanService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTPlanService.swift"; sourceTree = "<group>"; };
 		CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+ChatGPTPlan.swift"; sourceTree = "<group>"; };
 		CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTPlanSettingsView.swift"; sourceTree = "<group>"; };
+		OACP00000000000000000003 /* OpenAICompatibleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenAICompatibleService.swift"; sourceTree = "<group>"; };
+		OACP00000000000000000013 /* AppState+OpenAICompatible.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+OpenAICompatible.swift"; sourceTree = "<group>"; };
+		OACP00000000000000000023 /* OpenAICompatibleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OpenAICompatibleSettingsView.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* RSSReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSReaderApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -345,6 +354,7 @@
 			children = (
 				C1DA2C662D8B1E7900A9D660 /* SettingsView.swift */,
 				CHGP00000000000000000023 /* ChatGPTPlanSettingsView.swift */,
+				OACP00000000000000000023 /* OpenAICompatibleSettingsView.swift */,
 				C1DA2C632D8B1C6400A9D660 /* MainSplitView.swift */,
 				C1DA2C602D8B1AA200A9D660 /* SummaryColumnView.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F6 /* ContentView.swift */,
@@ -366,6 +376,7 @@
 			children = (
 				A1B2C3D4E5F6A7B8C9D0E206 /* AppState.swift */,
 				CHGP00000000000000000013 /* AppState+ChatGPTPlan.swift */,
+				OACP00000000000000000013 /* AppState+OpenAICompatible.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -387,6 +398,7 @@
 					MLX0001000100010005 /* MLXJSONRepairUtils.swift */,
 				SUMM0001000100010003 /* SummarizeBridge.swift */,
 				CHGP00000000000000000003 /* ChatGPTPlanService.swift */,
+				OACP00000000000000000003 /* OpenAICompatibleService.swift */,
 				F0C0C0C0C0C0C0C0C0C0C0C1 /* KokoroTTSService.swift */,
 				YT0000000000000000000011 /* YouTubeService.swift */,
 				PCE000000000000000000011 /* PodcastEpisodeService.swift */,
@@ -654,8 +666,11 @@
 				ASKAI0001000100010001 /* AskAIUtilities.swift in Sources */,
 				SUMM0001000100010001 /* SummarizeBridge.swift in Sources */,
 				CHGP00000000000000000001 /* ChatGPTPlanService.swift in Sources */,
+				OACP00000000000000000001 /* OpenAICompatibleService.swift in Sources */,
 				CHGP00000000000000000011 /* AppState+ChatGPTPlan.swift in Sources */,
+				OACP00000000000000000011 /* AppState+OpenAICompatible.swift in Sources */,
 				CHGP00000000000000000021 /* ChatGPTPlanSettingsView.swift in Sources */,
+				OACP00000000000000000021 /* OpenAICompatibleSettingsView.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D1 /* KokoroTTSService.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D2 /* KokoroPlayback.swift in Sources */,
 				E00000000000000000000021 /* BatchPodcastModels.swift in Sources */,
@@ -708,8 +723,11 @@
 				ASKAI0001000100010002 /* AskAIUtilities.swift in Sources */,
 				SUMM0001000100010002 /* SummarizeBridge.swift in Sources */,
 				CHGP00000000000000000002 /* ChatGPTPlanService.swift in Sources */,
+				OACP00000000000000000002 /* OpenAICompatibleService.swift in Sources */,
 				CHGP00000000000000000012 /* AppState+ChatGPTPlan.swift in Sources */,
+				OACP00000000000000000012 /* AppState+OpenAICompatible.swift in Sources */,
 				CHGP00000000000000000022 /* ChatGPTPlanSettingsView.swift in Sources */,
+				OACP00000000000000000022 /* OpenAICompatibleSettingsView.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D3 /* KokoroTTSService.swift in Sources */,
 				F0C0C0C0C0C0C0C0C0C0C0D4 /* KokoroPlayback.swift in Sources */,
 				YT0000000000000000000002 /* YouTubeService.swift in Sources */,

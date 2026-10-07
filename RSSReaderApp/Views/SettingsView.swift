@@ -577,6 +577,10 @@ struct SettingsView: View {
                             ChatGPTPlanSettingsView()
                         }
 
+                        if appState.settings.selectedSummaryProvider == .openAICompatible {
+                            OpenAICompatibleSettingsView()
+                        }
+
                         if appState.settings.selectedSummaryProvider == .applePCCGateway {
                             pccGatewaySettingsView
                         }
@@ -1770,6 +1774,8 @@ struct SettingsView: View {
             return "Uses the local Summarize daemon with Codex gpt-5.5 on fast tier, low reasoning, and low verbosity"
         case .chatGPT:
             return "Uses your ChatGPT Plus or Pro plan (Sign in with ChatGPT) for summaries, Q&A, overall summaries, whiteboards and infographics"
+        case .openAICompatible:
+            return "Uses a model on any OpenAI-compatible server (oMLX, Ollama, LM Studio, llama.cpp...) for summaries, Q&A, overall summaries, whiteboards and infographics"
         }
     }
 

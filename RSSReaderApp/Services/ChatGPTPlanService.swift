@@ -754,6 +754,15 @@ final class ChatGPTPlanService: NSObject, ObservableObject {
         prompt: String,
         onPartial: (@MainActor @Sendable (String) -> Void)?
     ) async throws -> String {
+        try await withAIBackgroundTask("Generating with ChatGPT") {
+            try await generateInForeground(prompt: prompt, onPartial: onPartial)
+        }
+    }
+
+    private func generateInForeground(
+        prompt: String,
+        onPartial: (@MainActor @Sendable (String) -> Void)?
+    ) async throws -> String {
         guard ChatGPTPlanAvailability.isEnabled else {
             throw ChatGPTPlanError(code: "unavailable", message: "ChatGPT plan usage is only available in local development builds.")
         }
